@@ -1,0 +1,97 @@
+# distill.yaml
+
+dataset: 'smartfallmm'
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+# Batch sizes
+batch_size: 16
+test_batch_size: 8
+val_batch_size: 8
+
+# Training parameters
+num_epoch: 100
+start_epoch: 0
+optimizer: 'Adam'
+base_lr: 0.0005
+weight_decay: 0.0001
+
+# General settings
+seed: 42
+device: [0]
+work_dir: 'experiments/distill'
+print_log: True
+phase: 'train'
+num_worker: 4
+model_saved_name: 'student_model'
+
+# Teacher model configuration
+teacher_model: 'Models.testTeach.FallDetectionTeacherModel'
+teacher_args:
+  num_joints: 32
+  in_chans: 3
+  acc_coords: 4
+  seq_length: 128
+  spatial_embed: 256
+  num_heads: 8
+  depth: 6
+  mlp_ratio: 4
+  num_classes: 2
+  dropout: 0.1
+  use_positional_encoding: True
+  distill: True
+teacher_weights: 'exps/smartfall_har/kd/student/kdTransformerWatch33.pth'
+
+# Student model configuration
+student_model: 'Models.transformer.FallDetectionStudentModel'
+student_args:
+  acc_coords: 4
+  seq_length: 128
+  embedding_dim: 256
+  num_heads: 8
+  depth: 6
+  mlp_ratio: 4
+  num_classes: 2
+  dropout: 0.1
+  use_positional_encoding: True
+
+# Dataset arguments
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'  # Fall detection task
+  modalities: ['accelerometer', 'skeleton']
+  age_group: ['young', 'old']
+  sensors: ['watch']
+
+# Loss functions
+distill_loss: 'utils.loss.DistillationLoss'
+distill_args:
+  alpha: 0.7  # Weight for distillation loss
+  temperature: 4.0
+student_loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
+
+# Data loader configuration
+feeder: 'Feeder.Make_Dataset.UTD_mm'
+train_feeder_args:
+  batch_size: 32  # Batch size for training
+
+val_feeder_args:
+  batch_size: 32  # Batch size for validation
+
+test_feeder_args:
+  batch_size: 32

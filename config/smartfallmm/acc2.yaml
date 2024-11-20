@@ -1,0 +1,68 @@
+# Model configuration
+model: Models.accNew.TransModel
+dataset: smartfallmm
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:
+  acc_coords: 4          # x, y, z, smv for accelerometer data
+  seq_length: 128        # Length of the sequence
+  embed_dim: 32          # Increased embedding dimension for better feature representation
+  num_heads: 4           # More attention heads for diverse feature focus
+  num_layers: 4          # Increased transformer layers for better temporal modeling
+  num_classes: 2         # Binary classification (fall vs no fall)
+  dropout: 0.4           # Reduced dropout for balance between regularization and learning
+
+# Dataset arguments
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'             # Fall detection task
+  modalities: ['accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['phone']  # Added watch for multimodal training
+
+# Training parameters
+batch_size: 16           # Increased batch size for better gradient stability
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 300
+start_epoch: 0
+
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+val_feeder_args:
+  batch_size: 16
+test_feeder_args:
+  batch_size: 16
+
+# Optimization parameters
+seed: 42
+optimizer: 'sgd'      # Slightly increased learning rate for faster convergence        # Added weight decay for better regularization
+  # Added weight decay for better regularization
+
+# Additional settings
+work_dir: 'exps/smartfall_har/accel_watch_phone'
+model_saved_name: 'accel_fall_detector_transmodel'
+print_log: True
+phase: 'train'
+num_worker: 0
+
+# Device setting
+device: [0]

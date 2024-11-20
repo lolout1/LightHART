@@ -1,12 +1,12 @@
-model: Models.transformer.TransModel
+model: Models.transog.TransModel
 dataset: smartfallmm
 
 #subjects for har
 #subjects: [1,2, 3, 4, 5,7,8,9, 10,11, 12,13,14,15, 16, 17, 18,47,19,22,23]
 # subjects for fall deteciton
-#subjects: [29,30,31, 32, 34, 35, 36, 37,38,39, 40, 41, 42, 43, 44, 45, 46]
+subjects: [29,30,31, 32, 34, 35, 36, 37,38,39, 40, 41, 42, 43, 44, 45, 46]
 #subjects for age detection 
-subjects: [1,2, 3, 4, 5,7,8,9, 10,11, 12,13,14,15, 16, 17, 18,47,29,30,31, 32, 34, 35, 36, 37,38,39, 40, 41, 42, 43,19,22,23,]
+#subjects: [1,2, 3, 4, 5,7,8,9, 10,11, 12,13,14,15, 16, 17, 18,47,29,30,31, 32, 34, 35, 36, 37,38,39, 40, 41, 42, 43,19,22,23,]
 
 model_args:
   num_layers : 2
@@ -24,27 +24,34 @@ dataset_args:
  mode: 'avg_pool'
  max_length: 128 
  #change task to 'har' for Human activity recognition
- task : 'age'
- modalities: ['skeleton', 'accelerometer']
+ task : 'fd'
+ modalities: ['accelerometer']
  age_group: ['young', 'old']
  # change the sensor to phone , meta_wrist , meta_hip for experiments
  sensors: ['phone']
 
-batch_size: 16
-test_batch_size: 16
-val_batch_size : 16
+batch_size: 32
+test_batch_size: 32
+val_batch_size : 32
 num_epoch: 300
 
+optimizer: sgd
+base_lr: 0.001
+
+scheduler: None
+scheduler_args: {}
 #dataloader
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
-  batch_size: 16
+  batch_size: 32
 
 val_feeder_args:
-  batch_size: 16
+  batch_size: 32
 
 test_feeder_args: 
-  batch_size: 16
+  batch_size: 32
 
 seed: 2 
-optimizer: sgd
+
+phase: 'train'
+

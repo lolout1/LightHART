@@ -195,51 +195,42 @@ class SmartFallMM:
         
         self.age_groups[age_group][modality_name] = Modality(modality_name)
 
-    def select_sensor(self, modality_name: str, sensor_name: str = None) -> None:
+    def select_sensors(self, modality_name: str, sensor_names: List[str]) -> None:
         """
-        Selects a specific sensor for a given modality if applicable. Only files from this sensor will be loaded for modalities like 'accelerometer' or 'gyroscope'.
+        Selects specific sensors for a given modality. Only files from these sensors will be loaded for modalities like 'accelerometer' or 'gyroscope'.
         For modalities like 'skeleton', no sensor is needed.
-
-        Args:
-            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
-            sensor_name (str): Name of the sensor (e.g., phone, watch, meta_wrist, meta_hip). None for 'skeleton'.
         """
         if modality_name == "skeleton":
             # Skeleton modality doesn't have sensor-specific data
-            self.selected_sensors[modality_name] = None
+            self.selected_sensors[modality_name] = [None]
         else:
-            if sensor_name is None:
-                raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
-            self.selected_sensors[modality_name] = sensor_name
-
+            if not sensor_names:
+                raise ValueError(f"Sensors must be specified for modality '{modality_name}'")
+                self.selected_sensors[modality_name] = sensor_names
     def load_files(self) -> None:
-        """
-        Loads files from the dataset based on selected sensors and age groups.
-        Skeleton data is loaded without sensor selection.
-        """
         for age_group, modalities in self.age_groups.items():
             for modality_name, modality in modalities.items():
-                # Handle skeleton data (no sensor required)
                 if modality_name == "skeleton":
                     modality_dir = os.path.join(self.root_dir, age_group, modality_name)
+                    self._load_modality_files(modality, modality_dir)
                 else:
-                    # Only load data from the selected sensor if it exists
                     if modality_name in self.selected_sensors:
-                        sensor_name = self.selected_sensors[modality_name]
-                        modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
+                        sensor_names = self.selected_sensors[modality_name]
+                        for sensor_name in sensor_names:
+                            modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
+                            self._load_modality_files(modality, modality_dir, sensor_name)
                     else:
                         continue
 
-                # Load the files
-                for root, _, files in os.walk(modality_dir):
-                    for file in files:
-                        if file.endswith(('.csv')):
-                            # Extract information based on the filename
-                            subject_id = int(file[1:3])  # Assuming S001 format for subject
-                            action_id = int(file[4:6])  # Assuming A001 format for action
-                            sequence_number = int(file[7:9])  # Assuming T001 format for trial
-                            file_path = os.path.join(root, file)
-                            modality.add_file(subject_id, action_id, sequence_number, file_path)
+    def _load_modality_files(self, modality, modality_dir, sensor_name=None):
+        for root, _, files in os.walk(modality_dir):
+            for file in files:
+                if file.endswith('.csv'):
+                    subject_id = int(file[1:3])  # S01
+                    action_id = int(file[4:6])   # A01
+                    sequence_number = int(file[7:9])  # T01
+                    file_path = os.path.join(root, file)
+                    modality.add_file(subject_id, action_id, sequence_number, file_path)
 
     def match_trials(self) -> None:
         """
@@ -316,17 +307,21 @@ class SmartFallMM:
 
 
 
-def prepare_smartfallmm(arg )  -> DatasetBuilder: 
-    '''
-    Function for dataset preparation
-    '''
-    sm_dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))
-    sm_dataset.pipe_line(age_group=arg.dataset_args['age_group'], \
-                        modalities=arg.dataset_args['modalities'], \
-                        sensors=arg.dataset_args['sensors'])
-    builder = DatasetBuilder(sm_dataset, arg.dataset_args['mode'], arg.dataset_args['max_length'],
-                                arg.dataset_args['task'])
-    return builder
+    def prepare_smartfallmm(arg) -> DatasetBuilder:
+        sm_dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))
+        for age in arg.dataset_args['age_group']:
+            for modality in arg.dataset_args['modalities']:
+                sm_dataset.add_modality(age, modality)
+                if modality == 'skeleton':
+                    sm_dataset.select_sensors(modality, [None])
+                else:
+                    sm_dataset.select_sensors(modality, arg.dataset_args['sensors'])
+
+        sm_dataset.load_files()
+        sm_dataset.match_trials()
+        builder = DatasetBuilder(sm_dataset, arg.dataset_args['mode'], arg.dataset_args['max_length'],
+                                arg.dataset_args['task'], keys=arg.dataset_args.get('keys', None))
+        return builder
 
 def filter_subjects(builder, subjects) -> Dict[str, np.ndarray]:
     '''
@@ -340,16 +335,19 @@ if __name__ == "__main__":
     dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))
 
 # Add modalities for 'young' age group
-    dataset.add_modality("young", "accelerometer")
+        # Add modalities for 'old' age group
+    dataset.add_modality("young", "phone_accelerometer")
+    dataset.add_modality("young", "watch_accelerometer")
     dataset.add_modality("young", "skeleton")
 
     # Add modalities for 'old' age group
-    dataset.add_modality("old", "accelerometer")
+    dataset.add_modality("old", "phone_accelerometer")
+    dataset.add_modality("old", "watch_accelerometer")
     dataset.add_modality("old", "skeleton")
 
     # Select the sensor type for accelerometer and gyroscope
-    dataset.select_sensor("accelerometer", "phone")
-
+    dataset.select_sensor("phone_accelerometer", "phone")
+    dataset.select_sensor("watch_accelerometer", "watch")
     # For skeleton, no sensor needs to be selected
     dataset.select_sensor("skeleton")
 

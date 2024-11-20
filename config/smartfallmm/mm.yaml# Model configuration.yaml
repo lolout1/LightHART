@@ -1,0 +1,80 @@
+# Model configuration
+model: Models.Multi_Teach.FallDetectionTeacherModel
+dataset: 'smartfallmm'
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:
+  num_joints: 32
+  in_chans: 3
+  acc_coords: 4
+  spatial_embed: 256
+  num_heads: 8
+  depth: 6
+  mlp_ratio: 4
+  num_classes: 2
+  dropout: 0.5
+
+# Loss function
+loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
+
+# Dataset arguments
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'  # Fall detection task
+  modalities: ['skeleton', 'accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['watch', 'phone']
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 200
+start_epoch: 0
+
+# Data loader configuration
+feeder: Feeder.Make_Dataset.UTD_mm
+
+train_feeder_args:
+  batch_size: 32
+
+val_feeder_args:
+  batch_size: 32
+
+test_feeder_args:
+  batch_size: 32
+
+# Optimizer and regularization
+seed: 42
+optimizer: 'adamw'
+base_lr: 0.00025
+weight_decay: 0.0004
+
+# Additional settings
+work_dir: 'exps/fall_detection_teacher'
+model_saved_name: 'FallDetectionTeacher'
+print_log: True
+phase: 'train'
+num_worker: 4
+result_file: null
+
+# Device setting
+device: [0]

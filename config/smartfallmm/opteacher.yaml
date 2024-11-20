@@ -1,0 +1,74 @@
+model: Models.lightweight_student.EnhancedLightweightStudent
+dataset: 'smartfallmm'
+
+# Same subjects as teacher for consistency
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+# Optimized student model arguments
+model_args:
+  num_layers: 4  # Increased for better feature extraction
+  norm_first: True
+  embed_dim: 64  # Balanced between performance and efficiency
+  activation: 'gelu'
+  acc_coords: 4
+  num_classes: 2
+  acc_frames: 128
+  num_heads: 4
+  dropout: 0.1  # Reduced dropout for better training stability
+
+# Loss function
+loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
+
+# Dataset configuration (same as teacher)
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['accelerometer']  # Only accelerometer for student
+  age_group: ['young', 'old']
+  sensors: ['watch']
+
+# Training parameters optimized for student
+batch_size: 64  # Increased batch size for better gradient estimates
+test_batch_size: 64
+val_batch_size: 64
+num_epoch: 200  # More epochs for thorough training
+
+# Data loader configuration
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 64
+val_feeder_args:
+  batch_size: 64
+test_feeder_args:
+  batch_size: 64
+
+# Optimized training parameters
+seed: 2
+optimizer: 'adamw'
+base_lr: 0.001
+weight_decay: 0.01  # Increased for better regularization
+
+# Working directory settings
+work_dir: 'exps/smartfall_har/student/enhanced'
+model_saved_name: 'enhanced_student_model'
+print_log: True
+phase: 'train'
+num_worker: 4
+result_file: null

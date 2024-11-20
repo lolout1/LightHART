@@ -1,0 +1,63 @@
+model: Models.transformer.EnhancedTransModel
+dataset: smartfallmm
+
+# Fall detection subjects
+subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]
+
+model_args:
+  num_layer: 2           # Transformer layers
+  embed_dim: 32         # Feature dimension
+  num_heads: 2          # Reduced from 4 to match original TransModel
+  acc_coords: 4         # Accelerometer coordinates
+  num_classes: 2        # Binary classification
+  acc_frames: 128       # Sequence length
+  dropout: 0.1          # Keeping strong regularization
+  activation: 'relu'    # Using ReLU as in original
+  norm_first: True      # Pre-norm architecture
+
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['watch','phone']   # Using watch sensor data
+
+# Training parameters
+batch_size: 16          # Back to 16 for better generalization
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 5         # Keep longer training for stability
+
+# Optimizer settings
+optimizer: sgd          # Changed back to SGD as it worked better
+base_lr: 0.001         # Original learning rate
+weight_decay: 0.0005   # Original weight decay
+
+# Scheduler settings
+scheduler: null         # Removed scheduler for now
+scheduler_args: {}
+
+# Loss settings
+loss: 'loss.BCE'
+loss_args: '{}'
+
+# Dataloader
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+
+val_feeder_args:
+  batch_size: 16
+
+test_feeder_args:
+  batch_size: 16
+
+# Other settings
+seed: 2
+include_val: True
+num_worker: 0
+print_log: True
+phase: 'train'
+work_dir: 'exps/smartfall_har/student/watchgyro_divid3bw20'
+model_saved_name: 'ttfstudent_New'

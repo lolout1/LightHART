@@ -1,0 +1,81 @@
+model: Models.multi_modal_teacher.MultiModalTeacher
+dataset: 'smartfallmm'
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:
+  device: 'cuda'
+  mocap_frames: 128
+  acc_frames: 128
+  num_joints: 32
+  in_chans: 3
+  num_patch: 4
+  acc_coords: 4  # Now explicitly includes SVM
+  spatial_embed: 128
+  sdepth: 4
+  adepth: 4
+  tdepth: 6
+  num_heads: 4
+  mlp_ratio: 4
+  qkv_bias: True
+  qk_scale: null
+  op_type: 'all'
+  embed_type: 'lin'
+  drop_rate: 0.1
+  attn_drop_rate: 0.1
+  drop_path_rate: 0.1
+  norm_layer: null
+  num_classes: 2
+
+loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
+
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['skeleton','accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['watch', 'phone']
+
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 120
+start_epoch: 0
+
+optimizer: 'adamw'
+base_lr: 0.0007
+weight_decay: 0.05
+
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+val_feeder_args:
+  batch_size: 16
+test_feeder_args:
+  batch_size: 16
+
+seed: 42
+log_interval: 10
+work_dir: 'exps/smartfall_har/kd/teacher_svm'
+model_saved_name: 'spTransformer_svm'
+print_log: True
+phase: 'train'
+num_worker: 0
+include_val: True
+result_file: null

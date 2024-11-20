@@ -1,54 +1,86 @@
-
-
-#Model
-model: Models.st_cvtransformer.MMTransformer
+model: Models.multi_modal_teacher.MultiModalTeacher
 dataset: 'smartfallmm'
-#subjects: [29,30, 31,32, 33,34, 35, 36, 37,38,39, 43, 44, 45, 46]
-#subjects : [1,2, 3, 4, 5,7,8,9, 10,11, 12,13,14,15, 16, 17, 18,47, 19,22,23]
-subjects: [1,2, 3, 4, 5,7,8,9, 10,11, 12,13,14,15, 16, 17, 18,47,29,30,31, 32, 34, 35, 36, 37,38,39, 40, 41, 42, 43,19,22,23]
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
 model_args:
-  acc_frames : 128
-  num_joints : 32
-  num_classes : 2
-  spatial_embed : 64
-  adepth : 2
-  sdepth : 2
-  num_heads : 2
+  device: 'cuda'
   mocap_frames: 128
+  acc_frames: 128
+  num_joints: 32
+  in_chans: 3
   num_patch: 4
+  acc_coords: 4
+  spatial_embed: 64
+  sdepth: 2
+  adepth: 2
+  tdepth: 2
+  num_heads: 2
+  mlp_ratio: 2
+  qkv_bias: True
+  qk_scale: null
+  op_type: 'all'
+  embed_type: 'lin'
+  drop_rate: 0.2
+  attn_drop_rate: 0.2
+  drop_path_rate: 0.2
+  norm_layer: null
+  num_classes: 2
 
-# loss_args 
-loss_args:
-  beta: 0.2
+# Loss function
+loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
 
-
+# Dataset arguments
 dataset_args: 
- mode: 'avg_pool'
- max_length: 128 
- task : 'age'
- modalities: ['skeleton', 'accelerometer']
- age_group: ['young', 'old']
- sensors: ['phone']
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['skeleton', 'accelerometer']
+  age_group: ['young','old']
+  sensors: ['watch', 'phone']
 
-batch_size: 32 # Change all 6 batch sizes consistently, Default: 16
+# Training parameters
+batch_size: 32
 test_batch_size: 32
-val_batch_size : 32
-num_epoch: 120 # Change, Default: 250
+val_batch_size: 32
+num_epoch: 250
 
-#dataloader
+# Data loader configuration
 feeder: Feeder.Make_Dataset.UTD_mm
 
 train_feeder_args:
-  # npz_file: data/UTD_MAAD/utd_train_op_mf50_norm.npz
   batch_size: 32
 
 val_feeder_args:
-  # npz_file: data/UTD_MAAD/utd_val_op_mf50_norm.npz
   batch_size: 32
 
-test_feeder_args: 
-  # npz_file: data/UTD_MAAD/utd_test_op_mf50_norm.npz
+test_feeder_args:
   batch_size: 32
 
-seed: 2 
-optimizer: sgd
+seed: 2
+optimizer: 'adamw'
+base_lr: 0.0025
+weight_decay: 0.01
+
+# Additional settings
+work_dir: 'exps/smartfall_har/kd/student'
+model_saved_name: 'spTransformer'
+print_log: True
+phase: 'train'
+num_worker: 4
+result_file: null

@@ -1,0 +1,72 @@
+
+# Model configuration
+model: Models.s3.KDStudentModel
+dataset: smartfallmm
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:
+  acc_coords: 4
+  seq_length: 128
+  num_joints: 32
+  spatial_embed: 64    # Match teacher dimension
+  num_heads: 4
+  depth: 4
+  mlp_ratio: 2
+  num_classes: 2
+  dropout: 0.1
+
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['accelerometer']  # Only accelerometer for student
+  age_group: ['young', 'old']
+  sensors: ['watch']
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 150
+
+# Optimizer
+optimizer: 'adamw'
+base_lr: 0.0001
+weight_decay: 0.0004
+
+# DataLoader configuration
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 32  # Larger batch size for pretraining
+
+val_feeder_args:
+  batch_size: 32
+
+test_feeder_args:
+  batch_size: 32
+
+
+# Training settings
+work_dir: 'exps/smartfall_har/student'
+model_saved_name: 'fall_detector_student'
+print_log: True
+phase: 'train'
+num_worker: 4
+device: [0]
+

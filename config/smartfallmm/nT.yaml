@@ -1,0 +1,79 @@
+model: Models.nT.CrossModalFusionTeacherModel
+dataset: 'smartfallmm'
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:
+  device: 'cuda'
+  mocap_frames: 128
+  acc_frames: 128
+  num_joints: 32
+  in_chans: 3  # xyz for skeleton
+  acc_coords: 4  # xyz + svm for accelerometer
+  spatial_embed: 64
+  num_heads: 8
+  depth: 6
+  mlp_ratio: 4
+  drop_rate: 0.1
+  attn_drop_rate: 0.1
+  drop_path_rate: 0.1
+  num_classes: 2
+  distill: False
+  temperature: 4.0
+
+# Loss function
+loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
+
+# Dataset arguments
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['skeleton', 'accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['phone']
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 150
+
+# Data loader configuration
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 32
+val_feeder_args:
+  batch_size: 32
+test_feeder_args:
+  batch_size: 32
+
+# Optimization parameters
+seed: 2
+optimizer: 'adamw'
+base_lr: 0.0001
+weight_decay: 0.0001
+
+# Additional settings
+work_dir: 'exps/smartfall_har/teacher/enhanced'
+model_saved_name: 'enhanced_teacher_model'
+print_log: True
+phase: 'train'
+num_worker: 0
+result_file: null

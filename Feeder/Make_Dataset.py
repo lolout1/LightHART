@@ -94,21 +94,22 @@ class Bmhad_mm(torch.utils.data.Dataset):
 
 class UTD_mm(torch.utils.data.Dataset):
     def __init__(self, dataset, batch_size):
-
-        self.inertial_modality = next((modality for modality in dataset if modality in ['accelerometer', 'gyroscope']), None)
-        self.acc_data = dataset[self.inertial_modality]
+        self.modalities = list(dataset.keys())
+        self.modalities.remove('labels')
+        self.data = dataset
         self.labels = dataset['labels']
-        self.skl_data = dataset['skeleton']
-        self.num_samples = self.acc_data.shape[0]
-        self.acc_seq = self.acc_data.shape[1]
-        self.skl_seq, self.skl_length, self.skl_features = self.skl_data.shape
-        self.skl_data = self.skl_data.reshape(self.skl_seq, self.skl_length, -1, 3)
-        self.channels = self.acc_data.shape[2]
+        self.num_samples = self.labels.shape[0]
         self.batch_size = batch_size
-        self.transform = None
-        self.crop_size = 64
 
-    
+    def __getitem__(self, index):
+        data = {}
+        for modality in self.modalities:
+            modality_data = torch.tensor(self.data[modality][index])
+            data[modality] = modality_data
+        label = torch.tensor(self.labels[index]).long()
+        return data, label, index
+
+
     def random_crop(self,data : torch.Tensor) -> torch.Tensor:
         '''
         Function to add random cropping to the data
@@ -182,14 +183,18 @@ class UTD_mm(torch.utils.data.Dataset):
         return self.num_samples
 
     def __getitem__(self, index):
-        skl_data = torch.tensor(self.skl_data[index, :, :,:])
-        acc_data = torch.tensor(self.acc_data[index, : , :])
+        acc_data = torch.tensor(self.acc_data[index, :, :])
         data = dict()
 
         watch_smv = self.cal_smv(acc_data)
-        acc_data = torch.cat(( watch_smv,acc_data), dim = -1)
+        acc_data = torch.cat((watch_smv, acc_data), dim=-1)
         data[self.inertial_modality] = acc_data
-        data['skeleton'] = skl_data
+        
+        # Only include skeleton data if it exists
+        if self.has_skeleton:
+            skl_data = torch.tensor(self.skl_data[index, :, :, :])
+            data['skeleton'] = skl_data
+        
         label = self.labels[index]
         label = torch.tensor(label)
         label = label.long()
@@ -199,5 +204,7 @@ class UTD_mm(torch.utils.data.Dataset):
 
 
 if __name__ == "__main__":
+    # Option 1: Create an instance
+    dataset = UTD_mm(dataset={}, batch_size=1)  # Minimal initialization
     data = torch.randn((8, 128, 3))
-    smv = cal_smv(data)
+    smv = dataset.cal_smv(data)

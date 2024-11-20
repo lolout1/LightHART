@@ -1,0 +1,67 @@
+model: Models.transformer.ImprovedTransModel
+dataset: smartfallmm
+
+# Fall detection subjects
+subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]
+
+model_args:
+  num_layer: 2
+  embed_dim: 32
+  num_heads: 4
+  acc_coords: 4
+  num_classes: 2
+  acc_frames: 128
+  dropout: 0.5
+  activation: 'gelu'
+
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['phone']
+
+# Training parameters
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 150  # Reduced from 300 since convergence happens earlier
+
+# Optimizer settings
+optimizer: adamw
+base_lr: 0.0001
+weight_decay: 0.0004  # Increased slightly for better regularization
+
+# Scheduler settings
+scheduler: 'warmup_cosine'
+scheduler_args:
+  warmup_ratio: 0.1    # 10% warmup
+  min_lr: 0.000001     # Minimum learning rate at end of schedule
+
+# Gradient clipping
+grad_clip: 1.0         # Added to stabilize training
+
+# Loss settings
+loss: 'loss.BCE'
+loss_args: '{}'
+
+# Dataloader
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+
+val_feeder_args:
+  batch_size: 16
+
+test_feeder_args:
+  batch_size: 16
+
+# Other settings
+seed: 2
+num_worker: 0
+include_val: True
+print_log: True
+phase: 'train'
+work_dir: 'exps/smartfall_har/student/watchgyro_divid3bw20'
+model_saved_name: 'ttfstudent_New'

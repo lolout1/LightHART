@@ -34,40 +34,31 @@ class DatasetBuilder:
         self.task = task
 
     
-    def make_dataset(self, subjects : List[int]): 
-        '''
-        Reads all the files and makes a numpy  array with all data
-        '''
-        self.data = {}
-        for trial in self.dataset.matched_trials:
-            if trial.subject_id in subjects:        
-                if self.task == 'fd': 
-                    label = int(trial.action_id > 9)
-                elif self.task == 'age':
-                    label = int(trial.subject_id < 29 or trial.subject_id > 46)
-                else:
-                    label = trial.action_id - 1
-                self.data['labels'] = self.data.get('labels',[])
-                self.data['labels'].append(label)
-                for modality, file_path in trial.files.items():
-                    #here we need the processor class 
-                    keys = self.kwargs.get('keys', None)
-                    key = None
-                    if keys:
-                        key = keys[modality.lower()]
-                    processor = Processor(file_path, self.mode, self.max_length, key = key)
-                    try: 
-                        unimodal_data = butterworth_filter(processor.process(), cutoff=1.0, fs=20)
-                        self.data[modality] = self.data.get(modality, [])
+        def make_dataset(self, subjects: List[int]):
+            self.data = {}
+            for trial in self.dataset.matched_trials:
+                if trial.subject_id in subjects:
+                    label = self._determine_label(trial)
+                    self.data['labels'] = self.data.get('labels', [])
+                    self.data['labels'].append(label)
+                    for modality_sensor, file_path in trial.files.items():
+                        # Split modality and sensor if applicable
+                        if '_' in modality_sensor:
+                            modality_name, sensor_name = modality_sensor.split('_')
+                            key = f"{modality_name}_{sensor_name}"
+                        else:
+                            key = modality_sensor
 
-                        self.data[modality].append(unimodal_data)
-
-                    except Exception as e : 
-                        print(e)
-                        os.remove(file_path)
-            
-        for key in self.data:
-            self.data[key] = np.stack(self.data[key], axis=0)
+                        processor = Processor(file_path, self.mode, self.max_length, key=self.kwargs.get('keys', {}).get(key))
+                        try:
+                            unimodal_data = butterworth_filter(processor.process(), cutoff=1.0, fs=20)
+                            self.data[key] = self.data.get(key, [])
+                            self.data[key].append(unimodal_data)
+                        except Exception as e:
+                            print(e)
+                            os.remove(file_path)
+            for key in self.data:
+                self.data[key] = np.stack(self.data[key], axis=0)
 
     
     def normalization(self) -> np.ndarray:

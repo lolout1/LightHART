@@ -1,0 +1,78 @@
+# Model configuration
+model: Models.accNew.TransModel
+dataset: 'smartfallmm'
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:
+  acc_coords: 4          # x, y, z, smv for accelerometer data
+  seq_length: 128        # Length of the sequence
+  embed_dim: 64          # Increased for better feature representation
+  num_heads: 4           # Increased for better attention modeling
+  num_layers: 4          # Increased for deeper temporal modeling
+  num_classes: 2         # Binary classification (fall vs no fall)
+  dropout: 0.3           # Dropout for regularization
+
+# Loss function
+loss: 'torch.nn.CrossEntropyLoss'
+loss_args: {}
+
+# Dataset arguments
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'             # Fall detection task
+  modalities: ['accelerometer']
+  age_group: ['young', 'old']
+  sensors: ['watch', 'phone']
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 300
+start_epoch: 0
+
+# Data loader configuration
+feeder: Feeder.Make_Dataset.UTD_mm
+
+train_feeder_args:
+  batch_size: 32
+
+val_feeder_args:
+  batch_size: 32
+
+test_feeder_args:
+  batch_size: 32
+
+# Optimizer and regularization
+seed: 42
+optimizer: 'adamw'
+base_lr: 0.0003
+weight_decay: 0.01
+
+# Additional settings
+work_dir: 'exps/fall_detection_student'
+model_saved_name: 'FallDetectionStudent'
+print_log: True
+phase: 'train'
+num_worker: 4
+result_file: null
+
+# Device setting
+device: [0]

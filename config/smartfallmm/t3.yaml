@@ -1,0 +1,84 @@
+model: Models.t3.EnhancedTeacherModel
+dataset: smartfallmm
+
+# Model args
+model_args:
+  num_joints: 32
+  in_chans: 3
+  acc_coords: 4
+  spatial_embed: 256
+  num_heads: 8
+  depth: 8
+  mlp_ratio: 4
+  num_classes: 2
+  dropout: 0.2
+
+# Dataset configuration
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['watch_accelerometer','phone_accelerometer', 'skeleton']
+  age_group: ['young', 'old']
+  sensors: ['watch']
+
+# DataLoader configuration
+feeder: Feeder.Make_Dataset.UTD_mm  # Added this line
+train_feeder_args:
+  batch_size: 32
+
+val_feeder_args:
+  batch_size: 32
+
+test_feeder_args:
+  batch_size: 32
+ 
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 300
+start_epoch: 0
+
+# Optimizer configuration
+optimizer: 'adamw'
+base_lr: 0.0001
+weight_decay: 0.004
+
+# Loss function
+loss: 'loss.BCE'
+loss_args: '{}'
+
+# Training settings
+work_dir: 'exps/smartfall_har/kd/student'
+model_saved_name: 'kdTransformerWatch_testTeachSklt3'
+print_log: True
+phase: 'train'
+num_worker: 4
+
+# Device setting
+device: [0]
+
+# Additional settings
+seed: 2
+log_interval: 10
+include_val: True
+

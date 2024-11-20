@@ -1,0 +1,77 @@
+# Model configuration
+model: Models.bTrans.FallDetectionTeacherModel  # Model class
+dataset: 'smartfallmm'                             # Dataset name
+
+subjects:                                         # Subject IDs used in the dataset
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+model_args:                                       # Model arguments
+  num_joints: 32                                  # Number of joints in skeleton data
+  in_chans: 3                                     # Input channels for skeleton data (x, y, z)
+  acc_coords: 4                                   # Accelerometer data dimensions (x, y, z, smv)
+  spatial_embed: 128                              # Embedding size for spatial features
+  num_heads: 8                                    # Number of attention heads
+  depth: 6                                        # Number of Transformer encoder layers
+  mlp_ratio: 4                                    # Ratio of feedforward layer dimensions
+  num_classes: 2                                  # Number of output classes (fall/no fall)
+
+# Loss function
+loss: 'torch.nn.CrossEntropyLoss'                # Loss function used for training
+loss_args: {}
+
+# Dataset arguments
+dataset_args:
+  mode: 'avg_pool'                               # Data pooling mode
+  max_length: 128                                # Maximum sequence length
+  task: 'fd'                                     # Task type: fall detection
+  modalities: ['skeleton', 'accelerometer']      # Data modalities
+  age_group: ['young', 'old']                    # Age groups in the dataset
+  sensors: ['watch']                    # Sensors used for data collection
+
+# Training parameters
+batch_size: 32                                   # Training batch size
+test_batch_size: 32                              # Testing batch size
+val_batch_size: 32                               # Validation batch size
+num_epoch: 200                                   # Number of epochs for training
+start_epoch: 0                                   # Starting epoch number
+
+# Data loader configuration
+feeder: Feeder.Make_Dataset.UTD_mm               # Feeder class for dataset loading
+
+train_feeder_args:
+  batch_size: 32                                 # Batch size for training
+
+val_feeder_args:
+  batch_size: 32                                 # Batch size for validation
+
+test_feeder_args:
+  batch_size: 32                                 # Batch size for testing
+
+# Optimizer and regularization
+seed: 42                                        # Random seed for reproducibility
+optimizer: 'adamw'                              # Optimizer for training
+base_lr: 0.0001                                # Base learning rate
+weight_decay: 0.0004                             # Weight decay for regularization
+
+# Additional settings
+work_dir: 'exps/fall_detection_teacher'         # Directory for experiment outputs
+model_saved_name: 'FallDetectionTeacher'        # Name for the saved model
+print_log: True                                 # Print logs during training
+phase: 'train'                                  # Phase: train/test/val
+num_worker: 0                                   # Number of workers for data loading
+result_file: null                               # File to save results
+

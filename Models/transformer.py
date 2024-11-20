@@ -1,82 +1,132 @@
-import torch 
-from torch import nn
-from typing import Dict, Tuple
-from torch.nn import Linear, LayerNorm, TransformerEncoder, TransformerEncoderLayer, ModuleList
-import torch.nn.functional as F
-from einops import rearrange
-import itertools
-import numpy as np
-#from util.graph import Graph
+import torch
+import torch.nn as nn
 import math
 
-class TransformerEncoderWAttention(nn.TransformerEncoder):
-    def forward(self, src, mask = None, src_key_padding_mask = None):
-        output = src
-        self.attention_weights = []
-        for layer in self.layers :
-            output, attn = layer.self_attn(output, output, output, attn_mask = mask,
-                                            key_padding_mask = src_key_padding_mask, need_weights = True)
-            self.attention_weights.append(attn)
-            output = layer(output, src_mask = mask, src_key_padding_mask = src_key_padding_mask)
-        return output
+class FallDetectionStudentModel(nn.Module):
+    """
+    Student Model for Fall Detection using Accelerometer Data Only.
+    Designed to mimic the teacher model's behavior through knowledge distillation.
+    """
 
-
-class TransModel(nn.Module):
-    def __init__(self,
-                mocap_frames = 128,
-                num_joints = 32,
-                acc_frames = 128,
-                num_classes:int = 8, 
-                num_heads = 2, 
-                acc_coords = 4, 
-                av = False,
-                num_layer = 2, norm_first = True, 
-                embed_dim= 8, activation = 'relu',
-                **kwargs) :
+    def __init__(
+        self,
+        acc_coords=4,      # x, y, z, SMV
+        seq_length=128,
+        embedding_dim=256,  # Match the teacher's spatial embedding size
+        num_heads=8,
+        depth=6,
+        mlp_ratio=4,
+        num_classes=2,
+        dropout=0.1,
+        use_positional_encoding=True
+    ):
         super().__init__()
-        self.data_shape = (acc_frames, acc_coords)
-        self.length = self.data_shape[0]
-        size = self.data_shape[1]
-        #self.channel_embed_dim = embed_dim // 2
-        self.input_proj = nn.Sequential(nn.Conv1d(size, embed_dim, kernel_size=3, stride=1, padding='same'),
-                                         nn.Conv1d(embed_dim, embed_dim*2, kernel_size = 3, stride=1, padding='same'),
-                                         nn.Conv1d(embed_dim*2, embed_dim, kernel_size=3, stride=1, padding='same'))
 
+        self.acc_coords = acc_coords
+        self.seq_length = seq_length
+        self.embedding_dim = embedding_dim
+        self.use_positional_encoding = use_positional_encoding
 
-        self.encoder_layer = TransformerEncoderLayer(d_model = self.length,  activation = activation, 
-                                                     dim_feedforward = 32, nhead = num_heads,dropout=0.5)
-        
-        self.encoder = TransformerEncoderWAttention(encoder_layer = self.encoder_layer, num_layers = num_layer, 
-                                          norm=nn.LayerNorm(embed_dim))
+        # Accelerometer Embedding
+        self.acc_embed = nn.Sequential(
+            nn.Linear(self.acc_coords, embedding_dim),
+            nn.GELU(),
+            nn.Linear(embedding_dim, embedding_dim),
+            nn.GELU()
+        )
 
-        self.ln1 = nn.Linear(self.length, 32)
-        # self.drop1 = nn.Dropout(p = 0.5)
-        self.ln2 = nn.Linear(32, 16)
-        self.drop2 = nn.Dropout(p = 0.5)
-        self.output = Linear(16, num_classes)
-        nn.init.normal_(self.output.weight, 0, math.sqrt(2. / num_classes))
-    
-    def forward(self, acc_data, skl_data):
+        # Positional Encoding
+        if use_positional_encoding:
+            self.positional_encoding = PositionalEncoding(
+                d_model=embedding_dim,
+                max_len=seq_length
+            )
 
-        b, l, c = acc_data.shape
-        x = rearrange(acc_data, 'b l c -> b c l')
-        x = self.input_proj(x) # [ 8, 64, 3]
-        x = rearrange(x,'b c l ->  c b l') #[8, 64, 3]
-        x = self.encoder(x)
-        x = rearrange(x, 'c b l -> b l c')
+        # Transformer Encoder for Temporal Modeling
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=num_heads,
+            dim_feedforward=embedding_dim * mlp_ratio,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=depth,
+            norm=nn.LayerNorm(embedding_dim)
+        )
 
+        # Classification Head
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(embedding_dim),
+            nn.Linear(embedding_dim, embedding_dim // 2),
+            nn.GELU(),
+            nn.Dropout(p=dropout),
+            nn.Linear(embedding_dim // 2, num_classes)
+        )
 
-        x = F.avg_pool1d(x, kernel_size = x.shape[-1], stride = 1)
-        x = rearrange(x, 'b c f -> b (c f)')
-        # x= self.drop1(x)
-        x = F.relu(self.ln1(x))
-        # x = self.drop2(x)
-        x = F.relu(self.ln2(x))
-        x = self.output(x)
+        # Initialize weights
+        self.apply(self._init_weights)
+
+    def forward(self, acc_data):
+        """
+        Forward pass of the student model.
+
+        Args:
+            acc_data (Tensor): Accelerometer data of shape [batch_size, seq_length, acc_coords].
+
+        Returns:
+            logits (Tensor): Output logits of shape [batch_size, num_classes].
+            intermediate_features (Dict): Intermediate representations for distillation.
+        """
+        # Process Accelerometer Data
+        acc_embedded = self.acc_embed(acc_data)  # [batch_size, seq_length, embedding_dim]
+
+        # Add Positional Encoding if used
+        if self.use_positional_encoding:
+            acc_embedded = self.positional_encoding(acc_embedded)
+
+        # Transformer Encoder
+        transformer_output = self.transformer_encoder(acc_embedded)  # [batch_size, seq_length, embedding_dim]
+
+        # Global Average Pooling over sequence length
+        pooled_output = transformer_output.mean(dim=1)  # [batch_size, embedding_dim]
+
+        # Classification Head
+        logits = self.classifier(pooled_output)  # [batch_size, num_classes]
+
+        # Return intermediate features for distillation
+        return logits, {
+            'transformer_output': transformer_output
+        }
+
+    def _init_weights(self, m):
+        """Initialize weights for linear layers."""
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+class PositionalEncoding(nn.Module):
+    """Positional Encoding module for adding positional information."""
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        # Create constant 'pe' matrix with values dependent on position and i
+        position = torch.arange(0, max_len).unsqueeze(1).float()
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)  # Apply sine to even indices
+        pe[0, :, 1::2] = torch.cos(position * div_term)  # Apply cosine to odd indices
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor of shape [batch_size, seq_length, d_model]
+        """
+        x = x + self.pe[:, :x.size(1)]
         return x
-
-if __name__ == "__main__":
-        data = torch.randn(size = (16,128,4))
-        skl_data = torch.randn(size = (16,128,32,3))
-        model = TransModel()
-        output = model(data, skl_data)

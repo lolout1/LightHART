@@ -1,371 +1,386 @@
 import argparse
 import yaml
 import traceback
-import random 
+import random
 import sys
 import os
 import time
 
-#environmental import
-import numpy as np 
+# Environmental imports
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torchvision.transforms as transforms
 import torch.optim as optim
 from tqdm import tqdm
-import warnings
-import json
 import torch.nn.functional as F
-# from torchsummary import summary
 
-#local import 
-from utils.dataprocessing import utd_processing , bmhad_processing,normalization
-from main import Trainer, str2bool, init_seed, import_class
+# Local imports
+from utils.dataset import prepare_smartfallmm, filter_subjects
+from main import str2bool, init_seed, import_class
 from utils.loss import DistillationLoss
 from sklearn.metrics import f1_score
 
-
-
-
 def get_args():
+    parser = argparse.ArgumentParser(description='Distillation')
+    parser.add_argument('--config', default='./config/smartfallmm/distill.yaml')
+    parser.add_argument('--dataset', type=str, default='utd')
 
-    parser = argparse.ArgumentParser(description = 'Distillation')
-    parser.add_argument('--config' , default = './config/smartfallmm/distill.yaml')
-    parser.add_argument('--dataset', type = str, default= 'utd' )
-    #training
-    parser.add_argument('--batch-size', type = int, default = 16, metavar = 'N',
-                        help = 'input batch size for training (default: 8)')
+    # Training parameters
+    parser.add_argument('--batch-size', type=int, default=16, metavar='N',
+                        help='input batch size for training (default: 16)')
+    parser.add_argument('--test-batch-size', type=int, default=8, metavar='N',
+                        help='input batch size for testing (default: 8)')
+    parser.add_argument('--val-batch-size', type=int, default=8, metavar='N',
+                        help='input batch size for validation (default: 8)')
+    parser.add_argument('--num-epoch', type=int, default=70, metavar='N',
+                        help='number of epochs to train (default: 70)')
+    parser.add_argument('--start-epoch', type=int, default=0)
 
-    parser.add_argument('--test-batch-size', type = int, default = 8, 
-                        metavar = 'N', help = 'input batch size')
-    parser.add_argument('--val-batch-size', type = int, default = 8, 
-                        metavar = 'N', help = 'input batch size')
+    # Optimizer parameters
+    parser.add_argument('--optimizer', type=str, default='Adam')
+    parser.add_argument('--base-lr', type=float, default=0.001, metavar='LR',
+                        help='learning rate (default: 0.001)')
+    parser.add_argument('--weight-decay', type=float, default=0.0004)
 
-    parser.add_argument('--num-epoch', type = int , default = 70, metavar = 'N', 
-                        help = 'number of epochs to train (default: 10)')
-    parser.add_argument('--start-epoch', type = int, default = 0)
+    # Data parameters
+    parser.add_argument('--subjects', nargs='+', type=int)
+    parser.add_argument('--dataset-args', default=None, type=str)
 
-    #optim
-    parser.add_argument('--optimizer', type = str, default = 'Adam')
-    parser.add_argument('--base-lr', type = float, default = 0.001, metavar = 'LR', 
-                        help = 'learning rate (default: 0.001)')
-    parser.add_argument('--weight-decay', type = float , default=0.0004)
+    # Teacher model parameters
+    parser.add_argument('--teacher-model', default=None, help='Name of teacher model to load')
+    parser.add_argument('--teacher-args', default=str, help='A dictionary for teacher args')
+    parser.add_argument('--teacher-weight', type=str, default="", help='Path to teacher weights')
 
-    #data 
-    # parser.add_argument('--train-subjects', nargs='+', type = int)
-    parser.add_argument('--subjects', nargs='+', type = int)
-    parser.add_argument('--dataset-args', default= None, type= str)
+    # Student model parameters
+    parser.add_argument('--student-model', default=None, help='Name of the student model to load')
+    parser.add_argument('--student-args', default=str, help='A dictionary for student args')
 
-    #teacher model
-    parser.add_argument('--teacher-model' ,default= None, help = 'Name of teacher model to load')
-    parser.add_argument('--teacher-args', default= str, help = 'A dictionary for teacher args')
-    parser.add_argument('--teacher-weight', type = str, default="/Users/tousif/LightHART/exps/smartfall_fall/teacher/with_new1/spTransformer.pth", help= 'weight for teacher')
+    # Device and weights
+    parser.add_argument('--device', nargs='+', default=[0], type=int)
+    parser.add_argument('--weights', type=str, help='Location of student weight file')
+    parser.add_argument('--model-saved-name', type=str, default="student_model", help='Model save name')
 
-    #student model 
-    parser.add_argument('--student-model', default = None , help = 'Name of the student model to load' )
-    parser.add_argument('--student-args', default= str, help= 'A dictionary for student args')
+    # Loss functions
+    parser.add_argument('--distill-loss', 
+                       default='utils.loss.DistillationLoss', 
+                       help='Name of distillation loss function')
+    parser.add_argument('--distill-args', 
+                       default={}, 
+                       type=lambda x: {} if x == "{}" else x,
+                       help='Arguments for distillation loss')
+    parser.add_argument('--student-loss', 
+                       default='torch.nn.CrossEntropyLoss', 
+                       help='Name of student loss function')
+    parser.add_argument('--loss-args', 
+                       default={}, 
+                       type=lambda x: {} if x == "{}" else x,
+                       help='Arguments for student loss')
     
 
 
-    #model args
-    parser.add_argument('--device', nargs='+', default=[0], type = int)
-    parser.add_argument('--weights', type = str, help = 'Location of weight file')
-    parser.add_argument('--model-saved-name', type = str,  default = "ttfstudent", help = 'Weigt name')
+    # DataLoader
+    parser.add_argument('--feeder', default=None, help='Dataloader class')
+    parser.add_argument('--train-feeder-args', default=str, help='Arguments for train DataLoader')
+    parser.add_argument('--val-feeder-args', default=str, help='Arguments for validation DataLoader')
+    parser.add_argument('--test_feeder_args', default=str, help='Arguments for test DataLoader')
+    parser.add_argument('--include-val', type=str2bool, default=True, help='Include validation during training')
 
-    #loss args
-    parser.add_argument('--distill-loss', default='loss.BCE' , help = 'Name of loss function to use' )
-    parser.add_argument('--distill-args', default ="{}", type = str,  help = 'A dictionary for loss')
+    # Initialization
+    parser.add_argument('--seed', type=int, default=2, help='Random seed (default: 2)')
 
-    #student loss
-    parser.add_argument('--student-loss', default='loss.BCE' , help = 'Name of loss function to use' )
-    parser.add_argument('--loss-args', default ="{}", type = str,  help = 'A dictionary for loss')
-
-
-    # parser.add_argument('--loss-args', default=str, help = 'A dictonary for loss args' )
-
-    #dataloader 
-    parser.add_argument('--feeder', default= None , help = 'Dataloader location')
-    parser.add_argument('--train-feeder-args',default=str, help = 'A dict for dataloader args' )
-    parser.add_argument('--val-feeder-args', default=str , help = 'A dict for validation data loader')
-    parser.add_argument('--test_feeder_args',default=str, help= 'A dict for test data loader')
-    parser.add_argument('--include-val', type = str2bool, default= True , help = 'If we will have the validation set or not')
-
-    #initializaiton
-    parser.add_argument('--seed', type =  int , default = 2 , help = 'random seed (default: 1)') 
-
-    parser.add_argument('--log-interval', type = int , default = 10, metavar = 'N',
-                        help = 'how many batches to wait before logging training status')
+    # Logging
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                        help='How many batches to wait before logging training status')
+    parser.add_argument('--work-dir', type=str, default='exps/test', metavar='F', help="Working Directory")
+    parser.add_argument('--print-log', type=str2bool, default=True, help='Print logging or not')
+    parser.add_argument('--phase', type=str, default='train')
+    parser.add_argument('--num-worker', type=int, default=0)
+    parser.add_argument('--result-file', type=str, help='Name of result file')
 
 
-    parser.add_argument('--work-dir', type = str, default = 'exps/test', metavar = 'F', help = "Working Directory")
-    parser.add_argument('--print-log',type=str2bool,default=True,help='print logging or not')
-    
-    parser.add_argument('--phase', type = str, default = 'train')
-    
-    parser.add_argument('--num-worker', type = int, default= 0)
-    parser.add_argument('--result-file', type = str, help = 'Name of resutl file')
-    
     return parser
 
-
-class Distiller(Trainer):
+class Distiller():
     def __init__(self, arg):
         self.arg = arg
         self.data_loader = {}
-        # self.criterion = {}
-        self.intertial_modality = (lambda x: next((modality for modality in x if modality != 'skeleton'), None))(arg.dataset_args['modalities'])
-        if self.arg.phase == "train":
-            self.model = {}
-            self.arg.model_args = arg.teacher_args
-            self.load_loss()
+        self.model = {}
+        self.best_accuracy = 0
+        self.best_f1 = 0
 
+        # Initialize device
+        use_cuda = torch.cuda.is_available()
+        self.output_device = self.arg.device[0] if isinstance(self.arg.device, list) else self.arg.device
 
+        # Initialize teacher and student models
+        self.load_models()
 
-        self.include_val =arg.include_val
+        # Load loss functions
+        self.load_loss()
+
+        # Initialize optimizer
+        if self.arg.phase == 'train':
+            self.load_optimizer()
+
+        self.include_val = arg.include_val
         if not os.path.exists(self.arg.work_dir):
             os.makedirs(self.arg.work_dir)
-        
-        if self.arg.phase == 'test':
-            use_cuda = torch.cuda.is_available()
-            self.output_device = self.arg.device[0] if type(self.arg.device) is list else self.arg.device
-            self.model = {}
-            self.model['student'] = torch.load(self.arg.weights)
-            self.load_loss(name='student', loss= arg.student_loss)
-            self.arg.model_args = arg.student_args
-            self.arg.model_args['spatial_embed'] =  self.arg.model_args['acc_embed']
-            #self.load_weights(name = 'student', weight=self.arg.weights)
-    
-    def load_optimizer(self, name = 'student'):
-        
-        if self.arg.optimizer == "Adam" :
-            self.optimizer = optim.Adam(
-                self.model[name].parameters(), 
-                lr = self.arg.base_lr,
-                # weight_decay=self.arg.weight_decay
-            )
-        elif self.arg.optimizer == "AdamW":
-            self.optimizer = optim.AdamW(
-                self.model[name].parameters(), 
-                lr = self.arg.base_lr, 
-                weight_decay=self.arg.weight_decay
-            )
-        
-        elif self.arg.optimizer == "sgd":
-            self.optimizer = optim.SGD(
-                self.model[name].parameters(), 
-                lr = self.arg.base_lr,
-                weight_decay = self.arg.weight_decay
-            )
-        else :
-           raise ValueError()
 
+    def load_models(self):
+        # Load teacher model
+        TeacherModel = import_class(self.arg.teacher_model)
+        self.model['teacher'] = TeacherModel(**self.arg.teacher_args)
+        teacher_weights = torch.load(self.arg.teacher_weight, map_location=f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
+        self.model['teacher'].load_state_dict(teacher_weights)
+        self.model['teacher'].to(f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
+        self.model['teacher'].eval()  # Teacher model is in evaluation mode
+
+        # Load student model
+        StudentModel = import_class(self.arg.student_model)
+        self.model['student'] = StudentModel(**self.arg.student_args)
+        if self.arg.weights:
+            student_weights = torch.load(self.arg.weights, map_location=f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
+            self.model['student'].load_state_dict(student_weights)
+        self.model['student'].to(f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
 
     def load_loss(self):
-        self.mse = torch.nn.MSELoss()
-        self.criterion = torch.nn.CrossEntropyLoss()
-        self.distillation_loss = DistillationLoss(temperature=3)
+        # Distillation loss
+        DistillLossClass = import_class(self.arg.distill_loss)
+        # Handle the case where distill_args is already a dictionary
+        if isinstance(self.arg.distill_args, dict):
+            distill_args = self.arg.distill_args
+        else:
+            # Try to evaluate if it's a string
+            try:
+                distill_args = eval(self.arg.distill_args)
+            except:
+                distill_args = {}
+        
+        self.distillation_loss = DistillLossClass(**distill_args)
 
+        # Student loss
+        StudentLossClass = import_class(self.arg.student_loss)
+        # Handle the case where loss_args is already a dictionary
+        if isinstance(self.arg.loss_args, dict):
+            loss_args = self.arg.loss_args
+        else:
+            # Try to evaluate if it's a string
+            try:
+                loss_args = eval(self.arg.loss_args)
+            except:
+                loss_args = {}
+        
+        self.student_loss = StudentLossClass(**loss_args)
+    def load_optimizer(self):
+        if self.arg.optimizer.lower() == "adam":
+            self.optimizer = optim.Adam(
+                self.model['student'].parameters(),
+                lr=self.arg.base_lr,
+                weight_decay=self.arg.weight_decay
+            )
+        elif self.arg.optimizer.lower() == "adamw":
+            self.optimizer = optim.AdamW(
+                self.model['student'].parameters(),
+                lr=self.arg.base_lr,
+                weight_decay=self.arg.weight_decay
+            )
+        elif self.arg.optimizer.lower() == "sgd":
+            self.optimizer = optim.SGD(
+                self.model['student'].parameters(),
+                lr=self.arg.base_lr,
+                weight_decay=self.arg.weight_decay
+            )
+        else:
+            raise ValueError(f"Unsupported optimizer type: {self.arg.optimizer}")
 
-    def load_weights(self, name, weight):
-        self.model[name].load_state_dict(torch.load(weight))
+    def load_data(self):
+        Feeder = import_class(self.arg.feeder)
+        # Prepare the dataset
+        builder = prepare_smartfallmm(self.arg)
+        norm_train = filter_subjects(builder, self.train_subjects)
+        norm_val = filter_subjects(builder, self.test_subject)
 
+        # DataLoader for training
+        self.data_loader['train'] = torch.utils.data.DataLoader(
+            dataset=Feeder(**self.arg.train_feeder_args, dataset=norm_train),
+            batch_size=self.arg.batch_size,
+            shuffle=True,
+            num_workers=self.arg.num_worker
+        )
+
+        # DataLoader for validation
+        self.data_loader['val'] = torch.utils.data.DataLoader(
+            dataset=Feeder(**self.arg.val_feeder_args, dataset=norm_val),
+            batch_size=self.arg.val_batch_size,
+            shuffle=False,
+            num_workers=self.arg.num_worker
+        )
+
+    def print_log(self, string, print_time=True):
+        print(string)
+        if self.arg.print_log:
+            with open(f'{self.arg.work_dir}/log.txt', 'a') as f:
+                print(string, file=f)
 
     def train(self, epoch):
         self.model['student'].train()
         self.model['teacher'].eval()
-        self.record_time()
-        loader = self.data_loader['train']
-        timer = dict(dataloader = 0.001, model = 0.001, stats = 0.001)
-        loss_value = []
-        acc_value = []
-        accuracy = 0
-        teacher_accuracy = 0
-        cnt = 0
-        train_loss = 0
-        process = tqdm(loader, ncols = 80)
         use_cuda = torch.cuda.is_available()
-        loss = 0
-        
-        for batch_idx, (inputs, targets, idx) in enumerate(process):
 
+        loader = self.data_loader['train']
+        process = tqdm(loader, ncols=80)
+        total_loss = 0
+        total_correct = 0
+        total_samples = 0
+
+        for batch_idx, (inputs, targets, idx) in enumerate(process):
+            acc_data = inputs['accelerometer'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+            skl_data = inputs['skeleton'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+            targets = targets.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+
+            # Get teacher output (includes both logits and features)
             with torch.no_grad():
-                acc_data = inputs[self.intertial_modality].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-                skl_data = inputs['skeleton'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-                targets = targets.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-            
-            timer['dataloader'] += self.split_time()
+                teacher_output = self.model['teacher'](acc_data.float(), skl_data.float())
+                # Unpack if it's a tuple (logits, features)
+                if isinstance(teacher_output, tuple):
+                    teacher_logits, teacher_features = teacher_output
+                else:
+                    teacher_logits = teacher_output
+                    teacher_features = None
+
+            # Get student output
+            student_output = self.model['student'](acc_data.float())
+            # Unpack if it's a tuple (logits, features)
+            if isinstance(student_output, tuple):
+                student_logits, student_features = student_output
+            else:
+                student_logits = student_output
+                student_features = None
+
+            # Prepare outputs for loss calculation
+            if teacher_features is not None and student_features is not None:
+                teacher_output = (teacher_logits, teacher_features)
+                student_output = (student_logits, student_features)
+            else:
+                teacher_output = teacher_logits
+                student_output = student_logits
+
+            # Compute distillation loss
+            loss = self.distillation_loss(student_output, teacher_output, targets)
 
             self.optimizer.zero_grad()
-
-            # Ascent Step
-            #print("labels: ",targets)
-            with torch.no_grad():
-                teacher_logits= self.model['teacher'](acc_data.float(), skl_data.float())
-            student_logits= self.model['student'](acc_data.float(), skl_data.float())
-            loss = self.distillation_loss(student_logits=student_logits,teacher_logits=teacher_logits, labels=targets)
             loss.backward()
             self.optimizer.step()
 
-            timer['model'] += self.split_time()
-            with torch.no_grad():
-                train_loss += loss.sum().item()
-                #accuracy += (torch.argmax(predictions, 1) == targets).sum().item()
-                accuracy += (torch.argmax(F.log_softmax(student_logits,dim =1), 1) == targets).sum().item()
-                teacher_accuracy += (torch.argmax(F.log_softmax(teacher_logits, dim =1),1) == targets).sum().item()
-                
-            cnt += len(targets) 
-            timer['stats'] += self.split_time()
-        train_loss /= cnt 
-        accuracy *= 100. / cnt
-        teacher_accuracy *= 100 / cnt
-        loss_value.append(train_loss)
-        acc_value.append(accuracy) 
-        proportion = {
-            k: '{:02d}%'.format(int(round(v * 100 / sum(timer.values()))))
-            for k, v in timer.items()
-        }
-        self.print_log(
-            '\tTraining Loss: {:4f}. Training Acc: {:2f}% Teacher Acc: {:2f}'.format(train_loss, accuracy, teacher_accuracy)
-        )
-        self.print_log('\tTime consumption: [Data]{dataloader}, [Network]{model}'.format(**proportion))
-        if not self.include_val:
-                if accuracy > self.best_accuracy:
-                    self.best_accuracy = accuracy
-                    state_dict = self.model.state_dict()
-                    #weights = OrderedDict([[k.split('module.')[-1], v.cpu()] for k, v in state_dict.items()])
-                    torch.save(state_dict, self.arg.work_dir + '/' + self.arg.model_saved_name+ str(epoch)+ '.pt')
-                    self.print_log('Weights Saved') 
-        
-        else: 
-            self.eval(epoch, loader_name='val', result_file=self.arg.result_file)      
+            # Use student logits for accuracy calculation
+            total_loss += loss.item() * targets.size(0)
+            _, predicted = torch.max(student_logits.data, 1)
+            total_correct += (predicted == targets).sum().item()
+            total_samples += targets.size(0)
 
-    def eval(self, epoch, loader_name = 'test', result_file = None):
+            process.set_description(f'Epoch [{epoch+1}/{self.arg.num_epoch}] Loss: {total_loss/total_samples:.4f} Acc: {100.0*total_correct/total_samples:.2f}%')
 
-        if result_file is not None : 
-            f_r = open (result_file, 'w')
-        
+        avg_loss = total_loss / total_samples
+        avg_acc = 100.0 * total_correct / total_samples
+        self.print_log(f'Epoch [{epoch+1}/{self.arg.num_epoch}] Training Loss: {avg_loss:.4f}, Training Acc: {avg_acc:.2f}%')
+
+        # Validation
+        if self.include_val:
+            self.eval(epoch, loader_name='val')
+
+    def eval(self, epoch, loader_name='val'):
         self.model['student'].eval()
+        use_cuda = torch.cuda.is_available()
 
-        self.print_log('Eval epoch: {}'.format(epoch+1))
-
-        loss = 0
-        cnt = 0
-        accuracy = 0
-        f1 = 0
+        loader = self.data_loader[loader_name]
+        total_loss = 0
+        total_correct = 0
+        total_samples = 0
         label_list = []
         pred_list = []
-        use_cuda = torch.cuda.is_available()
-        
-        #tested subject array 
-        process = tqdm(self.data_loader[loader_name], ncols=80)
+
         with torch.no_grad():
-            for batch_idx, (inputs, targets, idx) in enumerate(process):
-                label_list.extend(targets.tolist())
-                #inputs = inputs.cuda(self.output_device)
-                acc_data = inputs[self.intertial_modality].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-                skl_data = inputs['skeleton'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+            for batch_idx, (inputs, targets, idx) in enumerate(loader):
+                acc_data = inputs['accelerometer'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
                 targets = targets.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-                #_,logits,predictions = self.model(inputs.float())
-                logits= self.model['student'](acc_data.float(), skl_data.float())
-                batch_loss = self.criterion(logits, targets)
-                loss += batch_loss.sum().item()
-                # accuracy += (torch.argmax(predictions, 1) == targets).sum().item()
-                # pred_list.extend(torch.argmax(predictions ,1).tolist())
-                accuracy += (torch.argmax(F.log_softmax(logits,dim =1), 1) == targets).sum().item()
-                pred_list.extend(torch.argmax(F.log_softmax(logits,dim =1) ,1).tolist())
-                cnt += len(targets)
-            loss /= cnt
-            accuracy *= 100./cnt
-            target = np.array(label_list)
-            y_pred = np.array(pred_list)
-            f1 = f1_score(target, y_pred, average='macro') * 100
-        
-        if result_file is not None:
-            predict = pred_list
-            true = label_list
 
-            for i, x in enumerate(predict):
-                f_r.write(str(x) +  '==>' + str(true[i]) + '\n')
-        
-        self.print_log('{} Loss: {:4f}. {} Acc: {:2f}%'.format(loader_name.capitalize(),loss,loader_name.capitalize(), accuracy))
-        if self.arg.phase == 'train':
-            if accuracy > self.best_accuracy :
-                    self.best_accuracy = accuracy
-                    self.best_f1 = f1
-                    state_dict = self.model['student'].state_dict()
-                    #weights = OrderedDict([[k.split('module.')[-1], v.cpu()] for k, v in state_dict.items()])
-                    torch.save(self.model['student'], f'{self.arg.work_dir}/{self.arg.model_saved_name}_{self.test_subject[0]}.pth')
-                    self.print_log('Weights Saved')
-        else:
-            return pred_list, label_list , []
-        
+                # Get student output
+                student_output = self.model['student'](acc_data.float())
+                # Unpack if it's a tuple (logits, features)
+                if isinstance(student_output, tuple):
+                    student_logits, _ = student_output
+                else:
+                    student_logits = student_output
+
+                # During evaluation, use standard cross-entropy loss
+                loss = self.student_loss(student_logits, targets)
+
+                total_loss += loss.item() * targets.size(0)
+                _, predicted = torch.max(student_logits.data, 1)
+                total_correct += (predicted == targets).sum().item()
+                total_samples += targets.size(0)
+
+                label_list.extend(targets.cpu().numpy())
+                pred_list.extend(predicted.cpu().numpy())
+
+        avg_loss = total_loss / total_samples
+        avg_acc = 100.0 * total_correct / total_samples
+        f1 = f1_score(label_list, pred_list, average='macro') * 100
+
+        self.print_log(f'Epoch [{epoch+1}/{self.arg.num_epoch}] {loader_name.capitalize()} Loss: {avg_loss:.4f}, {loader_name.capitalize()} Acc: {avg_acc:.2f}%, F1 Score: {f1:.2f}%')
+
+        # Save the best model
+        if avg_acc > self.best_accuracy:
+            self.best_accuracy = avg_acc
+            self.best_f1 = f1
+            torch.save(self.model['student'].state_dict(), f'{self.arg.work_dir}/{self.arg.model_saved_name}.pth')
+            self.print_log('Best model saved.')
+
     def start(self):
-        #summary(self.model,[(model_args['acc_frames'],3), (model_args['mocap_frames'], model_args['num_joints'],3)] , dtypes=[torch.float, torch.float] )
-        if self.arg.phase == 'train':
-            self.train_loss_summary = []
-            self.val_loss_summary = []
-            self.best_accuracy  = float('-inf')
-            self.best_f1 = float('-inf')
-            self.print_log('Parameters: \n{}\n'.format(str(vars(self.arg))))
-            results = self.create_df()
-            # for test_subject in self.arg.subjects : 
-            #     train_subjects = list(filter(lambda x : x != test_subject, self.arg.subjects))
-            #     self.test_subject = [test_subject]
-            #     self.train_subjects = train_subjects
-            test_subject = self.arg.subjects[-3:]
-            train_subjects = [x for x in self.arg.subjects if  x not in test_subject]
-            self.test_subject = test_subject
-            self.train_subjects = train_subjects
-            self.model['teacher'] = torch.load(os.path.join(os.getcwd(),f'{self.arg.teacher_weight}.pth'))
-            self.model['student'] = self.load_model(self.arg.student_model, self.arg.student_args)
-            self.load_data()
-            self.load_optimizer()
+        self.print_log(f'Parameters:\n{vars(self.arg)}\n')
 
-            self.global_step = self.arg.start_epoch * len(self.data_loader['train']) / self.arg.batch_size
-            for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
-                self.train(epoch)
-            self.print_log(f'Train Subjects : {self.train_subjects}')
-            self.print_log(f' ------------ Test Subject {self.test_subject[0]} -------')
-            self.print_log(f'Best accuracy for : {self.best_accuracy}')
-            self.print_log(f'Best F-Score: {self.best_f1}')
-            #self.print_log(f'Epoch number: {self.best_acc_epoch}')
-            self.print_log(f'Model name: {self.arg.work_dir}')
-            #self.print_log(f'Model total number of params: {num_params}')
-            self.print_log(f'Weight decay: {self.arg.weight_decay}')
-            self.print_log(f'Base LR: {self.arg.base_lr}')
-            self.print_log(f'Batch Size: {self.arg.batch_size}')
-            self.print_log(f'seed: {self.arg.seed}')
-            self.loss_viz(self.train_loss_summary, self.val_loss_summary)
-            subject_result = pd.Series({'test_subject' : str(self.test_subject), 'train_subjects' :str(self.train_subjects), 
-                                            'accuracy':round(self.best_accuracy,2), 'f1_score':round(self.best_f1, 2)})
-            results.loc[len(results)] = subject_result
-            self.best_accuracy = float('-inf')
-            self.best_f1 = float('-inf')
-            results.to_csv(f'{self.arg.work_dir}/scores.csv')
-                
-            # self.model = self.load_model(self.arg.model, self.arg.model_args)
-            # self.load_loss()
-            # self.load_optimizer()
-            # self.model.load_state_dict(torch.load(self.arg.weights))
-            # val_loss = self.eval(0, loader_name='test', result_file=self.arg.result_file)
+        # Split subjects into training and testing
+        test_subject = self.arg.subjects[-3:]
+        train_subjects = [x for x in self.arg.subjects if x not in test_subject]
+        self.test_subject = test_subject
+        self.train_subjects = train_subjects
 
-        
-        elif self.arg.phase == 'test' :
-            if self.arg.weights is None: 
-                raise ValueError('Please add --weights')
-            y_pred, y_true, wrong_idx = self.eval(epoch=0, loader_name='test', result_file=self.arg.result_file)
-            self.cm_viz(y_pred, y_true)   
+        self.load_data()
 
+        for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
+            self.train(epoch)
 
+        # Final evaluation on validation set
+        if self.include_val:
+            self.eval(self.arg.num_epoch - 1, loader_name='val')
+
+        self.print_log(f'Best Validation Accuracy: {self.best_accuracy:.2f}%')
+        self.print_log(f'Best Validation F1 Score: {self.best_f1:.2f}%')
+def process_args(args_dict):
+    """Process loaded YAML arguments to ensure proper types."""
+    if 'distill_args' in args_dict:
+        if isinstance(args_dict['distill_args'], str):  
+            try:
+                args_dict['distill_args'] = eval(args_dict['distill_args'])
+            except:
+                args_dict['distill_args'] = {}
+    if 'loss_args' in args_dict:
+        if isinstance(args_dict['loss_args'], str):
+            try:
+                args_dict['loss_args'] = eval(args_dict['loss_args'])
+            except:
+                args_dict['loss_args'] = {}
+    return args_dict
 if __name__ == "__main__":
     parser = get_args()
 
-    # load arg form config file
+    # Load arguments from config file
     p = parser.parse_args()
     if p.config is not None:
-        with open(p.config, 'r') as f:
+        with open(p.config, 'r', encoding='utf-8') as f:
             default_arg = yaml.safe_load(f)
+        default_arg = process_args(default_arg)  # Process the loaded arguments
         key = vars(p).keys()
         for k in default_arg.keys():
             if k not in key:
@@ -377,4 +392,3 @@ if __name__ == "__main__":
     init_seed(arg.seed)
     trainer = Distiller(arg)
     trainer.start()
-
