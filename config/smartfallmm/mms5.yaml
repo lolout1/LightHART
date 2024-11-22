@@ -1,0 +1,90 @@
+# config/mms5_student_weighted_fusion.yaml
+
+# Model configuration 
+model: Models.mms5.MultiModalStudentModel
+
+# Model arguments
+model_args:
+  acc_coords: 4            # x, y, z, SMV
+  spatial_embed: 256       # Embedding size for spatial data
+  num_heads: 8            # Number of attention heads
+  depth: 8                # Depth of the transformer
+  mlp_ratio: 4            # Ratio for the MLP head
+  num_classes: 2          # Number of output classes
+              # Dropout rate
+  use_skeleton: false     # Whether to use skeleton data
+
+# Dataset configuration
+dataset: smartfallmm
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+dataset_args:
+  root_dir: "data/smartfallmm"
+  age_groups: 
+    - "young"
+    - "old"
+  modalities:
+    - "accelerometer"
+  sensors:
+    accelerometer:
+      - "phone"
+      - "watch"
+  mode: "avg_pool"
+  max_length: 128
+  task: "fd"
+
+# DataLoader configuration
+feeder: "Feeder.Make_Dataset.UTD_mm"
+train_feeder_args:
+  batch_size: 32
+
+val_feeder_args:
+  batch_size: 32
+
+test_feeder_args:
+  batch_size: 32
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 200
+start_epoch: 0
+
+# Optimizer configuration
+optimizer: "adamw"
+base_lr: 0.0001
+weight_decay: 0.0004
+
+# Loss function 
+loss: "torch.nn.CrossEntropyLoss"
+loss_args: {}
+
+# Device setting
+device: [0]
+
+# Other settings
+work_dir: "./exps/smartfall_har/student/multi_sensor_weighted_fusion"
+model_saved_name: "multi_sensor_model_weighted_fusion"
+print_log: true
+phase: "train"
+num_worker: 0
+seed: 2
+log_interval: 10
+include_val: true

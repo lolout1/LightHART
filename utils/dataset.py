@@ -1,341 +1,208 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 import numpy as np
-from utils.loader  import DatasetBuilder
+from utils.loader import DatasetBuilder
 
 
 class ModalityFile: 
-    '''
-    Represents an individual file in a modality, containing the subject ID, action ID, sequence number, and file path
-
-    Attributes: 
-    subject_id (int) : ID of the subject performing the action
-    action_id (int) : ID of the action being performed
-    sequence_number
-    '''
-
     def __init__(self, subject_id: int, action_id: int, sequence_number: int, file_path: str) -> None: 
         self.subject_id = subject_id
         self.action_id = action_id
         self.sequence_number = sequence_number
         self.file_path = file_path
 
-    def __repr__(self) -> str : 
+    def __repr__(self) -> str:
         return (
-            f"ModalityFile(subject_id  = {self.subject_id}, action_id={self.action_id}, sequence_number={self.sequence_number}, file_path = '{self.file_path}')"
+            f"ModalityFile(subject_id={self.subject_id}, action_id={self.action_id}, "
+            f"sequence_number={self.sequence_number}, file_path='{self.file_path}')"
         )
 
 
-class Modality:
-    '''
-    Represents a modality (e.g., RGB, Depth) containing a list of ModalityFile objects.
-
-    Attributes:
-        name (str): Name of the modality.
-        files (List[ModalityFile]): List of files belonging to this modality.
-    '''
-
-    def __init__(self, name : str) -> None:
-        self.name = name 
-        self.files : List[ModalityFile] = []
-    
-    def add_file(self, subject_id: int , action_id: int, sequence_number: int, file_path: str) -> None: 
-        '''
-        Adds a file to the modality
-
-        Args: 
-            ubject_id (int): ID of the subject.
-            action_id (int): ID of the action.
-            sequence_number (int): Sequence number of the trial.
-            file_path (str): Path to the file.
-        '''
-        modality_file = ModalityFile(subject_id, action_id, sequence_number, file_path)
-        self.files.append(modality_file)
-    
-    def __repr__(self) -> str:
-        return f"Modality(name='{self.name}', files={self.files})"
-    
-
-class MatchedTrial: 
-    """
-    Represents a matched trial containing files from different modalities for the same trial.
-
-    Attributes:
-        subject_id (int): ID of the subject.
-        action_id (int): ID of the action.
-        sequence_number (int): Sequence number of the trial.
-        files (Dict[str, str]): Dictionary mapping modality names to file paths.
-    """
+class MatchedTrial:
     def __init__(self, subject_id: int, action_id: int, sequence_number: int) -> None:
-        self.subject_id  = subject_id
+        self.subject_id = subject_id
         self.action_id = action_id
         self.sequence_number = sequence_number
-        self.files: Dict[str, List[str, ]] = {}
+        self.files: Dict[str, Dict[str, str]] = {}  # modality -> {sensor -> file_path}
     
-    def add_file(self, modality_name: str, file_path: str) -> None:
-        '''
-        Adds a file to the matched trial for a specific modality
+    def add_file(self, modality_sensor_key: str, file_path: str) -> None:
+        """
+        Adds a file to the matched trial
 
         Args:
-            modality_name (str) : Name of the modality
-            file_path(str) : Path to the file
-        '''
-        self.files[modality_name] = file_path
+            modality_sensor_key (str): Combined key of modality_sensor (e.g. 'accelerometer_phone')
+            file_path (str): Path to the data file
+        """
+        self.files[modality_sensor_key] = file_path
     
     def __repr__(self) -> str:
         return f"MatchedTrial(subject_id={self.subject_id}, action_id={self.action_id}, sequence_number={self.sequence_number}, files={self.files})"
 
 
-
-class UTD_MHAD : 
-    """
-    Represents the UTD-MHAD dataset, managing the loading of files and matching of trials across modalities.
-
-    Attributes:
-        root_dir (str): Root directory of the UTD-MHAD dataset.
-        modalities (Dict[str, Modality]): Dictionary of modality names to Modality objects.
-        matched_trials (List[MatchedTrial]): List of matched trials containing files from different modalities.
-    """
-
-    def __init__(self, root_dir: str) -> None:
-        self.root_dir = root_dir
-        self.modalities: Dict[str, Modality] = {}
-        self.matched_trials: List[MatchedTrial] = []
-    
-    def add_modality(self, modality_name: str) -> None:
-        """
-        Adds a modality to the dataset.
-
-        Args:
-            modality_name (str): Name of the modality.
-        """
-        self.modalities[modality_name] = Modality(modality_name)
-    
-    def load_files(self) -> None : 
-        """
-        Loads all files from the directory structure into their respective modalities.
-        """
-        for modality_name, modality in self.modalities.items():
-            modality_dir = os.path.join(self.root_dir, modality_name)
-            for root, _, files in os.walk(modality_dir):
-                for file in files:
-                    if file.endswith(('.avi', '.mp4', '.txt' , '.mat')):
-                        # parts = root.split(os.sep)
-                        subject_id = int(file.split('_')[1][1:])
-                        action_id = int(file.split('_')[0][1:])
-                        sequence_number = int(file.split('_')[2][1:])
-                        file_path = os.path.join(root, file)
-                        modality.add_file(subject_id, action_id, sequence_number, file_path)
-    
-    def match_trials(self) -> None: 
-        '''
-        Matches files from different modalities based on subject ID, action ID, and sequence number.
-        '''
-
-        for modality_name, modality in self.modalities.items():
-            for modality_file in modality.files:
-                matched_trial = self._find_or_create_matched_trial(modality_file.subject_id,
-                                                                   modality_file.action_id,
-                                                                   modality_file.sequence_number)
-                
-                matched_trial.add_file(modality_name, modality_file.file_path)
-
-    def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
-        '''
-        Finds or creates a MatchedTrial for a given subject ID, action ID, and sequence number.
-
-        Args:
-            subject_id (int): ID of the subject.
-            action_id (int): ID of the action.
-            sequence_number (int): Sequence number of the trial.
-
-        Returns:
-            MatchedTrial: The matched trial object.
-        '''
-        for trial in self.matched_trials:
-            if (trial.subject_id == subject_id and trial.action_id==action_id \
-                and trial.sequence_number == sequence_number):
-                return trial
-        new_trial = MatchedTrial(subject_id, action_id, sequence_number)
-        self.matched_trials.append(new_trial)
-        return new_trial
-
-
-
 class SmartFallMM:
-    """
-    Represents the SmartFallMM dataset, managing the loading of files and matching of trials across modalities and specific sensors.
-
-    Attributes:
-        root_dir (str): Root directory of the SmartFallMM dataset.
-        age_groups (Dict[str, Dict[str, Modality]]): Dictionary containing 'old' and 'young' groups, each having a dictionary of modality names to Modality objects.
-        matched_trials (List[MatchedTrial]): List of matched trials containing files from different modalities.
-        selected_sensors (Dict[str, str]): Dictionary storing selected sensors for modalities like 'accelerometer' and 'gyroscope'. Skeleton data is loaded as is.
-    """
-
     def __init__(self, root_dir: str) -> None:
         self.root_dir = root_dir
-        self.age_groups: Dict[str, Dict[str, Modality]] = {
-            "old": {},
-            "young": {}
-        }
-        self.matched_trials: List[MatchedTrial] = []
-        self.selected_sensors: Dict[str, str] = {}  # Stores the selected sensor for each modality (e.g., accelerometer)
-
-    def add_modality(self, age_group: str, modality_name: str) -> None:
-        """
-        Adds a modality to the dataset for a specific age group.
-
-        Args:
-            age_group (str): Either 'old' or 'young'.
-            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
-        """
-        if age_group not in self.age_groups:
-            raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
+        print(f"Initializing SmartFallMM with root_dir: {self.root_dir}")
+        if not os.path.exists(self.root_dir):
+            raise ValueError(f"Root directory does not exist: {self.root_dir}")
         
-        self.age_groups[age_group][modality_name] = Modality(modality_name)
+        self.matched_trials: List[MatchedTrial] = []
+        self.modality_sensors: Dict[str, List[str]] = {}
 
-    def select_sensor(self, modality_name: str, sensor_name: str = None) -> None:
+    def add_modality(self, age_group: str, modality_name: str, sensors: Optional[List[str]] = None) -> None:
         """
-        Selects a specific sensor for a given modality if applicable. Only files from this sensor will be loaded for modalities like 'accelerometer' or 'gyroscope'.
-        For modalities like 'skeleton', no sensor is needed.
-
+        Add a modality with its associated sensors to the dataset.
+        
         Args:
-            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
-            sensor_name (str): Name of the sensor (e.g., phone, watch, meta_wrist, meta_hip). None for 'skeleton'.
+            age_group (str): The age group ('young' or 'old')
+            modality_name (str): Name of the modality (e.g., 'accelerometer')
+            sensors (Optional[List[str]]): List of sensors for this modality. None for skeleton.
         """
-        if modality_name == "skeleton":
-            # Skeleton modality doesn't have sensor-specific data
-            self.selected_sensors[modality_name] = None
-        else:
-            if sensor_name is None:
-                raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
-            self.selected_sensors[modality_name] = sensor_name
+        modality_key = f"{age_group}_{modality_name}"
+        self.modality_sensors[modality_key] = sensors if sensors else [None]
+        print(f"Added modality {modality_key} with sensors {sensors}")
 
     def load_files(self) -> None:
-        """
-        Loads files from the dataset based on selected sensors and age groups.
-        Skeleton data is loaded without sensor selection.
-        """
-        for age_group, modalities in self.age_groups.items():
-            for modality_name, modality in modalities.items():
-                # Handle skeleton data (no sensor required)
-                if modality_name == "skeleton":
-                    modality_dir = os.path.join(self.root_dir, age_group, modality_name)
+        """Loads files from the directory structure into matched trials"""
+        for modality_key, sensors in self.modality_sensors.items():
+            age_group, modality_name = modality_key.split('_', 1)
+            
+            for sensor in sensors:
+                # Construct path
+                if sensor:
+                    data_path = os.path.join(
+                        self.root_dir,
+                        age_group,
+                        modality_name,
+                        sensor
+                    )
                 else:
-                    # Only load data from the selected sensor if it exists
-                    if modality_name in self.selected_sensors:
-                        sensor_name = self.selected_sensors[modality_name]
-                        modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
-                    else:
-                        continue
+                    data_path = os.path.join(
+                        self.root_dir,
+                        age_group,
+                        modality_name
+                    )
 
-                # Load the files
-                for root, _, files in os.walk(modality_dir):
-                    for file in files:
-                        if file.endswith(('.csv')):
-                            # Extract information based on the filename
-                            subject_id = int(file[1:3])  # Assuming S001 format for subject
-                            action_id = int(file[4:6])  # Assuming A001 format for action
-                            sequence_number = int(file[7:9])  # Assuming T001 format for trial
-                            file_path = os.path.join(root, file)
-                            modality.add_file(subject_id, action_id, sequence_number, file_path)
+                print(f"Looking for files in: {data_path}")
+                if not os.path.exists(data_path):
+                    print(f"Warning: Path does not exist: {data_path}")
+                    # Print parent directory contents
+                    parent_dir = os.path.dirname(data_path)
+                    if os.path.exists(parent_dir):
+                        print(f"Contents of {parent_dir}:")
+                        print(os.listdir(parent_dir))
+                    continue
+
+                files_found = 0
+                for file in os.listdir(data_path):
+                    if file.endswith('.csv'):
+                        files_found += 1
+                        try:
+                            subject_id = int(file[1:3])
+                            action_id = int(file[4:6])
+                            sequence_number = int(file[7:9])
+                            file_path = os.path.join(data_path, file)
+                            
+                            # Find or create matching trial
+                            trial = self._find_or_create_matched_trial(subject_id, action_id, sequence_number)
+                            modality_sensor_key = f"{modality_name}_{sensor}" if sensor else modality_name
+                            trial.add_file(modality_sensor_key, file_path)
+
+                        except (ValueError, IndexError) as e:
+                            print(f"Error processing file {file}: {str(e)}")
+                print(f"Found {files_found} CSV files in {data_path}")
 
     def match_trials(self) -> None:
-        """
-        Matches files from different modalities based on subject ID, action ID, and sequence number.
-        Only trials that have matching files in all modalities will be kept in matched_trials.
-        """
-        trial_dict = {}
-
-        # Step 1: Group files by (subject_id, action_id, sequence_number)
-        for age_group, modalities in self.age_groups.items():
-            for modality_name, modality in modalities.items():
-                for modality_file in modality.files:
-                    key = (modality_file.subject_id, modality_file.action_id, modality_file.sequence_number)
-
-                    if key not in trial_dict:
-                        trial_dict[key] = {}
-
-                    # Add the file under its modality name
-                    trial_dict[key][modality_name] = modality_file.file_path
-
-        # Step 2: Filter out incomplete trials
-        required_modalities = list(self.age_groups['young'].keys())  # Assuming all age groups have the same modalities
-
-        for key, files_dict in trial_dict.items():
-            # Check if all required modalities are present for this trial
-            if all(modality in files_dict for modality in required_modalities):
-                subject_id, action_id, sequence_number = key
-                matched_trial = MatchedTrial(subject_id, action_id, sequence_number)
-
-                for modality_name, file_path in files_dict.items():
-                    matched_trial.add_file(modality_name, file_path)
-
-                self.matched_trials.append(matched_trial)
-
+        """Filter trials to keep only those that have all required modalities and sensors"""
+        print(f"Before matching: {len(self.matched_trials)} trials")
+        complete_trials = []
+        
+        # Create set of required modality-sensor combinations
+        required_keys = set()
+        for modality_key, sensors in self.modality_sensors.items():
+            _, modality_name = modality_key.split('_', 1)
+            if sensors[0] is None:
+                required_keys.add(modality_name)
+            else:
+                for sensor in sensors:
+                    required_keys.add(f"{modality_name}_{sensor}")
+        
+        print(f"Required keys: {required_keys}")
+        
+        # Filter trials
+        for trial in self.matched_trials:
+            if all(key in trial.files for key in required_keys):
+                complete_trials.append(trial)
+            else:
+                missing = required_keys - set(trial.files.keys())
+                print(f"Trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number} missing: {missing}")
+        
+        print(f"After matching: {len(complete_trials)} complete trials")
+        self.matched_trials = complete_trials
 
     def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
-        """
-        Finds or creates a MatchedTrial for a given subject ID, action ID, and sequence number.
-
-        Args:
-            subject_id (int): ID of the subject.
-            action_id (int): ID of the action.
-            sequence_number (int): Sequence number of the trial.
-
-        Returns:
-            MatchedTrial: The matched trial object.
-        """
+        """Find or create a trial matching the given identifiers"""
         for trial in self.matched_trials:
-            if (trial.subject_id == subject_id and trial.action_id == action_id
-                    and trial.sequence_number == sequence_number):
+            if (trial.subject_id == subject_id and 
+                trial.action_id == action_id and 
+                trial.sequence_number == sequence_number):
                 return trial
         new_trial = MatchedTrial(subject_id, action_id, sequence_number)
         self.matched_trials.append(new_trial)
         return new_trial
 
-    def pipe_line(self, age_group : List[str], modalities: List[str], sensors: List[str]):
-        '''
-        A pipe to load the data 
-        '''
-        for age in age_group : 
-                for modality in modalities:
-                    self.add_modality(age, modality)
-                    if modality == 'skeleton':
-                        self.select_sensor('skeleton')
-                    else: 
-                        for sensor in sensors:
-                            self.select_sensor(modality, sensor)
+    def pipe_line(self, age_groups: List[str], modalities: List[str], sensors: Dict[str, List[str]]) -> None:
+        """Pipeline to load and match data"""
+        print(f"Pipeline input: age_groups={age_groups}, modalities={modalities}, sensors={sensors}")
+        for age_group in age_groups:
+            for modality in modalities:
+                if modality == 'skeleton':
+                    self.add_modality(age_group, modality)
+                else:
+                    sensor_list = sensors.get(modality, [])
+                    self.add_modality(age_group, modality, sensor_list)
 
-        # Load files for the selected sensors and skeleton data
+        print("Configured modalities:", self.modality_sensors)
         self.load_files()
-
-        # Match trials across the modalities
         self.match_trials()
 
 
 
-def prepare_smartfallmm(arg )  -> DatasetBuilder: 
-    '''
-    Function for dataset preparation
-    '''
-    sm_dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))
-    sm_dataset.pipe_line(age_group=arg.dataset_args['age_group'], \
-                        modalities=arg.dataset_args['modalities'], \
-                        sensors=arg.dataset_args['sensors'])
-    builder = DatasetBuilder(sm_dataset, arg.dataset_args['mode'], arg.dataset_args['max_length'],
-                                arg.dataset_args['task'])
+
+def prepare_smartfallmm(arg) -> DatasetBuilder:
+    """Function for dataset preparation"""
+    print("\nDataset preparation starting...")
+    print(f"Current working directory: {os.getcwd()}")
+    root_dir = os.path.join(os.getcwd(), arg.dataset_args['root_dir'])
+    print(f"Full data path: {root_dir}")
+    print(f"Path exists: {os.path.exists(root_dir)}")
+    
+    # Try to list contents of data directory
+    try:
+        print(f"\nContents of {os.path.dirname(root_dir)}:")
+        print(os.listdir(os.path.dirname(root_dir)))
+    except Exception as e:
+        print(f"Could not list directory contents: {e}")
+    
+    sm_dataset = SmartFallMM(root_dir=root_dir)
+    sm_dataset.pipe_line(
+        age_groups=arg.dataset_args['age_groups'],
+        modalities=arg.dataset_args['modalities'],
+        sensors=arg.dataset_args['sensors']
+    )
+    builder = DatasetBuilder(
+        sm_dataset,
+        arg.dataset_args['mode'],
+        arg.dataset_args['max_length'],
+        arg.dataset_args['task']
+    )
     return builder
 
-def filter_subjects(builder, subjects) -> Dict[str, np.ndarray]:
-    '''
-    Function to Filter out expects subjects
-    '''
+
+def filter_subjects(builder: DatasetBuilder, subjects: List[int]) -> Dict[str, np.ndarray]:
     builder.make_dataset(subjects)
     norm_data = builder.normalization()
     return norm_data
-
 if __name__ == "__main__":
     dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))
 

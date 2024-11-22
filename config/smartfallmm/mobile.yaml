@@ -1,0 +1,80 @@
+model: Models.mobile.EnhancedDualPathFallDetector
+
+# Model arguments
+model_args:
+  acc_coords: 4
+  sequence_length: 128
+  hidden_dim: 8       # Increased from 64
+  num_heads: 2        # Increased from 8
+  depth: 6             # Increased from 4
+  mlp_ratio: 4
+  num_classes: 2
+  dropout: 0.4         # Increased from 0.3
+  use_skeleton: false
+
+# Dataset configuration
+dataset: "smartfallmm"
+feeder: "Feeder.Make_Dataset.UTD_mm"
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+dataset_args:
+  root_dir: "data/smartfallmm"
+  age_groups: 
+    - "young"
+    - "old"
+  modalities:
+    - "accelerometer"
+  sensors:
+    accelerometer:
+      - "phone"
+      - "watch"
+  mode: "avg_pool"
+  max_length: 128
+  task: "fd"
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 300
+start_epoch: 0
+num_worker: 4
+
+# Optimizer configuration
+optimizer: "adamw"
+base_lr: 0.00025
+weight_decay: 0.001
+
+# Loss settings
+loss: "torch.nn.CrossEntropyLoss"
+loss_args:
+  smv_weight: 0.2
+  consistency_weight: 0.1
+
+# Device setting
+device: [0]
+
+# Other settings
+work_dir: "./exps/smartfall_har/mobile_falldet"
+model_saved_name: "mobile_fall_detector"
+print_log: true
+phase: "train"
+log_interval: 10
+include_val: true
+seed: 42

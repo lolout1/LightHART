@@ -1,0 +1,83 @@
+# Model configuration 
+model: Models.mmt5.EnhancedFallDetectionModel
+model_args:
+  num_joints: 32
+  in_chans: 3           # For skeleton data (x, y, z)
+  acc_coords: 4         # Accelerometer data (x, y, z, SMV)
+  embed_dim: 256        # Embedding dimension
+  num_classes: 2        # Binary classification
+  dropout: 0.3
+
+# Dataset configuration
+dataset: "smartfallmm"
+feeder: Feeder.Make_Dataset.UTD_mm
+
+# Feeder arguments
+train_feeder_args:
+  batch_size: 32
+val_feeder_args:
+  batch_size: 32
+test_feeder_args:
+  batch_size: 32
+
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+dataset_args:
+  root_dir: "data/smartfallmm"
+  age_groups:
+    - "young"
+    - "old"
+  modalities:
+    - "accelerometer"
+    - "skeleton"
+  sensors:
+    accelerometer:
+      - "phone"
+      - "watch"
+  mode: "avg_pool"
+  max_length: 128
+  task: "fd"
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 300
+start_epoch: 0
+num_worker: 4
+
+# Optimizer configuration
+optimizer: "adamw"
+base_lr: 0.0001
+weight_decay: 0.001
+
+# Loss function
+loss: "torch.nn.CrossEntropyLoss"
+loss_args: {}
+
+# Device setting
+device: [0]
+
+# Other settings
+work_dir: "./exps/smartfall_har/teacher"
+model_saved_name: "fall_detection_teacher"
+print_log: true
+phase: "train"
+log_interval: 10
+include_val: true
+seed: 42

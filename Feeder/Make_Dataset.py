@@ -1,203 +1,108 @@
-import pandas as pd
-import numpy as np
-import math
 import torch
-import random
-import torch.nn.functional as F
-import scipy.stats as s
-from einops import rearrange
-#from tsaug import TimeWarp, Reverse, Drift, AddNoise
-
-
-#################### MAIN #####################
-
-#CREATE PYTORCH DATASET
-'''
-Input Args:
-data = ncrc or ntu
-num_frames = mocap and nturgb+d frame count!
-acc_frames = frames from acc sensor per action
-'''
-
-
-class Utd_Dataset(torch.utils.data.Dataset):
-    def __init__(self, npz_file):
-        # Load data and labels from npz file
-        dataset = np.load(npz_file)
-        self.dataset = dataset['data']
-        self.labels = dataset['labels']
-        self.num_samples = self.dataset.shape[0]
-
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, index):
-        # Get the batch containing the requested index
-        data = self.dataset[index, :, : , :]
-        data = torch.tensor(data)
-        label = self.labels[index]
-        label = label - 1
-        label = torch.tensor(label)
-        label = label.long()
-        return data, label
-
-class Berkley_mhad(torch.utils.data.Dataset):
-    def __init__(self, npz_file):
-        # Load data and labels from npz file
-        dataset = np.load(npz_file)
-        self.dataset = dataset['data']
-        self.labels = dataset['labels']
-        self.num_samples = self.dataset.shape[0]
-
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, index):
-        # Get the batch containing the requested index
-        data = self.dataset[index, :, :]
-        data = torch.tensor(data)
-        label = self.labels[index]
-        label = label - 1
-        label = torch.tensor(label)
-        label = label.long()
-        return data, label
-
-class Bmhad_mm(torch.utils.data.Dataset):
-    def __init__(self, dataset, batch_size, transform = None):
-        # Load data and labels from npz file
-        #dataset = np.load(npz_file)
-        self.acc_data = dataset['acc_data']
-        self.skl_data = dataset['skl_data']
-        self.labels = dataset['labels']
-        self.num_samples = self.acc_data.shape[0]
-        self.acc_seq = self.acc_data.shape[1]
-        # self.skl_joints = self.skl_data.shape[2]
-        # self.skl_seq = self.skl_data.shape[1]
-        self.batch_size = batch_size
-
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, index):
-        # Get the batch containing the requested index
-        data = dict()
-        skl_data = torch.tensor(self.skl_data[index, :, :, :])
-        #skl_data = skl_data.reshape((l, -1, 3))
-        acc_data = torch.tensor(self.acc_data[index, : , :])
-        data['skl_data'] = skl_data
-        data['acc_data'] =  acc_data
-        label = self.labels[index]
-        label = torch.tensor(label)
-        label = label.long()
-        return data, label, index
-    
+import numpy as np
+from typing import Dict, Tuple
 
 class UTD_mm(torch.utils.data.Dataset):
-    def __init__(self, dataset, batch_size):
+    def __init__(self, dataset: Dict[str, np.ndarray], batch_size: int):
+        """
+        Initializes the UTD_mm dataset.
 
-        self.inertial_modality = next((modality for modality in dataset if modality in ['accelerometer', 'gyroscope']), None)
-        self.acc_data = dataset[self.inertial_modality]
-        self.labels = dataset['labels']
-        self.skl_data = dataset['skeleton']
-        self.num_samples = self.acc_data.shape[0]
-        self.acc_seq = self.acc_data.shape[1]
-        self.skl_seq, self.skl_length, self.skl_features = self.skl_data.shape
-        self.skl_data = self.skl_data.reshape(self.skl_seq, self.skl_length, -1, 3)
-        self.channels = self.acc_data.shape[2]
+        Args:
+            dataset (Dict[str, np.ndarray]): A dictionary containing modality data and labels.
+            batch_size (int): The batch size for data loading.
+        """
+        print("\nInitializing UTD_mm dataset")
+        
+        # Convert labels to torch.long
+        self.labels = torch.tensor(dataset['labels'], dtype=torch.long)
+        self.num_samples = len(self.labels)
+        print(f"Number of samples: {self.num_samples}")
+        
+        # Process each modality and sensor, converting to torch.float32
+        self.modalities = {}
+        for key, data in dataset.items():
+            if key != 'labels':
+                # Convert numpy array to torch tensor with dtype float32
+                self.modalities[key] = torch.from_numpy(data).float()
+                print(f"{key} shape: {self.modalities[key].shape}")
+        
         self.batch_size = batch_size
-        self.transform = None
-        self.crop_size = 64
+        print("Dataset initialization complete")
 
-    
-    def random_crop(self,data : torch.Tensor) -> torch.Tensor:
-        '''
-        Function to add random cropping to the data
-        Arg: 
-            data : 
-        Output: 
-            crop_data: will return croped data
-        '''
-        length = data.shape[0]
-        start_idx = np.random.randint(0, length-self.crop_size-1)
-        return data[start_idx : start_idx+self.crop_size, :]
+    def cal_smv(self, sample: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the Smoothed Magnitude Velocity (SMV) for a given sensor sample.
 
-    def cal_smv(self, sample : torch.Tensor) -> torch.Tensor:
-        '''
-        Function to calculate SMV
-        '''
-        mean = torch.mean(sample, dim = -2, keepdim=True)
-        zero_mean = sample - mean
-        sum_squared =  torch.sum(torch.square(zero_mean), dim=-1, keepdim=True) 
-        smv= torch.sqrt(sum_squared)
+        Args:
+            sample (torch.Tensor): Tensor of shape [T, C] where T is the time steps and C is the coordinates.
+
+        Returns:
+            torch.Tensor: SMV tensor of shape [T, 1].
+        """
+        # Compute SMV across the last dimension (C)
+        smv = torch.sqrt(torch.sum(sample ** 2, dim=-1, keepdim=True))
         return smv
-    
-    def calculate_weight(self, data):
-        """
-        Calculate the magnitude (weight) of accelerometer data.
 
-        Parameters:
-        - data: A PyTorch tensor of shape (128, 3) where each row is [ax, ay, az].
-
-        Returns:
-        - A 1D PyTorch tensor of shape (128,) containing the magnitude for each row.
-        """
-        return torch.sqrt(torch.sum(data**2, dim=-1, keepdim=True))
-    
-    def calculate_pitch(self,data):
-        """
-        Calculate the pitch from accelerometer data.
-
-        Parameters:
-        - data: A PyTorch tensor of shape (128, 3) where each row is [ax, ay, az].
-
-        Returns:
-        - A 1D PyTorch tensor of shape (128,) containing the pitch angle for each row in radians.
-        """
-        ax = data[:, 0]
-        ay = data[:, 1]
-        az = data[:, 2]
-        return torch.atan2(ay, torch.sqrt(ax**2 + az**2))
-    
-
-    def calculate_roll(self,data):
-        """
-        Calculate the roll from accelerometer data.
-
-        Parameters:
-        - data: A PyTorch tensor of shape (128, 3) where each row is [ax, ay, az].
-
-        Returns:
-        - A 1D PyTorch tensor of shape (128,) containing the roll angle for each row in radians.
-        """
-        ax = data[:, 0]
-        ay = data[:, 1]
-        az = data[:, 2]
-        return torch.atan2(ax, torch.sqrt(ay**2 + az**2))
-
-
-
-
-    
-    def __len__(self):
+    def __len__(self) -> int:
         return self.num_samples
 
-    def __getitem__(self, index):
-        skl_data = torch.tensor(self.skl_data[index, :, :,:])
-        acc_data = torch.tensor(self.acc_data[index, : , :])
-        data = dict()
+    def __getitem__(self, index: int) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, int]:
+        """
+        Retrieves the data and label for a given index.
 
-        watch_smv = self.cal_smv(acc_data)
-        acc_data = torch.cat(( watch_smv,acc_data), dim = -1)
-        data[self.inertial_modality] = acc_data
-        data['skeleton'] = skl_data
+        Args:
+            index (int): Index of the sample to retrieve.
+
+        Returns:
+            Tuple[Dict[str, torch.Tensor], torch.Tensor, int]: A tuple containing:
+                - data (Dict[str, torch.Tensor]): Dictionary with modality data.
+                - label (torch.Tensor): The label tensor.
+                - index (int): The index of the sample.
+        """
+ 
+        data = {}
+        
+        # Load each modality's data
+        for key, modality_data in self.modalities.items():
+            if key == 'labels':
+                continue
+                
+            sensor_data = modality_data[index]  # Shape: [T, C] or [T, J, C]
+            
+            if key == 'skeleton':
+                # Keep skeleton data in its original format [T, J, C]
+                data[key] = sensor_data
+            else:
+                # For IMU data, add SMV
+                smv = self.cal_smv(sensor_data)  # Shape: [T, 1]
+                sensor_data = torch.cat((sensor_data, smv), dim=-1)  # Shape: [T, C+1]
+                data[key] = sensor_data
+        
         label = self.labels[index]
-        label = torch.tensor(label)
-        label = label.long()
         return data, label, index
 
-
-
-
+# Example usage for testing
 if __name__ == "__main__":
-    data = torch.randn((8, 128, 3))
-    smv = cal_smv(data)
+    # Create sample data
+    data = {
+        'accelerometer_phone': np.random.randn(128, 32, 3).astype(np.float32),   # [num_samples, T, C]
+        'accelerometer_watch': np.random.randn(128, 32, 3).astype(np.float32),   # [num_samples, T, C]
+        'skeleton': np.random.randn(128, 32, 25, 3).astype(np.float32),          # [num_samples, T, J, C]
+        'labels': np.random.randint(0, 2, 128)                                  # [num_samples]
+    }
+    
+    # Initialize dataset
+    dataset = UTD_mm(data, batch_size=16)
+    
+    # Retrieve a sample
+    sample_data, sample_label, sample_idx = dataset[0]
+    print("\nSample data keys:", sample_data.keys())
+    for key in sample_data:
+        print(f"{key} data shape: {sample_data[key].shape}, dtype: {sample_data[key].dtype}")
+    print(f"Sample label: {sample_label}, dtype: {sample_label.dtype}")
+    print(f"Sample index: {sample_idx}")
+    
+    # If you want to test cal_smv separately, create an instance and call it
+    test_sample = torch.randn((8, 3))  # Example tensor [T, C]
+    smv = dataset.cal_smv(test_sample)
+    print(f"\nCalculated SMV shape: {smv.shape}, dtype: {smv.dtype}")
