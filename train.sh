@@ -1,4 +1,4 @@
-teacher_weights="kdTransformerWatch33.pth"
+teacher_weights="kdTransformerMM.pth"
 student_dir="exps/smartfall_har/student/watchgyro_divid3bw20/accel"
 work_dir="exps/smartfall_har/kd/student/"
 student_weights="ttfStudent"
@@ -22,9 +22,9 @@ result_file="result.txt"
 #python3 distiller.py --config ./config/czu/distill.yaml --work-dir $work_dir --model-saved-name $weights  --weights $work_dir/$weights --device 3 --base-lr 2.5e-3 --include-val True
 #smartfallmm
 #skelton_only experiment
-#python3 main.py --config ./config/smartfallmm/SKteacher.yaml --work-dir $work_dir --model-saved-name $teacher_weights  --device 0  --base-lr 2.5e-3 --phase 'train' --result-file $work_dir/$result_file  --include-val True
+python3 main.py --config ./config/smartfallmm/mmt4.yaml --work-dir $work_dir --model-saved-name $teacher_weights  --device 0  --base-lr 2.5e-3 --phase 'train' --result-file $work_dir/$result_file  --include-val True
 #multimodal experiment
-python3 main4.py --config ./config/smartfallmm/t3.yaml --weights "exps/smartfall_har/student/watchgyro_divid3bw20/accel/ttfStudent.pth" --work-dir $teacher_dir --model-saved-name $teacher_weights  --device 0 --include-val True
+#python3 main.py --config ./config/smartfallmm/t3.yaml --weights "exps/smartfall_har/student/watchgyro_divid3bw20/accel/ttfStudent.pth" --work-dir $teacher_dir --model-saved-name $teacher_weights  --device 0 --include-val True
 #accelerometer only experiment
 #python3 main.py --config ./config/smartfallmm/tr.yaml --work-dir $student_dir --model-saved-name $student_weights --device 0 --include-val True #--base-lr 1e-3
 #python3 main.py --config ./config/smartfallmm/transformer.yaml --phase 'train' --work-dir $teacher_dir --model-saved-name $teacher_weights --device 0 --base-lr 1e-3 --include-val True

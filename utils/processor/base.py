@@ -8,14 +8,60 @@ import torch.nn.functional as F
 
 def csvloader(file_path: str, **kwargs):
     '''
-    Loads csv data
+    Loads CSV data, handling different formats between 'young' and 'old' datasets.
     '''
-    file_data = pd.read_csv(file_path, index_col=False, header = 0).dropna().bfill()
-    num_col = file_data.shape[1]
-    num_extra_col = num_col % 3
-    cols_to_select = num_col - num_extra_col
-    activity_data = file_data.iloc[2:, -cols_to_select:].to_numpy(dtype=np.float32)
-    return activity_data
+    try:
+        # Read the CSV file without specifying header
+        file_data = pd.read_csv(file_path, index_col=False, header=None, skip_blank_lines=True).dropna().bfill()
+        num_columns = file_data.shape[1]
+
+        # Assign default column names
+        file_data.columns = [f'Column_{i}' for i in range(num_columns)]
+
+        # Check if the file has a header by examining the first row
+        first_row = file_data.iloc[0]
+        if any('time' in str(item).lower() or 'timestamp' in str(item).lower() for item in first_row):
+            # The file has a header
+            file_data = pd.read_csv(file_path, index_col=False, header=0, skip_blank_lines=True).dropna().bfill()
+        else:
+            # The file does not have a header
+            # We have already assigned default column names
+
+            # If the first column is an index (monotonic increasing integers), drop it
+            first_column = file_data.iloc[:, 0]
+            if first_column.is_monotonic_increasing and pd.api.types.is_integer_dtype(first_column):
+                file_data = file_data.drop(file_data.columns[0], axis=1)
+
+        # Reassign column names after dropping index column
+        num_columns = file_data.shape[1]
+        file_data.columns = [f'Column_{i}' for i in range(num_columns)]
+
+        # Identify timestamp columns
+        timestamp_cols = [col for col in file_data.columns if 'time' in col.lower() or 'timestamp' in col.lower()]
+
+        # If no timestamp columns are found, assume the first column is the timestamp
+        if not timestamp_cols:
+            timestamp_cols = [file_data.columns[0]]
+
+        # Drop timestamp columns
+        data_columns = [col for col in file_data.columns if col not in timestamp_cols]
+        print(f"Data types before conversion:\n{file_data[data_columns].dtypes}")
+        # Convert numerical columns to float32
+        numerical_data = file_data[data_columns].astype(np.float32)
+
+        activity_data = numerical_data.to_numpy()
+        print(f"File: {file_path}")
+        print(f"Columns: {file_data.columns}")
+        print(f"Data sample:\n{file_data.head()}")
+        if activity_data.size == 0:
+            print(f"Warning: No data extracted from {file_path}.")
+    
+        return activity_data
+    
+    except Exception as e:
+        print(f"Error loading CSV file {file_path}: {e}")
+        raise
+    
 
 def matloader(file_path: str, **kwargs):
     '''
