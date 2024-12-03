@@ -1,0 +1,88 @@
+model: "Models.Awatif1.PCNNTransformer"
+
+# Model arguments
+model_args:
+  length: 128
+  channels: 3  # Using only raw accelerometer data (x,y,z)
+  num_layers: 4
+  embed_dim: 64
+  mlp_dim: 128
+  num_heads: 4
+  dropout_rate: 0.1
+  attention_dropout_rate: 0.1
+
+# Dataset configuration
+dataset: "smartfallmm"
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+dataset_args:
+  root_dir: "data/smartfallmm"
+  age_groups: 
+    - "young"
+    - "old"
+  modalities:
+    - "accelerometer"
+  sensors:
+    accelerometer:
+      - "phone"
+      - "watch"
+  mode: "avg_pool"
+  max_length: 128
+  task: "fd"                        # Task: Fall Detection
+  use_smv: false  # Option to use SMV, currently disabled
+
+# DataLoader configuration
+feeder: "Feeder.Make_Dataset.UTD_mm"
+train_feeder_args:
+  batch_size: 32
+
+val_feeder_args:
+  batch_size: 32
+
+test_feeder_args:
+  batch_size: 32
+
+
+# Training parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 300              # Increased number of epochs
+start_epoch: 0
+
+# Optimizer settings
+optimizer: "adamw"             # Changed optimizer to SGD
+base_lr: 0.0001
+weight_decay: 0.0004          # Adjusted weight decay
+
+# Loss function 
+loss: "torch.nn.BCEWithLogitsLoss"  # Changed to BCEWithLogitsLoss for binary classification
+loss_args: {}                       # Additional loss arguments if needed
+
+# Device setting
+device: [0]
+
+# System settings
+include_val: True
+seed: 2
+log_interval: 10
+work_dir: "exps/smartfall_har/student/watchgyro_divid3bw20"
+print_log: True
+phase: "train"
+num_worker: 0
+result_file: None
