@@ -4,7 +4,7 @@ model: "Models.aMaxOp.FallDetectionModel"
 model_args:
   seq_len: 128          # Sequence length of the input data
   num_channels: 3       # Number of input channels per modality (x, y, z)
-  num_filters: 64       # Number of filters in the CNN layers
+  num_filters: 128       # Number of filters in the CNN layers
 
 # Dataset configuration
 dataset: "smartfallmm"

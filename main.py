@@ -19,7 +19,8 @@ import torch
 import torch.optim as optim
 from tqdm import tqdm
 import torch.nn.functional as F
-from sklearn.metrics import confusion_matrix, f1_score
+from sklearn.metrics import confusion_matrix, f1_score, recall_score, roc_auc_score, accuracy_score
+
 
 # Local imports 
 from utils.dataset import prepare_smartfallmm, filter_subjects
@@ -84,7 +85,6 @@ def get_args():
     parser.add_argument('--log-interval', type = int , default = 10, metavar = 'N',
                         help = 'how many batches to wait before logging training status')
 
-
    
     parser.add_argument('--work-dir', type = str, default = 'simple', metavar = 'F', help = "Working Directory")
     parser.add_argument('--print-log',type=str2bool,default=True,help='print logging or not')
@@ -145,6 +145,8 @@ print("PYTHONPATH:", os.environ.get('PYTHONPATH'))
 class Trainer():
     
     def __init__(self, arg):
+        self.best_recall = 0
+        self.best_roc_auc = 0
         self.arg = arg
         self.train_loss_summary = []
         self.val_loss_summary = []
@@ -215,9 +217,11 @@ class Trainer():
     
     def load_loss(self):
         '''
-        Loading loss function for the models training
+        Loading loss function for the model's training. Using BCEWithLogitsLoss for binary 
+        fall detection as it combines sigmoid activation and binary cross entropy in a 
+        numerically stable way.
         '''
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.criterion = torch.nn.BCEWithLogitsLoss()
     
     def load_weights(self):
         '''
@@ -310,7 +314,7 @@ class Trainer():
                 print("No validation data was loaded. Continuing without validation.")
             else:
                 self.data_loader['val'] = torch.utils.data.DataLoader(
-                    dataset=Feeder(dataset=norm_val, batch_size=self.arg.batch_size),
+                    dataset=Feeder(dataset=norm_val, batch_size=self.arg.batch_size),  # Set batch_size=1 for real-time inference
                     batch_size=self.arg.batch_size,
                     shuffle=False,
                     num_workers=self.arg.num_worker
@@ -349,71 +353,79 @@ class Trainer():
         self.record_time()
         loader = self.data_loader['train']
         timer = dict(dataloader=0.001, model=0.001, stats=0.001)
-        acc_value = []
-        accuracy = 0
         cnt = 0
         train_loss = 0
+        all_targets = []
+        all_probs = []
 
         process = tqdm(loader, ncols=80)
 
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             sensor_data = {}
-            
             # Handle IMU data
             for sensor in self.inertial_sensors:
                 sensor_data[sensor] = inputs[sensor].to(
                     f'cuda:{self.output_device}' if use_cuda else 'cpu'
                 )
-            
-            # Handle skeleton data explicitly
+
+            # Handle skeleton data
             if 'skeleton' in self.arg.dataset_args['modalities']:
                 sensor_data['skeleton'] = inputs['skeleton'].to(
                     f'cuda:{self.output_device}' if use_cuda else 'cpu'
                 )
-            
-            targets = targets.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+
+            targets = targets.float().unsqueeze(1).to(
+                f'cuda:{self.output_device}' if use_cuda else 'cpu'
+            )
 
             timer['dataloader'] += self.split_time()
 
-            # Debug print for input shapes
-            if batch_idx == 0:
-                print("\nInput shapes:")
-                for k, v in sensor_data.items():
-                    print(f"{k}: {v.shape}")
-
             self.optimizer.zero_grad()
             logits = self.model(sensor_data)
-            
+
             if logits is None:
                 print("Model returned None. Skipping batch.")
                 continue
-                
+
             loss = self.criterion(logits, targets)
             loss.mean().backward()
             self.optimizer.step()
 
             timer['model'] += self.split_time()
+
             with torch.no_grad():
-                train_loss += loss.mean().item()
-                accuracy += (torch.argmax(F.log_softmax(logits, dim=1), 1) == targets).sum().item()
-                
-            cnt += len(targets) 
-        
+                train_loss += loss.mean().item() * targets.size(0)
+                probs = torch.sigmoid(logits)
+                all_probs.extend(probs.cpu().numpy())
+                all_targets.extend(targets.cpu().numpy())
+
+            cnt += targets.size(0)
+
+        # Compute metrics
         train_loss /= cnt
-        accuracy *= 100. / cnt
+        all_probs = np.array(all_probs)
+        all_targets = np.array(all_targets)
+        preds = (all_probs > 0.5).astype(int)
+
+        accuracy = accuracy_score(all_targets, preds) * 100
+        recall = recall_score(all_targets, preds) * 100
+        f1 = f1_score(all_targets, preds) * 100
+        roc_auc = roc_auc_score(all_targets, all_probs) * 100
 
         self.train_loss_summary.append(train_loss)
-        acc_value.append(accuracy) 
+
         proportion = {
             k: '{:02d}%'.format(int(round(v * 100 / sum(timer.values()))))
             for k, v in timer.items()
         }
+
         self.print_log(
-            '\tTraining Loss: {:4f}. Training Acc: {:2f}%'.format(train_loss, accuracy)
+            '\tTraining Loss: {:.4f}. Accuracy: {:.2f}%, Recall: {:.2f}%, F1 Score: {:.2f}%, ROC AUC: {:.2f}%'.format(
+                train_loss, accuracy, recall, f1, roc_auc
+            )
         )
         self.print_log('\tTime consumption: [Data]{dataloader}, [Network]{model}'.format(**proportion))
-        val_loss = self.eval(epoch, loader_name='val', result_file=self.arg.result_file)
-        self.val_loss_summary.append(val_loss)
+
 
     def eval(self, epoch, loader_name='test', result_file=None):
         use_cuda = torch.cuda.is_available()
@@ -423,52 +435,70 @@ class Trainer():
 
         loss = 0
         cnt = 0
-        accuracy = 0
-        label_list = []
-        pred_list = []
-        
+        all_targets = []
+        all_probs = []
+
         process = tqdm(self.data_loader[loader_name], ncols=80)
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
-                print("Input keys:", inputs.keys())  # Debug print
                 sensor_data = {}
-                # Handle each sensor's data with full modality names
+                # Process sensor data
                 for sensor in self.inertial_sensors:
                     sensor_data[sensor] = inputs[sensor].to(
                         f'cuda:{self.output_device}' if use_cuda else 'cpu'
                     )
-                targets = targets.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+
+                # Handle skeleton data
+                if 'skeleton' in self.arg.dataset_args['modalities']:
+                    sensor_data['skeleton'] = inputs['skeleton'].to(
+                        f'cuda:{self.output_device}' if use_cuda else 'cpu'
+                    )
+
+                targets = targets.float().unsqueeze(1).to(
+                    f'cuda:{self.output_device}' if use_cuda else 'cpu'
+                )
 
                 logits = self.model(sensor_data)
+
                 batch_loss = self.criterion(logits, targets)
                 loss += batch_loss.sum().item()
-                accuracy += (torch.argmax(F.log_softmax(logits, dim=1), 1) == targets).sum().item()
-                label_list.extend(targets.tolist())
-                pred_list.extend(torch.argmax(F.log_softmax(logits, dim=1), 1).tolist())
-                cnt += len(targets)
-            loss /= cnt
-            target = np.array(label_list)
-            y_pred = np.array(pred_list)
-            f1 = f1_score(target, y_pred, average='macro') * 100
-            accuracy *= 100./cnt
-        if result_file is not None: 
-            predict = pred_list
-            true = label_list
 
-            for i, x in enumerate(predict):
-                f_r.write(str(x) +  '==>' + str(true[i]) + '\n')
-        
-        self.print_log('{} Loss: {:4f}. {} Acc: {:2f}% f1: {:2f}'.format(loader_name.capitalize(), loss, loader_name.capitalize(), accuracy, f1))
+                probs = torch.sigmoid(logits)
+                all_probs.extend(probs.cpu().numpy())
+                all_targets.extend(targets.cpu().numpy())
+
+                cnt += targets.size(0)
+
+        # Compute metrics
+        loss /= cnt
+        all_probs = np.array(all_probs)
+        all_targets = np.array(all_targets)
+        preds = (all_probs > 0.5).astype(int)
+
+        accuracy = accuracy_score(all_targets, preds) * 100
+        recall = recall_score(all_targets, preds) * 100
+        f1 = f1_score(all_targets, preds) * 100
+        roc_auc = roc_auc_score(all_targets, all_probs) * 100
+
+        self.print_log('{} Loss: {:.4f}. Accuracy: {:.2f}%, Recall: {:.2f}%, F1 Score: {:.2f}%, ROC AUC: {:.2f}%'.format(
+            loader_name.capitalize(), loss, accuracy, recall, f1, roc_auc
+        ))
+
+        # Save best model during training
         if self.arg.phase == 'train':
-            if accuracy > self.best_accuracy :
-                    self.best_loss = loss
-                    self.best_accuracy = accuracy
-                    self.best_f1 = f1
-                    torch.save(self.model, f'{self.arg.work_dir}/{self.arg.model_saved_name}.pth')
-                    self.print_log('Weights Saved')
-        else: 
-            return pred_list, label_list, wrong_idx
-        return loss        
+            if accuracy > self.best_accuracy:
+                self.best_loss = loss
+                self.best_accuracy = accuracy
+                self.best_f1 = f1
+                self.best_recall = recall
+                self.best_roc_auc = roc_auc
+                torch.save(self.model, f'{self.arg.work_dir}/{self.arg.model_saved_name}.pth')
+                self.print_log('Weights Saved')
+        else:
+            return preds, all_targets, None
+
+        return loss
+
         
 
     def start(self):
@@ -476,11 +506,15 @@ class Trainer():
         if not self.load_data():
             return
         
+        # Initialize the results DataFrame
+        results = pd.DataFrame()
         self.train_loss_summary = []
         self.val_loss_summary = []
         self.best_accuracy = float('-inf')
         self.best_f1 = float('-inf')
-        
+        self.best_recall = float('-inf')
+        self.best_roc_auc = float('-inf')
+
         self.print_log('Parameters: \n{}\n'.format(str(vars(self.arg))))
         
         
@@ -488,9 +522,13 @@ class Trainer():
         
         for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
             self.train(epoch)
+            # Evaluate on validation set
+            self.eval(epoch, loader_name='val', result_file=self.arg.result_file)
         
         self.print_log(f'Best accuracy: {self.best_accuracy}')
+        self.print_log(f'Best recall: {self.best_recall}')
         self.print_log(f'Best F-Score: {self.best_f1}')
+        self.print_log(f'Best ROC AUC: {self.best_roc_auc}')
         self.print_log(f'Model name: {self.arg.work_dir}')
         self.print_log(f'Weight decay: {self.arg.weight_decay}')
         self.print_log(f'Base LR: {self.arg.base_lr}')
@@ -502,11 +540,12 @@ class Trainer():
             'train_subjects': str(self.train_subjects),
             'val_subjects': str(self.test_subject),
             'accuracy': round(self.best_accuracy, 2),
-            'f1_score': round(self.best_f1, 2)
+            'f1_score': round(self.best_f1, 2),
+            'recall': round(self.best_recall, 2),
+            'roc_auc': round(self.best_roc_auc, 2)
         })
-        results.loc[len(results)] = subject_result
+        results = results.append(subject_result, ignore_index=True)
         results.to_csv(f'{self.arg.work_dir}/scores.csv')
-                
 
 
 

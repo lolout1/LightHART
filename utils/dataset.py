@@ -42,12 +42,10 @@ class MatchedTrial:
 class SmartFallMM:
     def __init__(self, root_dir: str) -> None:
         self.root_dir = root_dir
-        print(f"Initializing SmartFallMM with root_dir: {self.root_dir}")
-        if not os.path.exists(self.root_dir):
-            raise ValueError(f"Root directory does not exist: {self.root_dir}")
-        
         self.matched_trials: List[MatchedTrial] = []
         self.modality_sensors: Dict[str, List[str]] = {}
+        # Added sampling rate parameter
+        self.sampling_rate = 31.25  # 32ms interval
 
     def add_modality(self, age_group: str, modality_name: str, sensors: Optional[List[str]] = None) -> None:
         """
@@ -113,11 +111,10 @@ class SmartFallMM:
                 print(f"Found {files_found} CSV files in {data_path}")
 
     def match_trials(self) -> None:
-        """Filter trials to keep only those that have all required modalities and sensors"""
+        """Enhanced trial matching with quality checks for fall detection"""
         print(f"Before matching: {len(self.matched_trials)} trials")
         complete_trials = []
         
-        # Create set of required modality-sensor combinations
         required_keys = set()
         for modality_key, sensors in self.modality_sensors.items():
             _, modality_name = modality_key.split('_', 1)
@@ -127,17 +124,27 @@ class SmartFallMM:
                 for sensor in sensors:
                     required_keys.add(f"{modality_name}_{sensor}")
         
-        print(f"Required keys: {required_keys}")
-        
-        # Filter trials
+        # Enhanced quality checking for fall detection
         for trial in self.matched_trials:
             if all(key in trial.files for key in required_keys):
-                complete_trials.append(trial)
-            else:
-                missing = required_keys - set(trial.files.keys())
-                print(f"Trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number} missing: {missing}")
-        
-        print(f"After matching: {len(complete_trials)} complete trials")
+                # Additional quality checks for fall detection
+                has_valid_data = True
+                for key, file_path in trial.files.items():
+                    try:
+                        # Quick validation of file contents
+                        with open(file_path, 'r') as f:
+                            first_line = f.readline()
+                            if not first_line:
+                                has_valid_data = False
+                                break
+                    except Exception:
+                        has_valid_data = False
+                        break
+                
+                if has_valid_data:
+                    complete_trials.append(trial)
+            
+        print(f"After matching and validation: {len(complete_trials)} complete trials")
         self.matched_trials = complete_trials
 
     def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
