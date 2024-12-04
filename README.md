@@ -1,8 +1,8 @@
-#########
-Fall detection fork: 
-  When using this fork specifically, you can use'copydat.sh' to copy dataset to this directory after setting it to the correct file paths and labels. 
+
+
+Fall detection fork: When using this fork specifically, you can use'copydat.sh' to copy dataset to this directory after setting it to the correct file paths and labels. 
   
-#########
+
 # LightHART: Lightweight Human Activity Recognition Transformer
 
 Implementation of "Lightweight Human Activity Recognition Transformer" accepted in ICPR 2024.
