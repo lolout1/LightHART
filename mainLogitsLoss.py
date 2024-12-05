@@ -1,24 +1,27 @@
+import os
+import sys
+import time
+import shutil
+import random
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import WeightedRandomSampler
+from sklearn.metrics import roc_auc_score, f1_score, recall_score, precision_score, accuracy_score
+from main import import_class
 
 import traceback
 from typing import List
-import random 
-import sys
-import os
-import time
-import shutil
 import argparse
 import yaml
 
 # Environmental imports
-import numpy as np 
 import pandas as pd
-import torch
-
-import torch.optim as optim
 from tqdm import tqdm
-import torch.nn.functional as F
-from sklearn.metrics import confusion_matrix, f1_score, recall_score, roc_auc_score, accuracy_score
-
+import argparse
+import yaml
 
 # Local imports 
 from utils.dataset import prepare_smartfallmm, filter_subjects
@@ -63,6 +66,7 @@ def get_args():
     # Loss args
     parser.add_argument('--loss', default='loss.BCE' , help = 'Name of loss function to use' )
     parser.add_argument('--loss-args', default ="{}", type = str,  help = 'A dictionary for loss')
+    parser.add_argument('--loss-type', type=str, default='bce', help='Type of loss function to use (bce or focal)')
     
     # Dataset args 
     parser.add_argument('--dataset-args', default=str, help = 'Arguments for dataset')
@@ -114,13 +118,13 @@ def init_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+    torch.backends.cudnn.deterministic = False
     # torch.backends.cudnn.enabled = True
     # training speed is too slow if set to True
-    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
     # on cuda 11 cudnn8, the default algorithm is very slow
     # unlike on cuda 10, the default works well
-    torch.backends.cudnn.benchmark = True
 
 def import_class(import_str):
     if import_str is None:
@@ -138,85 +142,127 @@ def import_class(import_str):
 print("Current directory:", os.getcwd())
 print("PYTHONPATH:", os.environ.get('PYTHONPATH'))
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(self, inputs, targets):
+        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-bce_loss)
+        focal_loss = self.alpha * (1-pt)**self.gamma * bce_loss
+        return focal_loss.mean()
+
 class Trainer():
     
     def __init__(self, arg):
-        self.best_recall = 0
-        self.best_roc_auc = 0
         self.arg = arg
+        self.save_arg()
+        self.init_seed(arg.seed)
+
+        # Initialize training metrics and summaries
         self.train_loss_summary = []
         self.val_loss_summary = []
-        self.best_f1 = 0
-        self.best_loss = 0 
-        self.best_accuracy = 0 
-        self.train_subjects = []
-        self.test_subject = []
-        self.optimizer = None
-        self.data_loader = dict()
+        self.test_loss_summary = []
+        self.train_acc_summary = []
+        self.val_acc_summary = []
+        self.test_acc_summary = []
+        self.best_acc = 0
+        self.best_acc_epoch = 0
+        self.global_step = 0
+
+        # Initialize sensors and modalities
         self.inertial_sensors = []
-        
-        # Initialize best metrics dictionary
-        self.best_metrics = {
-            'accuracy': float('-inf'),
-            'f1': float('-inf'),
-            'recall': float('-inf'),
-            'roc_auc': float('-inf'),
-            'loss': float('inf')
-        }
-        
-        # Process modalities
         for modality in arg.dataset_args['modalities']:
             if modality != 'skeleton':
                 self.inertial_sensors.extend(
                     [f"{modality}_{sensor}" for sensor in arg.dataset_args['sensors'][modality]]
                 )
-            
-                
-    
-        if not os.path.exists(self.arg.work_dir):
-            os.makedirs(self.arg.work_dir)                     
-            self.save_config(arg.config, arg.work_dir)
-        
-        if self.arg.phase == 'train':
-            self.model = self.load_model(arg.model, arg.model_args)
-        else: 
-            use_cuda = torch.cuda.is_available()
-            self.output_device = self.arg.device[0] if isinstance(self.arg.device, list) else self.arg.device
-            self.model = torch.load(self.arg.weights)
-        
-        self.load_loss()
-        self.load_optimizer()  # Add this line to initialize the optimizer
-        
-        self.include_val = arg.include_val
-        
-        num_params = self.count_parameters(self.model)
-        self.print_log(f'# Parameters: {num_params}')
-        self.print_log(f'Model size : {num_params/ (1024 ** 2):.2f} MB')
 
-    
-    def save_config(self,src_path : str, desc_path : str) -> None: 
+        # Initialize model components
+        self.load_data()  # Load data regardless of phase
+        self.load_model()  # Load model before optimizer
+        self.load_optimizer()  # Now load optimizer
+        self.load_loss()  # Move loss loading after data is loaded
+
+        # Initialize early stopping parameters
+        self.best_metrics = {
+            'accuracy': 0,
+            'f1': 0,
+            'recall': 0,
+            'precision': 0,
+            'loss': float('inf')
+        }
+        self.early_stop = False
+        self.early_stop_counter = 0
+        self.patience = 25  # Number of epochs to wait for improvement
+        self.min_delta = 0.0001  # Minimum change to qualify as an improvement
+
+        # Start appropriate phase
+        if arg.phase == 'train':
+            self.start()  # Start training
+        elif arg.phase == 'test':
+            self.load_weights(self.arg.weights)
+            self.eval()  # Start evaluation
+        else:
+            raise ValueError(f"Unknown phase: {arg.phase}")
+
+    def init_seed(self, seed):
+        """
+        Initialize random seeds for reproducibility
+        """
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        self.print_log(f'Random seed set to {seed}')
+
+    def save_arg(self):
         '''
         Function to save configuration file
         ''' 
-        print(f'{desc_path}/{src_path.rpartition("/")[-1]}') 
-        shutil.copy(src_path, f'{desc_path}/{src_path.rpartition("/")[-1]}')
-    def movement_aware_loss(predictions, labels, watch_smoothness, phone_smoothness):
+        print(f'{self.arg.work_dir}/{self.arg.config.rpartition("/")[-1]}') 
+        shutil.copy(self.arg.config, f'{self.arg.work_dir}/{self.arg.config.rpartition("/")[-1]}')
+    
+    def load_loss(self):
         """
-        Custom loss function that considers both classification accuracy and
-        movement characteristics to prevent misclassification of normal activities.
+        Initialize the loss function with class weights to handle imbalance
         """
-        # Base binary cross entropy loss
-        bce_loss = F.binary_cross_entropy_with_logits(predictions, labels)
+        if not hasattr(self, 'data_loader'):
+            raise RuntimeError("Data loader must be initialized before loading loss function")
+
+        # Calculate class weights based on training data distribution
+        labels = self.data_loader['train'].dataset.labels
+        fall_samples = sum(labels == 1)
+        non_fall_samples = sum(labels == 0)
+        total_samples = len(labels)
+
+        # Print length of each sample
+        print(f"Total samples: {total_samples}")
+        print(f"Fall samples: {fall_samples}")
+        print(f"Non-fall samples: {non_fall_samples}")
+
+        # Calculate weights inversely proportional to class frequencies
+        weight_for_0 = total_samples / (2.0 * non_fall_samples)
+        weight_for_1 = total_samples / (2.0 * fall_samples)
         
-        # Additional smoothness-based penalty
-        avg_smoothness = (watch_smoothness + phone_smoothness) / 2
-        smooth_penalty = torch.where(
-            (avg_smoothness > 0.8) & (predictions > 0) & (labels == 0),
-            torch.ones_like(predictions) * 0.5,
-            torch.zeros_like(predictions)
-        ).mean()
+        class_weights = torch.tensor([weight_for_0, weight_for_1], device=self.arg.device[0])
         
-        return bce_loss + smooth_penalty
+        # Initialize the loss function based on configuration
+        loss_type = getattr(self.arg, 'loss_type', 'bce')  # Default to BCE if not specified
+        
+        if loss_type.lower() == 'focal':
+            self.loss = FocalLoss(alpha=class_weights, gamma=2.0)
+            self.print_log(f"Using Focal Loss with class weights: {class_weights}")
+        else:
+            self.loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([weight_for_1/weight_for_0], device=self.arg.device[0]))
+            self.print_log(f"Using BCE Loss with positive weight: {weight_for_1/weight_for_0}")
+
+        return True
+
     def count_parameters(self, model):
         '''
         Function to count the trainable parameters
@@ -227,64 +273,19 @@ class Trainer():
         for buffer in model.buffers():
             total_size += buffer.nelement() * buffer.element_size()
         return total_size
-    def is_best_model(self, current_metrics):
-        """
-        Determines if the current model is the best so far and handles early stopping logic.
-        Returns True if model improved, False otherwise.
-        """
-        improved = False
-        
-        # First check if accuracy has improved
-        if current_metrics['accuracy'] > self.best_metrics['accuracy'] + self.min_delta:
-            improved = True
-        # If accuracy is equal, check if F1 score has improved
-        elif (abs(current_metrics['accuracy'] - self.best_metrics['accuracy']) < self.min_delta and 
-            current_metrics['f1'] > self.best_metrics['f1'] + self.min_delta):
-            improved = True
-        # If accuracy and F1 are equal, use loss as tiebreaker (lower is better)
-        elif (abs(current_metrics['accuracy'] - self.best_metrics['accuracy']) < self.min_delta and 
-            abs(current_metrics['f1'] - self.best_metrics['f1']) < self.min_delta and 
-            current_metrics['loss'] < self.best_metrics['loss'] - self.min_delta):
-            improved = True
 
-        # Update early stopping counter and flag
-        if improved:
-            self.early_stop_counter = 0
-            # Update all best metrics when we find a better model
-            for metric in self.best_metrics:
-                self.best_metrics[metric] = current_metrics[metric]
-        else:
-            self.early_stop_counter += 1
-            if self.early_stop_counter >= self.patience:
-                self.early_stop = True
-                self.print_log(f"\nEarly stopping triggered after {self.patience} epochs without improvement")
-
-        return improved
-    
-        
-    def load_model(self, model, model_args):
+    def load_model(self, model=None, model_args=None):
         '''
         Function to load model 
         '''
         use_cuda = torch.cuda.is_available()
         self.output_device = self.arg.device[0] if type(self.arg.device) is list else self.arg.device
-        Model = import_class(model)
-        model = Model(**model_args).to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-        return model 
-    
-    def load_loss(self):
-        '''
-        Loading loss function for the model's training. Using BCEWithLogitsLoss for binary 
-        fall detection as it combines sigmoid activation and binary cross entropy in a 
-        numerically stable way.
-        '''
-        self.criterion = torch.nn.BCEWithLogitsLoss()
-    
-    def load_weights(self):
-        '''
-        Load weights to the model
-        '''
-        self.model.load_state_dict(torch.load(self.arg.weights))
+        if model is None:
+            Model = import_class(self.arg.model)
+            self.model = Model(**self.arg.model_args).to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+        else:
+            self.model = model.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+        return self.model 
     
     def load_optimizer(self) -> None:
         '''
@@ -314,49 +315,90 @@ class Trainer():
         else :
            raise ValueError(f"Unsupported optimizer: {self.arg.optimizer}")
     
+    def load_weights(self):
+        '''
+        Load weights to the model
+        '''
+        self.model.load_state_dict(torch.load(self.arg.weights))
+    
     def load_data(self):
-        '''
-        Loads training, validation and test datasets with specific subject splitting:
-        - Test: Last 2 subjects
-        - Validation: Next to last 2 subjects 
-        - Train: All remaining subjects
-        '''
+        """
+        Loads training, validation and test datasets with matched trials and subject filtering.
+        Uses the same approach as main.py with prepare_smartfallmm and filter_subjects.
+        """
         Feeder = import_class(self.arg.feeder)
         
-        # Get all matched trials
+        # Get all matched trials using prepare_smartfallmm
         builder = prepare_smartfallmm(self.arg)
 
         # Get and sort all available subjects
         all_subjects = sorted(list({trial.subject_id for trial in builder.dataset.matched_trials}))
         
         # Split subjects according to specification
-        self.test_subjects = all_subjects[-2:]  # Last 2 subjects
-        self.val_subjects = all_subjects[-4:-2]  # Next to last 2 subjects
-        self.train_subjects = all_subjects[:-4]  # All remaining subjects
+        self.test_subjects = all_subjects[-2:]  # Last 2 subjects for testing
+        self.val_subjects = all_subjects[-4:-2]  # Next to last 2 subjects for validation
+        self.train_subjects = all_subjects[:-4]  # All remaining subjects for training
         
-        print(f"\nSubject Split:")
-        print(f"Training subjects: {self.train_subjects}")
-        print(f"Validation subjects: {self.val_subjects}")
-        print(f"Test subjects: {self.test_subjects}")
+        self.print_log(f"\nSubject Split:")
+        self.print_log(f"Training subjects: {self.train_subjects}")
+        self.print_log(f"Validation subjects: {self.val_subjects}")
+        self.print_log(f"Test subjects: {self.test_subjects}")
 
-        # Create dataloaders for each split
+        self.data_loader = {}
+
+        # Create dataloaders for each split using filter_subjects
         for split, subjects in [('train', self.train_subjects), 
                             ('val', self.val_subjects),
                             ('test', self.test_subjects)]:
+            
+            # Filter data for current subjects
             filtered_data = filter_subjects(builder, subjects)
             if not filtered_data:
-                print(f"No {split} data was loaded!")
+                self.print_log(f"No {split} data was loaded!")
                 return False
                 
-            self.data_loader[split] = torch.utils.data.DataLoader(
-                dataset=Feeder(dataset=filtered_data, 
-                            batch_size=getattr(self.arg, f'{split}_batch_size' if split != 'train' else 'batch_size')),
-                batch_size=getattr(self.arg, f'{split}_batch_size' if split != 'train' else 'batch_size'),
-                shuffle=(split == 'train'),
-                num_workers=self.arg.num_worker
-            )
-            print(f"Created {split} dataloader with {len(self.data_loader[split].dataset)} samples")
-        
+            # Create dataset with filtered data
+            dataset = Feeder(dataset=filtered_data, batch_size=self.arg.batch_size)
+            
+            # For training set, create balanced sampler
+            if split == 'train':
+                labels = dataset.labels
+                class_counts = np.bincount(labels)
+                total_samples = len(labels)
+                
+                # Calculate weights inversely proportional to class frequencies
+                class_weights = total_samples / (len(class_counts) * class_counts)
+                sample_weights = class_weights[labels]
+                
+                sampler = WeightedRandomSampler(
+                    weights=torch.DoubleTensor(sample_weights),
+                    num_samples=len(dataset),
+                    replacement=True
+                )
+                
+                self.data_loader[split] = torch.utils.data.DataLoader(
+                    dataset=dataset,
+                    batch_size=self.arg.batch_size,
+                    sampler=sampler,  # Use balanced sampler for training
+                    num_workers=self.arg.num_worker,
+                    drop_last=True
+                )
+            else:
+                # For validation and test sets, no sampling needed
+                self.data_loader[split] = torch.utils.data.DataLoader(
+                    dataset=dataset,
+                    batch_size=getattr(self.arg, f'{split}_batch_size'),
+                    shuffle=False,
+                    num_workers=self.arg.num_worker
+                )
+            
+            self.print_log(f"Created {split} dataloader with {len(dataset)} samples")
+            
+            # Store class distribution information
+            if split == 'train':
+                self.train_class_counts = class_counts
+                self.print_log(f"Training set class distribution: {class_counts}")
+
         return True
 
     def record_time(self):
@@ -378,10 +420,21 @@ class Trainer():
         '''
         Prints log to a file
         '''
+        if print_time:
+            localtime = time.asctime(time.localtime(time.time()))
+            string = f"[ {localtime} ] {string}"
         print(string)
-        if self.arg.print_log:
-            with open('{}/log.txt'.format(self.arg.work_dir), 'a') as f:
-                print(string, file = f)
+        if hasattr(self, 'log_path'):
+            with open(self.log_path, 'a') as f:
+                print(string, file=f)
+
+    def start(self):
+        """
+        Main training loop
+        """
+        for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
+            self.train(epoch)
+            self.eval(epoch)
 
     def train(self, epoch):
         use_cuda = torch.cuda.is_available()
@@ -398,23 +451,14 @@ class Trainer():
 
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             sensor_data = {}
-            # Handle IMU data
             for sensor in self.inertial_sensors:
                 sensor_data[sensor] = inputs[sensor].to(
-                    f'cuda:{self.output_device}' if use_cuda else 'cpu'
-                )
-
-            # Handle skeleton data
-            if 'skeleton' in self.arg.dataset_args['modalities']:
-                sensor_data['skeleton'] = inputs['skeleton'].to(
                     f'cuda:{self.output_device}' if use_cuda else 'cpu'
                 )
 
             targets = targets.float().unsqueeze(1).to(
                 f'cuda:{self.output_device}' if use_cuda else 'cpu'
             )
-
-            timer['dataloader'] += self.split_time()
 
             self.optimizer.zero_grad()
             logits = self.model(sensor_data)
@@ -423,7 +467,7 @@ class Trainer():
                 print("Model returned None. Skipping batch.")
                 continue
 
-            loss = self.criterion(logits, targets)
+            loss = self.loss(logits, targets)
             loss.mean().backward()
             self.optimizer.step()
 
@@ -464,17 +508,13 @@ class Trainer():
 
 
     def eval(self, epoch, loader_name='test', result_file=None):
-        use_cuda = torch.cuda.is_available()
-        if result_file is not None:
-            f_r = open(result_file, 'w', encoding='utf-8')
         self.model.eval()
-
-        loss = 0
-        cnt = 0
+        loss_values = []
         all_targets = []
         all_probs = []
-
         process = tqdm(self.data_loader[loader_name], ncols=80)
+        use_cuda = torch.cuda.is_available()
+
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
                 sensor_data = {}
@@ -484,67 +524,77 @@ class Trainer():
                         f'cuda:{self.output_device}' if use_cuda else 'cpu'
                     )
 
-                # Handle skeleton data
-                if 'skeleton' in self.arg.dataset_args['modalities']:
-                    sensor_data['skeleton'] = inputs['skeleton'].to(
-                        f'cuda:{self.output_device}' if use_cuda else 'cpu'
-                    )
-
                 targets = targets.float().unsqueeze(1).to(
                     f'cuda:{self.output_device}' if use_cuda else 'cpu'
                 )
 
                 logits = self.model(sensor_data)
+                if logits is None:
+                    continue
 
-                batch_loss = self.criterion(logits, targets)
-                loss += batch_loss.sum().item()
-
+                loss = self.loss(logits, targets)
+                loss_values.append(loss.mean().item() * targets.size(0))
                 probs = torch.sigmoid(logits)
                 all_probs.extend(probs.cpu().numpy())
                 all_targets.extend(targets.cpu().numpy())
 
-                cnt += targets.size(0)
-
-        # Compute metrics
-        loss /= cnt
+        # Convert to numpy arrays for metric calculation
         all_probs = np.array(all_probs)
         all_targets = np.array(all_targets)
         preds = (all_probs > 0.5).astype(int)
 
+        # Calculate metrics
         accuracy = accuracy_score(all_targets, preds) * 100
         recall = recall_score(all_targets, preds) * 100
+        precision = precision_score(all_targets, preds) * 100
         f1 = f1_score(all_targets, preds) * 100
         roc_auc = roc_auc_score(all_targets, all_probs) * 100
+        loss = np.sum(loss_values) / len(all_targets)
 
-        # Create metrics dictionary
+        # Store metrics in a dictionary
         metrics = {
-            'loss': loss,
             'accuracy': accuracy,
             'recall': recall,
+            'precision': precision,
             'f1': f1,
-            'roc_auc': roc_auc
+            'roc_auc': roc_auc,
+            'loss': loss
         }
 
-        self.print_log('{} Loss: {:.4f}. Accuracy: {:.2f}%, Recall: {:.2f}%, F1 Score: {:.2f}%, ROC AUC: {:.2f}%'.format(
-            loader_name.capitalize(), loss, accuracy, recall, f1, roc_auc
-        ))
+        # Print evaluation results
+        self.print_log(
+            '\t{} Loss: {:.4f}. Accuracy: {:.2f}%, Recall: {:.2f}%, F1 Score: {:.2f}%, ROC AUC: {:.2f}%'.format(
+                loader_name.capitalize(), loss, accuracy, recall, f1, roc_auc
+            )
+        )
 
-        # Save best model during training
-        if self.arg.phase == 'train':
-            if accuracy > self.best_accuracy:
-                self.best_loss = loss
-                self.best_accuracy = accuracy
-                self.best_f1 = f1
-                self.best_recall = recall
-                self.best_roc_auc = roc_auc
-                torch.save(self.model, f'{self.arg.work_dir}/{self.arg.model_saved_name}.pth')
-                self.print_log('Weights Saved')
+        return metrics
 
-        return metrics  # Return the metrics dictionary instead of just loss
-
+    def is_best_model(self, current_metrics):
+        """
+        Determines if the current model is the best so far based on F1 score and other metrics
+        """
+        is_best = False
         
+        # Check if current F1 score is better than the best so far
+        if current_metrics['f1'] > self.best_metrics['f1']:
+            is_best = True
+            self.early_stop_counter = 0
+        else:
+            self.early_stop_counter += 1
+            self.print_log(f'No improvement for {self.early_stop_counter} epochs')
+            self.print_log(f"Best F1: {self.best_metrics['f1']:.4f}, Current F1: {current_metrics['f1']:.4f}")
 
+        # Update all metrics if this is the best model
+        if is_best:
+            for metric in ['accuracy', 'recall', 'precision', 'f1', 'loss']:
+                self.best_metrics[metric] = current_metrics[metric]
 
+        # Check for early stopping
+        if self.early_stop_counter >= self.patience:
+            self.early_stop = True
+
+        return is_best
 
     def load_best_checkpoint(self):
         """Load the best model checkpoint before final testing"""
@@ -567,28 +617,72 @@ class Trainer():
         self.print_log(f"Accuracy:     {metrics['accuracy']:.2f}%")
         self.print_log(f"F1 Score:     {metrics['f1']:.2f}%")
         self.print_log(f"Recall:       {metrics['recall']:.2f}%")
+        self.print_log(f"Precision:    {metrics['precision']:.2f}%")
         self.print_log(f"ROC AUC:      {metrics['roc_auc']:.2f}%")
         self.print_log(f"Loss:         {metrics['loss']:.4f}")
         self.print_log("=" * 50)
 
     def save_final_results(self, train_metrics, val_metrics, test_metrics):
-        """Save all results to a CSV file"""
+        """
+        Save test results to a CSV file, appending new results with metadata.
+        Includes model name, checkpoint file, and timestamp.
+        """
+        from datetime import datetime
+        import pandas as pd
+        
+        # Get model name from the full path
+        model_name = self.arg.model.split('.')[-1]
+        
+        # Get the best model checkpoint filename
+        checkpoint_path = f'{self.arg.work_dir}/best_model.pth'
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            checkpoint_name = f'{model_name}_f1val_{checkpoint["validation_metrics"]["f1"]:.2f}_acc_{checkpoint["validation_metrics"]["accuracy"]:.2f}_loss_{checkpoint["validation_metrics"]["loss"]:.4f}.pth'
+        else:
+            checkpoint_name = "no_checkpoint_found"
+        
+        # Create new results row with metadata and only test metrics
         results = pd.DataFrame({
-            'train_subjects': [str(self.train_subjects)],
-            'val_subjects': [str(self.val_subjects)],
+            'timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+            'model_name': [model_name],
+            'checkpoint_file': [checkpoint_name],
             'test_subjects': [str(self.test_subjects)],
-            'train_accuracy': [train_metrics['accuracy']],
-            'train_f1': [train_metrics['f1']],
-            'train_recall': [train_metrics['recall']],
-            'val_accuracy': [val_metrics['accuracy']],
-            'val_f1': [val_metrics['f1']],
-            'val_recall': [val_metrics['recall']],
-            'test_accuracy': [test_metrics['accuracy']],
-            'test_f1': [test_metrics['f1']],
-            'test_recall': [test_metrics['recall']]
+            'accuracy': [test_metrics['accuracy']],
+            'f1': [test_metrics['f1']],
+            'recall': [test_metrics['recall']],
+            'precision': [test_metrics['precision']],
+            'roc_auc': [test_metrics['roc_auc']],
+            'loss': [test_metrics['loss']]
         })
-        results.to_csv(f'{self.arg.work_dir}/final_results.csv', index=False)
-        self.print_log("\nSaved final results to: final_results.csv")
+        
+        # Append to existing CSV or create new one
+        results_path = f'{self.arg.work_dir}/test_results_history.csv'
+        if os.path.exists(results_path):
+            existing_results = pd.read_csv(results_path)
+            updated_results = pd.concat([existing_results, results], ignore_index=True)
+        else:
+            updated_results = results
+            
+        # Save with nice formatting
+        updated_results.to_csv(results_path, index=False, float_format='%.4f')
+        self.print_log(f"\nAppended test results to: {results_path}")
+        
+        # Also save current results separately for easy access
+        current_results_path = f'{self.arg.work_dir}/current_test_results.csv'
+        results.to_csv(current_results_path, index=False, float_format='%.4f')
+        self.print_log(f"Current test results saved to: {current_results_path}")
+        
+    def load_checkpoint_if_specified(self):
+        """Load model checkpoint if specified"""
+        if self.arg.weights is not None:
+            try:
+                checkpoint = torch.load(self.arg.weights)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                self.global_step = checkpoint['global_step']
+                self.print_log(f"Loaded checkpoint from {self.arg.weights}")
+            except:
+                self.print_log(f"Failed to load checkpoint from {self.arg.weights}")
 
     def start(self):
         """Main training and evaluation loop with comprehensive testing"""
@@ -599,6 +693,7 @@ class Trainer():
             self.print_log("\nStarting Training...")
             self.print_log("=" * 50)
             self.print_log(f"Early stopping patience: {self.patience} epochs")
+            self.print_log(f"Minimum improvement threshold: {self.min_delta}")
             
             # Training loop
             for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
@@ -613,9 +708,12 @@ class Trainer():
                 
                 # Save if best model
                 if self.is_best_model(val_metrics):
-                    model_save_path = (f'{self.arg.work_dir}/best_model_'
+                    # Extract model name from the full path
+                    model_name = self.arg.model.split('.')[-1]
+                    
+                    model_save_path = (f'{self.arg.work_dir}/{model_name}_'
+                                    f'f1val_{val_metrics["f1"]:.2f}_'
                                     f'acc_{val_metrics["accuracy"]:.2f}_'
-                                    f'f1_{val_metrics["f1"]:.2f}_'
                                     f'loss_{val_metrics["loss"]:.4f}.pth')
                     
                     checkpoint = {
@@ -623,6 +721,7 @@ class Trainer():
                         'model_state_dict': self.model.state_dict(),
                         'optimizer_state_dict': self.optimizer.state_dict(),
                         'validation_metrics': val_metrics,
+                        'model_name': model_name,
                         'training_info': {
                             'train_subjects': self.train_subjects,
                             'val_subjects': self.val_subjects,
@@ -634,21 +733,24 @@ class Trainer():
                     }
                     
                     torch.save(checkpoint, model_save_path)
+                    # Also save as best_model.pth for easy reference
                     torch.save(checkpoint, f'{self.arg.work_dir}/best_model.pth')
                     
                     self.print_log(
-                        f'\nEpoch {epoch}: New best model saved!'
+                        f'\nEpoch {epoch}: New best model saved! ({model_name})'
                         f'\nValidation Metrics:'
                         f'\n - Accuracy: {val_metrics["accuracy"]:.2f}%'
                         f'\n - F1 Score: {val_metrics["f1"]:.2f}%'
                         f'\n - Recall: {val_metrics["recall"]:.2f}%'
+                        f'\n - Precision: {val_metrics["precision"]:.2f}%'
                         f'\n - ROC AUC: {val_metrics["roc_auc"]:.2f}%'
                         f'\n - Loss: {val_metrics["loss"]:.4f}'
+                        f'\nSaved to: {model_save_path}'
                     )
                 
                 # Check for early stopping
                 if self.early_stop:
-                    self.print_log(f"\nStopping early at epoch {epoch}")
+                    self.print_log(f"\nStopping training early at epoch {epoch}")
                     break
 
             # After training, evaluate on all splits using best model
@@ -675,7 +777,24 @@ class Trainer():
                 self.print_log("Could not perform final evaluation - no best model found!")
         
         else:  # Testing phase
-            self.print_log("\nRunning inference only...")
+            self.print_log("\nRunning inference with best model...")
+            
+            # Load the best model from training
+            best_model_path = f'{self.arg.work_dir}/best_model.pth'
+            if os.path.exists(best_model_path):
+                checkpoint = torch.load(best_model_path)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                model_name = checkpoint.get('model_name', 'Unknown')
+                best_val_metrics = checkpoint.get('validation_metrics', {})
+                
+                self.print_log(f"Loaded best model: {model_name}")
+                self.print_log("Best validation metrics:")
+                self.print_log(f" - Accuracy: {best_val_metrics.get('accuracy', 'N/A'):.2f}%")
+                self.print_log(f" - F1 Score: {best_val_metrics.get('f1', 'N/A'):.2f}%")
+                self.print_log(f" - Loss: {best_val_metrics.get('loss', 'N/A'):.4f}")
+            else:
+                self.print_log("Warning: No best model found, using current model state")
+                
             test_metrics = self.eval(0, loader_name='test')
             self.print_final_results(test_metrics, 'test')
 
@@ -698,6 +817,5 @@ if __name__ == "__main__":
 
     arg = parser.parse_args()
 
-    init_seed(arg.seed)
     trainer = Trainer(arg)
     trainer.start()

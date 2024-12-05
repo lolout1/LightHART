@@ -3,13 +3,13 @@ model: Models.mobile.EnhancedDualPathFallDetector
 # Model arguments
 model_args:
   acc_coords: 4
-  sequence_length: 128
-  hidden_dim: 8       # Increased from 64
-  num_heads: 2        # Increased from 8
-  depth: 6             # Increased from 4
-  mlp_ratio: 4
+  sequence_length: 96
+  hidden_dim: 32
+  num_heads: 4
+  depth: 6
   num_classes: 2
-  dropout: 0.4         # Increased from 0.3
+  dropout: 0.1
+  #attention_dropout: 0.1
   use_skeleton: false
 
 # Dataset configuration
@@ -58,8 +58,8 @@ num_worker: 4
 
 # Optimizer configuration
 optimizer: "adamw"
-base_lr: 0.00025
-weight_decay: 0.001
+base_lr: 0.0001
+weight_decay: 0.0001
 
 # Loss settings
 loss: "torch.nn.CrossEntropyLoss"
@@ -71,8 +71,8 @@ loss_args:
 device: [0]
 
 # Other settings
-work_dir: "./exps/smartfall_har/mobile_falldet"
-model_saved_name: "mobile_fall_detector"
+work_dir: "./work_dir/smartfallmm/mobileFinalTest"
+model_saved_name: "mobile_fall_detectorTgresg"
 print_log: true
 phase: "train"
 log_interval: 10

@@ -122,7 +122,7 @@ class MultiModalStudentModel(nn.Module):
             nn.Linear(spatial_embed, spatial_embed // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(spatial_embed // 2, num_classes)
+            nn.Linear(spatial_embed // 2, 1)  # Single output for binary classification
         )
 
         self._init_weights()
@@ -145,66 +145,46 @@ class MultiModalStudentModel(nn.Module):
         """
         Args:
             data (dict): Dictionary containing:
-                - accelerometer_phone: [B, T, C] tensor
-                - accelerometer_watch: [B, T, C] tensor
+                - accelerometer_phone: [B, T, 4] tensor (x, y, z, SMV)
+                - accelerometer_watch: [B, T, 4] tensor (x, y, z, SMV)
                 - skeleton (optional): [B, T, J, C] tensor
         Returns:
-            logits (torch.Tensor): [B, num_classes]
+            logits (torch.Tensor): [B, 1]
         """
-        # Ensure data types are float32
-        phone_data = data['accelerometer_phone'].float()      # [B, T, C]
-        watch_data = data['accelerometer_watch'].float()      # [B, T, C]
+        # Ensure data types are float32 and handle the 4-channel input
+        phone_data = data['accelerometer_phone'].float()      # [B, T, 4]
+        watch_data = data['accelerometer_watch'].float()      # [B, T, 4]
 
-        # =====================
-        # Feature Extraction
-        # =====================
-        # Phone
-        phone_feat = rearrange(phone_data, 'b t c -> b c t')  # [B, C, T]
+        # Rearrange for convolution while preserving all channels
+        phone_feat = rearrange(phone_data, 'b t c -> b c t')  # [B, 4, T]
+        watch_feat = rearrange(watch_data, 'b t c -> b c t')  # [B, 4, T]
+
+        # Process through convolutional networks
         phone_feat = self.phone_conv(phone_feat)             # [B, 128, T/2]
-        phone_feat = phone_feat.view(phone_feat.size(0), -1) # Flatten
-        phone_feat = self.phone_fc(phone_feat)               # [B, spatial_embed]
+        watch_feat = self.watch_conv(watch_feat)             # [B, 128, T/2]
 
-        # Watch
-        watch_feat = rearrange(watch_data, 'b t c -> b c t')  # [B, C, T]
-        watch_feat = self.watch_conv(watch_feat)              # [B, 128, T/2]
-        watch_feat = watch_feat.view(watch_feat.size(0), -1) # Flatten
+        # Flatten and project to embedding space
+        phone_feat = phone_feat.view(phone_feat.size(0), -1) # [B, 128 * T/2]
+        watch_feat = watch_feat.view(watch_feat.size(0), -1) # [B, 128 * T/2]
+        
+        phone_feat = self.phone_fc(phone_feat)               # [B, spatial_embed]
         watch_feat = self.watch_fc(watch_feat)               # [B, spatial_embed]
 
-        # Skeleton (if used)
+        # Rest of the processing remains the same...
         if self.use_skeleton and 'skeleton' in data:
-            skeleton_data = data['skeleton'].float()          # [B, T, J, C]
-            skeleton_feat = rearrange(skeleton_data, 'b t j c -> b c j t')  # [B, C, J, T]
-            skeleton_feat = self.skeleton_conv(skeleton_feat)             # [B, 128, J/2, T/2]
-            skeleton_feat = skeleton_feat.view(skeleton_feat.size(0), -1)  # Flatten
-            skeleton_feat = self.skeleton_fc(skeleton_feat)               # [B, spatial_embed]
+            skeleton_data = data['skeleton'].float()
+            skeleton_feat = rearrange(skeleton_data, 'b t j c -> b c j t')
+            skeleton_feat = self.skeleton_conv(skeleton_feat)
+            skeleton_feat = skeleton_feat.view(skeleton_feat.size(0), -1)
+            skeleton_feat = self.skeleton_fc(skeleton_feat)
+            fused = torch.cat([phone_feat, watch_feat, skeleton_feat], dim=1)
         else:
-            skeleton_feat = None
+            fused = torch.cat([phone_feat, watch_feat], dim=1)
 
-        # =====================
-        # Fusion
-        # =====================
-        if skeleton_feat is not None:
-            fused = torch.cat([phone_feat, watch_feat, skeleton_feat], dim=1)  # [B, 3 * spatial_embed]
-        else:
-            fused = torch.cat([phone_feat, watch_feat], dim=1)                # [B, 2 * spatial_embed]
-
-        fused = self.fusion_layer(fused)                                     # [B, spatial_embed]
-
-        # =====================
-        # Prepare for Transformer (Add sequence dimension)
-        # =====================
-        # Adding a dummy temporal dimension since Transformer expects [B, T, C]
-        fused = fused.unsqueeze(1)                                           # [B, 1, spatial_embed]
-
-        # =====================
-        # Temporal Modeling
-        # =====================
-        temporal_features = self.transformer_encoder(fused)                  # [B, 1, spatial_embed]
-
-        # =====================
-        # Classification
-        # =====================
-        pooled_features = temporal_features.mean(dim=1)                     # [B, spatial_embed]
-        logits = self.classifier(pooled_features)                           # [B, num_classes]
-
+        fused = self.fusion_layer(fused)
+        fused = fused.unsqueeze(1)  # Add sequence dimension for transformer
+        temporal_features = self.transformer_encoder(fused)
+        pooled_features = temporal_features.mean(dim=1)
+        logits = self.classifier(pooled_features)
+        
         return logits

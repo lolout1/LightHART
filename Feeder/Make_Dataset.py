@@ -30,16 +30,8 @@ class UTD_mm(torch.utils.data.Dataset):
         print("Dataset initialization complete")
 
     def cal_smv(self, sample: torch.Tensor) -> torch.Tensor:
-        """
-        Calculates the Smoothed Magnitude Velocity (SMV) for a given sensor sample.
 
-        Args:
-            sample (torch.Tensor): Tensor of shape [T, C] where T is the time steps and C is the coordinates.
-
-        Returns:
-            torch.Tensor: SMV tensor of shape [T, 1].
-        """
-        # Compute SMV across the last dimension (C)
+        
         smv = torch.sqrt(torch.sum(sample ** 2, dim=-1, keepdim=True))
         return smv
 
@@ -47,18 +39,7 @@ class UTD_mm(torch.utils.data.Dataset):
         return self.num_samples
 
     def __getitem__(self, index: int) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, int]:
-        """
-        Retrieves the data and label for a given index.
-
-        Args:
-            index (int): Index of the sample to retrieve.
-
-        Returns:
-            Tuple[Dict[str, torch.Tensor], torch.Tensor, int]: A tuple containing:
-                - data (Dict[str, torch.Tensor]): Dictionary with modality data.
-                - label (torch.Tensor): The label tensor.
-                - index (int): The index of the sample.
-        """
+        
  
         data = {}
         
@@ -74,8 +55,8 @@ class UTD_mm(torch.utils.data.Dataset):
                 data[key] = sensor_data
             else:
                 # For IMU data, add SMV
-                #smv = self.cal_smv(sensor_data)  # Shape: [T, 1]
-                #sensor_data = torch.cat((sensor_data, smv), dim=-1)  # Shape: [T, C+1]
+                smv = self.cal_smv(sensor_data)  # Shape: [T, 1]
+                sensor_data = torch.cat((sensor_data, smv), dim=-1)  # Shape: [T, C+1]
                 data[key] = sensor_data
         
         label = self.labels[index]

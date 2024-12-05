@@ -23,7 +23,7 @@ class MatchedTrial:
         self.subject_id = subject_id
         self.action_id = action_id
         self.sequence_number = sequence_number
-        self.files: Dict[str, Dict[str, str]] = {}  # modality -> {sensor -> file_path}
+        self.files: Dict[str, str] = {}  # modality_sensor -> file_path
     
     def add_file(self, modality_sensor_key: str, file_path: str) -> None:
         """
@@ -173,7 +173,28 @@ class SmartFallMM:
         self.load_files()
         self.match_trials()
 
-
+    def select_sensor(self, modality: str, sensor: Optional[str] = None) -> None:
+        """
+        Select a specific sensor for a modality.
+        
+        Args:
+            modality (str): The modality to select sensor for (e.g., 'accelerometer')
+            sensor (Optional[str]): The sensor to select (e.g., 'phone'). None for modalities without sensors.
+        """
+        # Update modality_sensors to only include the selected sensor
+        updated_sensors = {}
+        for key, sensors in self.modality_sensors.items():
+            _, mod = key.split('_', 1)
+            if mod == modality:
+                if sensor is None:
+                    updated_sensors[key] = [None]
+                else:
+                    updated_sensors[key] = [sensor]
+            else:
+                updated_sensors[key] = sensors
+        
+        self.modality_sensors = updated_sensors
+        print(f"Selected sensor {sensor} for modality {modality}")
 
 
 def prepare_smartfallmm(arg) -> DatasetBuilder:
@@ -210,10 +231,11 @@ def filter_subjects(builder: DatasetBuilder, subjects: List[int]) -> Dict[str, n
     builder.make_dataset(subjects)
     norm_data = builder.normalization()
     return norm_data
+
 if __name__ == "__main__":
     dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))
 
-# Add modalities for 'young' age group
+    # Add modalities for 'young' age group
     dataset.add_modality("young", "accelerometer")
     dataset.add_modality("young", "skeleton")
 
@@ -232,8 +254,3 @@ if __name__ == "__main__":
 
     # Match trials across the modalities
     dataset.match_trials()
-    # take input 
-    # load files 
-        # load files only that matches 
-    # merge all together
-    # create labels

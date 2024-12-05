@@ -1,0 +1,84 @@
+model: Models.mmSimple.SimpleFallDetector  # Path to the new simplified model
+
+# Model arguments - simplified for focused fall detection
+model_args:
+  input_channels: 4        # x, y, z, SMV from accelerometer
+  hidden_size: 128         # Size of hidden layers for feature extraction
+  dropout: 0.3           # Dropout rate for regularization
+
+# Dataset configuration - kept same as original
+dataset: smartfallmm
+
+# Subject list remains unchanged for consistency
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+# Dataset arguments - maintained from original
+dataset_args:
+  root_dir: "data/smartfallmm"
+  age_groups: 
+    - "young"
+    - "old"
+  modalities:
+    - "accelerometer"
+  sensors:
+    accelerometer:
+      - "phone"
+      - "watch"
+  mode: "avg_pool"
+  max_length: 128
+  task: "fd"
+
+# DataLoader configuration - maintained batch sizes
+feeder: "Feeder.Make_Dataset.UTD_mm"
+train_feeder_args:
+  batch_size: 8
+
+val_feeder_args:
+  batch_size: 8
+
+test_feeder_args:
+  batch_size: 8
+
+# Training parameters - adjusted for simpler model
+batch_size: 8
+test_batch_size: 8
+val_batch_size: 8
+num_epoch: 150            # Reduced from 200 as simpler model might converge faster
+start_epoch: 0
+
+# Optimizer configuration - adjusted learning rate for stability
+optimizer: "sgd"
+base_lr: 0.001          # Slightly increased for better initial learning
+#weight_decay: 0.0001     # Maintained from original
+
+# Loss function - changed to BCE for binary classification
+loss: "torch.nn.BCEWithLogitsLoss"  # Better suited for fall detection
+loss_args: {}
+
+# Device setting
+device: [0]
+
+# Other settings - updated work directory and model name
+work_dir: "./exps/smartfall_har/student/simple_fall_detector"
+model_saved_name: "simple_fall_detector_v1"
+print_log: true
+phase: "train"
+num_worker: 0
+seed: 2
+log_interval: 10
+include_val: true

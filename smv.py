@@ -14,6 +14,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import OneCycleLR
+from torch.utils.data import WeightedRandomSampler
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, f1_score, precision_recall_curve, roc_auc_score
 from utils.dataset import prepare_smartfallmm, filter_subjects
@@ -60,8 +61,19 @@ class SMVOptimizedTrainer:
         self.setup_basic_attributes()
         self.setup_environment()
         self.initialize_components()
-        self.load_data()
-        self.print_model_info()
+        
+        # Initialize cross-validation results
+        self.cv_results = {
+            'fold_metrics': [],
+            'best_models': []
+        }
+        
+        if self.arg.cross_validation:
+            self.cross_validate()
+        else:
+            self.load_data()
+            self.print_model_info()
+            self.start()
 
     def setup_logging(self):
         """Setup logging directory and file"""
@@ -84,18 +96,20 @@ class SMVOptimizedTrainer:
         """Initialize basic class attributes"""
         self.print_log("Initializing basic attributes...")
         self.results = pd.DataFrame(columns=['epoch', 'train_loss', 'val_loss', 
-                                           'train_acc', 'val_acc', 'f1', 'auc'])
+                                           'train_acc', 'val_acc', 'f1', 'auc', 'sensitivity', 'specificity'])
         self.train_loss_summary = []
         self.val_loss_summary = []
         self.best_f1 = 0
         self.best_loss = float('inf')
         self.best_accuracy = 0
         self.train_subjects = []
-        self.test_subject = []
+        self.val_subjects = []
+        self.test_subjects = []
         self.early_stopping_counter = 0
         self.early_stopping_patience = 75
         self.best_model_path = None
         self.data_loader = {}
+        self.train_class_counts = None
 
         # Initialize sensors list
         self.inertial_sensors = []
@@ -142,7 +156,7 @@ class SMVOptimizedTrainer:
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = self.load_optimizer()
         self.scaler = GradScaler()  # For mixed precision training
-        self.augmentation = SMVAugmentation()  # Data augmentation
+        self.augmentation = SMVAugmentation(**self.arg.aug_args)  # Data augmentation
 
     def load_model(self, model, model_args):
         """Load and initialize the model"""
@@ -225,7 +239,7 @@ class SMVOptimizedTrainer:
         }
 
     def load_data(self):
-        """Loads training and validation datasets"""
+        """Loads training, validation and test datasets with balanced sampling"""
         try:
             self.print_log("Loading dataset...")
             Feeder = import_class(self.arg.feeder)
@@ -239,56 +253,82 @@ class SMVOptimizedTrainer:
             
             # Filter the subjects that are in our arg.subjects list and in the matched trials
             available_subjects = sorted(list(all_trial_subjects & set(self.arg.subjects)))
-            self.print_log(f"Subjects available for training/validation: {available_subjects}")
+            self.print_log(f"Subjects available for training/validation/test: {available_subjects}")
             
             if not available_subjects:
                 self.print_log("No subjects available that match both matched trials and requested subjects!")
                 return False
-                
-            # Split for training and validation
-            val_subjects = available_subjects[-3:]  # Take last 3 subjects for validation
-            train_subjects = available_subjects[:-3]  # Rest for training
+            
+            # Split for training, validation and test
+            test_subjects = available_subjects[-2:]  # Take last 2 subjects for test
+            val_subjects = available_subjects[-4:-2]  # Take next 2 subjects for validation
+            train_subjects = available_subjects[:-4]  # Rest for training
             
             self.print_log(f"\nSplit:")
             self.print_log(f"Training subjects: {train_subjects}")
             self.print_log(f"Validation subjects: {val_subjects}")
+            self.print_log(f"Test subjects: {test_subjects}")
 
             self.train_subjects = train_subjects
-            self.test_subject = val_subjects
+            self.val_subjects = val_subjects
+            self.test_subjects = test_subjects
 
-            # Prepare training data
-            self.print_log("\nPreparing training data...")
-            norm_train = filter_subjects(builder, train_subjects)
-            if not norm_train:
-                self.print_log("No training data was loaded. Exiting dataset preparation.")
-                return False
+            self.data_loader = {}
 
-            self.print_log("\nCreating training dataloader...")
-            self.data_loader['train'] = torch.utils.data.DataLoader(
-                dataset=Feeder(dataset=norm_train, batch_size=self.arg.batch_size),
-                batch_size=self.arg.batch_size,
-                shuffle=True,
-                num_workers=self.arg.num_worker,
-                pin_memory=True if self.use_cuda else False
-            )
-            
-            self.print_log(f"Created training dataloader with {len(self.data_loader['train'].dataset)} samples")
-
-            # Prepare validation data
-            if self.arg.include_val:
-                self.print_log("\nPreparing validation data...")
-                norm_val = filter_subjects(builder, val_subjects)
-                if not norm_val:
-                    self.print_log("No validation data was loaded. Continuing without validation.")
-                else:
-                    self.data_loader['val'] = torch.utils.data.DataLoader(
-                        dataset=Feeder(dataset=norm_val, batch_size=self.arg.batch_size),
+            # Create dataloaders for each split
+            for split, subjects in [('train', train_subjects), 
+                                ('val', val_subjects),
+                                ('test', test_subjects)]:
+                
+                # Filter data for current subjects
+                filtered_data = filter_subjects(builder, subjects)
+                if not filtered_data:
+                    self.print_log(f"No {split} data was loaded!")
+                    continue
+                
+                # Create dataset with filtered data
+                dataset = Feeder(dataset=filtered_data, batch_size=self.arg.batch_size)
+                
+                # For training set, create balanced sampler
+                if split == 'train':
+                    labels = dataset.labels
+                    class_counts = np.bincount(labels)
+                    total_samples = len(labels)
+                    
+                    # Calculate weights inversely proportional to class frequencies
+                    class_weights = total_samples / (len(class_counts) * class_counts)
+                    sample_weights = class_weights[labels]
+                    
+                    sampler = WeightedRandomSampler(
+                        weights=torch.DoubleTensor(sample_weights),
+                        num_samples=len(dataset),
+                        replacement=True
+                    )
+                    
+                    self.data_loader[split] = torch.utils.data.DataLoader(
+                        dataset=dataset,
                         batch_size=self.arg.batch_size,
+                        sampler=sampler,  # Use balanced sampler for training
+                        num_workers=self.arg.num_worker,
+                        pin_memory=True if self.use_cuda else False,
+                        drop_last=True
+                    )
+                    
+                    # Store class distribution information
+                    self.train_class_counts = class_counts
+                    self.print_log(f"Training set class distribution: {class_counts}")
+                else:
+                    # For validation and test sets, no sampling needed
+                    batch_size = getattr(self.arg, f'{split}_batch_size', self.arg.batch_size)
+                    self.data_loader[split] = torch.utils.data.DataLoader(
+                        dataset=dataset,
+                        batch_size=batch_size,
                         shuffle=False,
                         num_workers=self.arg.num_worker,
                         pin_memory=True if self.use_cuda else False
                     )
-                    self.print_log(f"Created validation dataloader with {len(self.data_loader['val'].dataset)} samples")
+                
+                self.print_log(f"Created {split} dataloader with {len(dataset)} samples")
         
             return True
         except Exception as e:
@@ -301,28 +341,26 @@ class SMVOptimizedTrainer:
         self.model.train()
         metrics = {
             'loss': 0,
+            'accuracy': 0,
+            'predictions': [],
+            'targets': [],
             'cls_loss': 0,
             'smv_loss': 0,
             'consistency_loss': 0,
-            'accuracy': 0,
-            'predictions': [],
-            'targets': []
+            'sensitivity': 0,
+            'specificity': 0,
         }
         
         process = tqdm(self.data_loader['train'], desc=f'Train Epoch {epoch}')
-        
         for batch_idx, (inputs, targets, _) in enumerate(process):
-            # Move data to device and apply augmentation
             inputs = self.augmentation(inputs)
             sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
             targets = targets.to(self.device)
             
-            # Mixed precision training with updated autocast
-            with autocast('cuda'):  # Specify device type
+            with autocast('cuda'):
                 logits, features = self.model(sensor_data)
                 loss, loss_dict = self.compute_loss(logits, targets, features)
             
-            # Optimizer step
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
@@ -333,7 +371,6 @@ class SMVOptimizedTrainer:
             if hasattr(self, 'scheduler'):
                 self.scheduler.step()
             
-            # Update metrics
             predictions = torch.argmax(logits, 1)
             metrics['predictions'].extend(predictions.cpu().numpy())
             metrics['targets'].extend(targets.cpu().numpy())
@@ -343,18 +380,25 @@ class SMVOptimizedTrainer:
             metrics['consistency_loss'] += loss_dict['consistency_loss']
             metrics['accuracy'] += (predictions == targets).sum().item()
             
-            # Update progress bar
+            # Update sensitivity and specificity
+            true_positive = ((predictions == 1) & (targets == 1)).sum().item()
+            true_negative = ((predictions == 0) & (targets == 0)).sum().item()
+            false_negative = ((predictions == 0) & (targets == 1)).sum().item()
+            false_positive = ((predictions == 1) & (targets == 0)).sum().item()
+            
+            metrics['sensitivity'] += true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
+            metrics['specificity'] += true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
+            
             process.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'acc': f"{100 * metrics['accuracy'] / ((batch_idx + 1) * targets.size(0)):.2f}%"
             })
         
-        # Compute final metrics
         n_samples = len(self.data_loader['train'].dataset)
-        for key in ['loss', 'cls_loss', 'smv_loss', 'consistency_loss']:
-            metrics[key] /= len(self.data_loader['train'])
+        metrics['loss'] /= len(self.data_loader['train'])
         metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
-        metrics['f1'] = f1_score(metrics['targets'], metrics['predictions'], average='binary')  # Use 'binary' for binary classification
+        metrics['sensitivity'] /= len(self.data_loader['train'])
+        metrics['specificity'] /= len(self.data_loader['train'])
         
         return metrics
 
@@ -429,7 +473,7 @@ class SMVOptimizedTrainer:
         """Main training loop with early stopping"""
         try:
             self.results = pd.DataFrame(columns=['epoch', 'train_loss', 'val_loss', 
-                                            'train_acc', 'val_acc', 'f1', 'auc'])
+                                            'train_acc', 'val_acc', 'f1', 'auc', 'sensitivity', 'specificity'])
             
             for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
                 self.print_log(f"\nEpoch {epoch}/{self.arg.num_epoch}")
@@ -439,7 +483,9 @@ class SMVOptimizedTrainer:
                 self.print_log(
                     f"Training - Loss: {train_metrics['loss']:.4f}, "
                     f"Acc: {train_metrics['accuracy']:.2f}%, "
-                    f"F1: {train_metrics['f1']:.4f}"
+                    f"F1: {f1_score(train_metrics['targets'], train_metrics['predictions'], zero_division=0):.4f}, "
+                    f"Sensitivity: {train_metrics['sensitivity']:.4f}, "
+                    f"Specificity: {train_metrics['specificity']:.4f}"
                 )
                 
                 # Validation phase
@@ -448,8 +494,10 @@ class SMVOptimizedTrainer:
                     self.print_log(
                         f"Validation - Loss: {val_metrics['loss']:.4f}, "
                         f"Acc: {val_metrics['accuracy']:.2f}%, "
-                        f"F1: {val_metrics['f1']:.4f}, "
-                        f"AUC: {val_metrics['auc']:.4f}"
+                        f"F1: {f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0):.4f}, "
+                        f"AUC: {roc_auc_score(val_metrics['targets'], val_metrics['predictions']):.4f}, "
+                        f"Sensitivity: {val_metrics['sensitivity']:.4f}, "
+                        f"Specificity: {val_metrics['specificity']:.4f}"
                     )
                     
                     # Save training history
@@ -457,14 +505,17 @@ class SMVOptimizedTrainer:
                         epoch,
                         train_metrics['loss'], val_metrics['loss'],
                         train_metrics['accuracy'], val_metrics['accuracy'],
-                        val_metrics['f1'], val_metrics['auc']
+                        f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0),
+                        roc_auc_score(val_metrics['targets'], val_metrics['predictions']),
+                        val_metrics['sensitivity'],
+                        val_metrics['specificity']
                     ]
                     
                     # Check for improvement
-                    if val_metrics['f1'] > self.best_f1:
-                        improvement = val_metrics['f1'] - self.best_f1
+                    if f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) > self.best_f1:
+                        improvement = f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) - self.best_f1
                         self.print_log(f"F1 score improved by {improvement:.4f}!")
-                        self.best_f1 = val_metrics['f1']
+                        self.best_f1 = f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0)
                         self.best_accuracy = val_metrics['accuracy']
                         self.best_loss = val_metrics['loss']
                         
@@ -474,7 +525,7 @@ class SMVOptimizedTrainer:
                         
                         self.best_model_path = os.path.join(
                             self.arg.work_dir,
-                            f'model_epoch_{epoch}_f1_{val_metrics["f1"]:.4f}.pth'
+                            f'model_epoch_{epoch}_f1_{f1_score(val_metrics["targets"], val_metrics["predictions"], zero_division=0):.4f}.pth'
                         )
                         
                         torch.save({
@@ -505,7 +556,7 @@ class SMVOptimizedTrainer:
                 
                 # Disabled plotting
                 # self.save_training_curves(epoch)
-                
+            
             # Final results
             self.print_log("\nTraining completed!")
             self.print_log(f"Best Validation Metrics:")
@@ -513,8 +564,32 @@ class SMVOptimizedTrainer:
             self.print_log(f"Accuracy: {self.best_accuracy:.2f}%")
             self.print_log(f"Loss: {self.best_loss:.4f}")
             
-            # Save final results
+            # Save training history
             self.results.to_csv(os.path.join(self.arg.work_dir, 'training_history.csv'))
+            
+            # Load best model for testing
+            if self.best_model_path and os.path.exists(self.best_model_path):
+                self.print_log(f"\nLoading best model from {self.best_model_path} for testing...")
+                checkpoint = torch.load(self.best_model_path, map_location=self.device)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Run testing if test data is available
+            if 'test' in self.data_loader:
+                self.print_log("\nEvaluating on test set...")
+                test_metrics = self.validate_on_test()
+                self.print_log(
+                    f"\nTest Set Results:"
+                    f"\n - Loss: {test_metrics['loss']:.4f}"
+                    f"\n - Accuracy: {test_metrics['accuracy']:.2f}%"
+                    f"\n - F1 Score: {f1_score(test_metrics['targets'], test_metrics['predictions'], zero_division=0):.4f}"
+                    f"\n - AUC: {roc_auc_score(test_metrics['targets'], test_metrics['predictions']):.4f}"
+                    f"\n - Sensitivity: {test_metrics['sensitivity']:.4f}"
+                    f"\n - Specificity: {test_metrics['specificity']:.4f}"
+                )
+                
+                # Save test results
+                test_results = pd.DataFrame([test_metrics])
+                test_results.to_csv(os.path.join(self.arg.work_dir, 'test_results.csv'))
             
         except Exception as e:
             self.print_log(f"Error in training loop: {str(e)}")
@@ -528,40 +603,80 @@ class SMVOptimizedTrainer:
             'accuracy': 0,
             'predictions': [],
             'targets': [],
-            'probabilities': []
+            'sensitivity': 0,
+            'specificity': 0,
         }
         
         with torch.no_grad():
             for inputs, targets, _ in tqdm(self.data_loader['val'], desc='Validation'):
                 sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
                 targets = targets.to(self.device)
-                
                 logits, features = self.model(sensor_data)
                 loss, _ = self.compute_loss(logits, targets, features)
                 
-                probabilities = F.softmax(logits, dim=1)
                 predictions = torch.argmax(logits, 1)
-                
-                metrics['loss'] += loss.item()
-                metrics['accuracy'] += (predictions == targets).sum().item()
                 metrics['predictions'].extend(predictions.cpu().numpy())
                 metrics['targets'].extend(targets.cpu().numpy())
-                metrics['probabilities'].extend(probabilities.cpu().numpy())
+                metrics['loss'] += loss.item()
+                metrics['accuracy'] += (predictions == targets).sum().item()
+                
+                # Update sensitivity and specificity
+                true_positive = ((predictions == 1) & (targets == 1)).sum().item()
+                true_negative = ((predictions == 0) & (targets == 0)).sum().item()
+                false_negative = ((predictions == 0) & (targets == 1)).sum().item()
+                false_positive = ((predictions == 1) & (targets == 0)).sum().item()
+                
+                metrics['sensitivity'] += true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
+                metrics['specificity'] += true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
         
-        # Compute final metrics
         n_samples = len(self.data_loader['val'].dataset)
         metrics['loss'] /= len(self.data_loader['val'])
         metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
-        metrics['f1'] = f1_score(metrics['targets'], metrics['predictions'], average='binary')  # Use 'binary' for binary classification
+        metrics['sensitivity'] /= len(self.data_loader['val'])
+        metrics['specificity'] /= len(self.data_loader['val'])
         
-        # Convert probabilities to numpy array and extract positive class probabilities
-        probabilities_np = np.array(metrics['probabilities'])  # Shape: [n_samples, 2]
-        positive_class_probs = probabilities_np[:, 1]           # Shape: [n_samples]
+        return metrics
+
+    def validate_on_test(self) -> Dict:
+        """Evaluate the model on the test set"""
+        self.model.eval()
+        metrics = {
+            'loss': 0,
+            'accuracy': 0,
+            'predictions': [],
+            'targets': [],
+            'sensitivity': 0,
+            'specificity': 0,
+        }
         
-        # Compute ROC AUC Score for binary classification
-        metrics['auc'] = roc_auc_score(metrics['targets'], positive_class_probs)
+        with torch.no_grad():
+            for inputs, targets, _ in tqdm(self.data_loader['test'], desc='Testing'):
+                sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
+                targets = targets.to(self.device)
+                logits, features = self.model(sensor_data)
+                loss, _ = self.compute_loss(logits, targets, features)
+                predictions = torch.argmax(logits, 1)
+                metrics['predictions'].extend(predictions.cpu().numpy())
+                metrics['targets'].extend(targets.cpu().numpy())
+                metrics['loss'] += loss.item()
+                metrics['accuracy'] += (predictions == targets).sum().item()
+                
+                # Update sensitivity and specificity
+                true_positive = ((predictions == 1) & (targets == 1)).sum().item()
+                true_negative = ((predictions == 0) & (targets == 0)).sum().item()
+                false_negative = ((predictions == 0) & (targets == 1)).sum().item()
+                false_positive = ((predictions == 1) & (targets == 0)).sum().item()
+                
+                metrics['sensitivity'] += true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
+                metrics['specificity'] += true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
         
-        return metrics   
+        n_samples = len(self.data_loader['test'].dataset)
+        metrics['loss'] /= len(self.data_loader['test'])
+        metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
+        metrics['sensitivity'] /= len(self.data_loader['test'])
+        metrics['specificity'] /= len(self.data_loader['test'])
+        
+        return metrics
 
     def save_training_curves(self, current_epoch):
         """Save training curves as plots - Disabled"""
@@ -584,6 +699,268 @@ class SMVOptimizedTrainer:
         self.setup_scheduler()
         self.print_log('Starting training...')
         self.train()
+
+    def cross_validate(self):
+        """Perform k-fold cross-validation"""
+        try:
+            self.print_log("\nStarting K-Fold Cross-Validation...")
+            
+            # Get all matched trials
+            builder = prepare_smartfallmm(self.arg)
+            all_subjects = sorted(list({trial.subject_id for trial in builder.dataset.matched_trials}))
+            
+            # Filter subjects that are in our arg.subjects list
+            available_subjects = sorted(list(set(all_subjects) & set(self.arg.subjects)))
+            n_subjects = len(available_subjects)
+            
+            if n_subjects < self.arg.n_folds:
+                self.print_log(f"Warning: Number of subjects ({n_subjects}) is less than number of folds ({self.arg.n_folds})")
+                self.arg.n_folds = n_subjects
+            
+            # Create folds
+            fold_size = n_subjects // self.arg.n_folds
+            folds = []
+            for i in range(self.arg.n_folds):
+                start_idx = i * fold_size
+                end_idx = start_idx + fold_size if i < self.arg.n_folds - 1 else n_subjects
+                folds.append(available_subjects[start_idx:end_idx])
+            
+            # Store fold metrics
+            fold_metrics = []
+            
+            # Perform k-fold cross-validation
+            for fold in range(self.arg.n_folds):
+                self.print_log(f"\n{'='*20} Fold {fold + 1}/{self.arg.n_folds} {'='*20}")
+                
+                # Reset model and optimizer for each fold
+                self.model = self.load_model()
+                self.load_optimizer()
+                if hasattr(self, 'scheduler'):
+                    self.setup_scheduler()
+                
+                # Split data for this fold
+                val_subjects = folds[fold]
+                train_subjects = []
+                for i in range(self.arg.n_folds):
+                    if i != fold:
+                        train_subjects.extend(folds[i])
+                
+                # Create dataloaders for this fold
+                self.load_fold_data(builder, train_subjects, val_subjects)
+                
+                # Train on this fold
+                fold_results = self.train_fold(fold)
+                fold_metrics.append(fold_results)
+                
+                # Clear memory
+                if hasattr(self, 'optimizer'):
+                    del self.optimizer
+                if hasattr(self, 'scheduler'):
+                    del self.scheduler
+                torch.cuda.empty_cache()
+            
+            # Compute and print average metrics across folds
+            self.print_cross_validation_results(fold_metrics)
+            
+        except Exception as e:
+            self.print_log(f"Error in cross-validation: {str(e)}")
+            traceback.print_exc()
+
+    def load_fold_data(self, builder, train_subjects, val_subjects):
+        """Load data for a specific fold"""
+        self.print_log(f"\nTraining subjects: {train_subjects}")
+        self.print_log(f"Validation subjects: {val_subjects}")
+        
+        self.data_loader = {}
+        
+        # Prepare training data
+        train_data = filter_subjects(builder, train_subjects)
+        if not train_data:
+            raise ValueError("No training data was loaded!")
+        
+        # Create training dataset
+        train_dataset = import_class(self.arg.feeder)(dataset=train_data, batch_size=self.arg.batch_size)
+        
+        # Create balanced sampler for training
+        labels = train_dataset.labels
+        class_counts = np.bincount(labels)
+        total_samples = len(labels)
+        class_weights = total_samples / (len(class_counts) * class_counts)
+        sample_weights = class_weights[labels]
+        
+        sampler = WeightedRandomSampler(
+            weights=torch.DoubleTensor(sample_weights),
+            num_samples=len(train_dataset),
+            replacement=True
+        )
+        
+        self.data_loader['train'] = torch.utils.data.DataLoader(
+            dataset=train_dataset,
+            batch_size=self.arg.batch_size,
+            sampler=sampler,
+            num_workers=self.arg.num_worker,
+            pin_memory=True if self.use_cuda else False,
+            drop_last=True
+        )
+        
+        # Prepare validation data
+        val_data = filter_subjects(builder, val_subjects)
+        if not val_data:
+            raise ValueError("No validation data was loaded!")
+        
+        self.data_loader['val'] = torch.utils.data.DataLoader(
+            dataset=import_class(self.arg.feeder)(dataset=val_data, batch_size=self.arg.batch_size),
+            batch_size=self.arg.batch_size,
+            shuffle=False,
+            num_workers=self.arg.num_worker,
+            pin_memory=True if self.use_cuda else False
+        )
+        
+        self.print_log(f"Created training dataloader with {len(train_dataset)} samples")
+        self.print_log(f"Created validation dataloader with {len(self.data_loader['val'].dataset)} samples")
+
+    def train_fold(self, fold: int) -> Dict:
+        """Train model on a specific fold"""
+        best_metrics = {
+            'fold': fold,
+            'best_epoch': 0,
+            'best_f1': 0,
+            'best_accuracy': 0,
+            'best_loss': float('inf'),
+            'best_auc': 0,
+            'best_sensitivity': 0,
+            'best_specificity': 0,
+        }
+        
+        early_stop_counter = 0
+        fold_results = pd.DataFrame(columns=['epoch', 'train_loss', 'val_loss', 
+                                           'train_acc', 'val_acc', 'f1', 'auc', 'sensitivity', 'specificity'])
+        
+        for epoch in range(self.arg.num_epoch):
+            self.print_log(f"\nFold {fold + 1} - Epoch {epoch}/{self.arg.num_epoch}")
+            
+            # Training phase
+            train_metrics = self.train_epoch(epoch)
+            self.print_log(
+                f"Training - Loss: {train_metrics['loss']:.4f}, "
+                f"Acc: {train_metrics['accuracy']:.2f}%, "
+                f"F1: {f1_score(train_metrics['targets'], train_metrics['predictions'], zero_division=0):.4f}, "
+                f"Sensitivity: {train_metrics['sensitivity']:.4f}, "
+                f"Specificity: {train_metrics['specificity']:.4f}"
+            )
+            
+            # Validation phase
+            val_metrics = self.validate()
+            self.print_log(
+                f"Validation - Loss: {val_metrics['loss']:.4f}, "
+                f"Acc: {val_metrics['accuracy']:.2f}%, "
+                f"F1: {f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0):.4f}, "
+                f"AUC: {roc_auc_score(val_metrics['targets'], val_metrics['predictions']):.4f}, "
+                f"Sensitivity: {val_metrics['sensitivity']:.4f}, "
+                f"Specificity: {val_metrics['specificity']:.4f}"
+            )
+            
+            # Save fold history
+            fold_results.loc[epoch] = [
+                epoch,
+                train_metrics['loss'], val_metrics['loss'],
+                train_metrics['accuracy'], val_metrics['accuracy'],
+                f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0),
+                roc_auc_score(val_metrics['targets'], val_metrics['predictions']),
+                val_metrics['sensitivity'],
+                val_metrics['specificity']
+            ]
+            
+            # Check for improvement
+            if f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) > best_metrics['best_f1']:
+                improvement = f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) - best_metrics['best_f1']
+                self.print_log(f"F1 score improved by {improvement:.4f}!")
+                
+                best_metrics.update({
+                    'best_epoch': epoch,
+                    'best_f1': f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0),
+                    'best_accuracy': val_metrics['accuracy'],
+                    'best_loss': val_metrics['loss'],
+                    'best_auc': roc_auc_score(val_metrics['targets'], val_metrics['predictions']),
+                    'best_sensitivity': val_metrics['sensitivity'],
+                    'best_specificity': val_metrics['specificity']
+                })
+                
+                # Save best model for this fold
+                fold_model_path = os.path.join(
+                    self.arg.work_dir,
+                    f'fold_{fold}_model_epoch_{epoch}_f1_{f1_score(val_metrics["targets"], val_metrics["predictions"], zero_division=0):.4f}.pth'
+                )
+                
+                torch.save({
+                    'fold': fold,
+                    'epoch': epoch,
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'scheduler_state_dict': self.scheduler.state_dict() if hasattr(self, 'scheduler') else None,
+                    'best_f1': best_metrics['best_f1'],
+                    'metrics': val_metrics
+                }, fold_model_path)
+                
+                self.print_log(f"Model saved to {fold_model_path}")
+                early_stop_counter = 0
+            else:
+                early_stop_counter += 1
+                self.print_log(
+                    f"No improvement in F1 score for {early_stop_counter} epochs. "
+                    f"Best F1: {best_metrics['best_f1']:.4f}"
+                )
+            
+            # Early stopping check
+            if early_stop_counter >= self.early_stopping_patience:
+                self.print_log(
+                    f"\nEarly stopping triggered after {epoch} epochs. "
+                    f"Best F1: {best_metrics['best_f1']:.4f}"
+                )
+                break
+        
+        # Save fold results
+        fold_results.to_csv(os.path.join(self.arg.work_dir, f'fold_{fold}_history.csv'))
+        return best_metrics
+
+    def print_cross_validation_results(self, fold_metrics: List[Dict]):
+        """Print and save cross-validation results"""
+        self.print_log("\n" + "="*50)
+        self.print_log("Cross-Validation Results Summary")
+        self.print_log("="*50)
+        
+        # Convert metrics to DataFrame for easy analysis
+        metrics_df = pd.DataFrame(fold_metrics)
+        
+        # Calculate mean and std for each metric
+        mean_metrics = metrics_df[['best_f1', 'best_accuracy', 'best_loss', 'best_auc', 'best_sensitivity', 'best_specificity']].mean()
+        std_metrics = metrics_df[['best_f1', 'best_accuracy', 'best_loss', 'best_auc', 'best_sensitivity', 'best_specificity']].std()
+        
+        # Print results
+        self.print_log("\nAverage Metrics Across Folds:")
+        self.print_log(f"F1 Score: {mean_metrics['best_f1']:.4f} ± {std_metrics['best_f1']:.4f}")
+        self.print_log(f"Accuracy: {mean_metrics['best_accuracy']:.2f}% ± {std_metrics['best_accuracy']:.2f}%")
+        self.print_log(f"Loss: {mean_metrics['best_loss']:.4f} ± {std_metrics['best_loss']:.4f}")
+        self.print_log(f"AUC: {mean_metrics['best_auc']:.4f} ± {std_metrics['best_auc']:.4f}")
+        self.print_log(f"Sensitivity: {mean_metrics['best_sensitivity']:.4f} ± {std_metrics['best_sensitivity']:.4f}")
+        self.print_log(f"Specificity: {mean_metrics['best_specificity']:.4f} ± {std_metrics['best_specificity']:.4f}")
+        
+        # Print per-fold results
+        self.print_log("\nPer-Fold Best Results:")
+        for fold, metrics in enumerate(fold_metrics):
+            self.print_log(f"\nFold {fold + 1}:")
+            self.print_log(f"  Best Epoch: {metrics['best_epoch']}")
+            self.print_log(f"  F1 Score: {metrics['best_f1']:.4f}")
+            self.print_log(f"  Accuracy: {metrics['best_accuracy']:.2f}%")
+            self.print_log(f"  Loss: {metrics['best_loss']:.4f}")
+            self.print_log(f"  AUC: {metrics['best_auc']:.4f}")
+            self.print_log(f"  Sensitivity: {metrics['best_sensitivity']:.4f}")
+            self.print_log(f"  Specificity: {metrics['best_specificity']:.4f}")
+        
+        # Save detailed results
+        results_path = os.path.join(self.arg.work_dir, 'cross_validation_results.csv')
+        metrics_df.to_csv(results_path)
+        self.print_log(f"\nDetailed results saved to: {results_path}")
 
 def get_args():
     '''
@@ -656,6 +1033,11 @@ def get_args():
     parser.add_argument('--num-worker', type=int, default=4,
                        help='number of workers for data loading')
     parser.add_argument('--result-file', type=str, help='Name of result file')
+    parser.add_argument('--cross-validation', type=str2bool, default=False,
+                       help='Perform k-fold cross-validation')
+    parser.add_argument('--n-folds', type=int, default=5,
+                       help='Number of folds for cross-validation')
+    parser.add_argument('--aug-args', default=dict(), help='A dictionary for augmentation args')
 
     return parser
 

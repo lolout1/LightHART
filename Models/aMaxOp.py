@@ -97,48 +97,43 @@ class AttentionModule(nn.Module):
         return x
 
 class FallDetectionModel(nn.Module):
-    """
-    Enhanced Fall Detection Model with optimized architecture for 32ms sampling rate
-    and improved feature fusion for better accuracy.
-    """
     def __init__(self, seq_len=128, num_channels=3, num_filters=128, num_classes=1):
         super(FallDetectionModel, self).__init__()
         
-        # Increased number of filters for richer feature extraction
-        self.seq_len = seq_len
-        
-        # Enhanced TCN for watch data with increased depth
-        self.watch_tcn = nn.Sequential(
-            ResTCNBlock(num_channels, num_filters, kernel_size=7, dilation=1),
-            ResTCNBlock(num_filters, num_filters, kernel_size=7, dilation=2),
-            ResTCNBlock(num_filters, num_filters, kernel_size=7, dilation=4),
-            ResTCNBlock(num_filters, num_filters, kernel_size=7, dilation=8)
+        # Add frequency-aware convolutions for impact detection
+        self.frequency_conv = nn.Sequential(
+            nn.Conv1d(num_channels, num_filters//2, kernel_size=15, padding=7),
+            nn.BatchNorm1d(num_filters//2),
+            nn.GELU(),
+            nn.Conv1d(num_filters//2, num_filters, kernel_size=7, padding=3),
+            nn.BatchNorm1d(num_filters),
+            nn.GELU()
         )
         
-        # Enhanced TCN for phone data
-        self.phone_tcn = nn.Sequential(
-            ResTCNBlock(num_channels, num_filters, kernel_size=7, dilation=1),
-            ResTCNBlock(num_filters, num_filters, kernel_size=7, dilation=2),
-            ResTCNBlock(num_filters, num_filters, kernel_size=7, dilation=4),
-            ResTCNBlock(num_filters, num_filters, kernel_size=7, dilation=8)
+        # Modify TCN blocks for multi-scale feature extraction
+        self.watch_tcn = nn.ModuleList([
+            ResTCNBlock(num_filters, num_filters, kernel_size=k, dilation=d)
+            for k, d in [(3,1), (5,2), (7,4), (9,8)]  # Multiple kernel sizes
+        ])
+        
+        # Add explicit fall pattern detection module
+        self.fall_pattern_detector = nn.Sequential(
+            nn.Linear(num_filters * 2, num_filters),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(num_filters, 3),  # Detect pre-fall, impact, and post-fall
+            nn.Softmax(dim=-1)
         )
         
-        # Enhanced attention modules with more heads
-        self.watch_attention = AttentionModule(embed_dim=num_filters, num_heads=8)
-        self.phone_attention = AttentionModule(embed_dim=num_filters, num_heads=8)
-        
-        # Advanced feature fusion with cross-attention
-        self.fusion_attention = AttentionModule(embed_dim=num_filters * 2, num_heads=8)
-        
-        # Enhanced classifier with deeper architecture
+        # Modified classifier with fall pattern awareness
         self.classifier = nn.Sequential(
-            nn.Linear(num_filters * 2, num_filters * 4),
+            nn.Linear(num_filters * 2 + 3, num_filters * 2),  # Added fall pattern features
             nn.GELU(),
             nn.Dropout(0.3),
-            nn.Linear(num_filters * 4, num_filters * 2),
+            nn.Linear(num_filters * 2, num_filters),
             nn.GELU(),
             nn.Dropout(0.3),
-            nn.Linear(num_filters * 2, 1)
+            nn.Linear(num_filters, 1)
         )
 
     def forward(self, x):

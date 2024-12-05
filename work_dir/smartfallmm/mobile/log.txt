@@ -1,0 +1,2566 @@
+[ Thu Dec  5 01:03:52 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:03:52 2024 ] Setting up environment...
+[ Thu Dec  5 01:03:53 2024 ] Using GPU device 0
+[ Thu Dec  5 01:03:53 2024 ] Initializing components...
+[ Thu Dec  5 01:04:31 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:04:31 2024 ] Setting up environment...
+[ Thu Dec  5 01:04:32 2024 ] Using GPU device 0
+[ Thu Dec  5 01:04:32 2024 ] Initializing components...
+[ Thu Dec  5 01:04:46 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:04:46 2024 ] Setting up environment...
+[ Thu Dec  5 01:04:47 2024 ] Using GPU device 0
+[ Thu Dec  5 01:04:47 2024 ] Initializing components...
+[ Thu Dec  5 01:04:59 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:04:59 2024 ] Setting up environment...
+[ Thu Dec  5 01:04:59 2024 ] Using GPU device 0
+[ Thu Dec  5 01:04:59 2024 ] Initializing components...
+[ Thu Dec  5 01:05:57 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:05:57 2024 ] Setting up environment...
+[ Thu Dec  5 01:05:57 2024 ] Using GPU device 0
+[ Thu Dec  5 01:05:57 2024 ] Initializing components...
+[ Thu Dec  5 01:05:57 2024 ] Model EnhancedDualPathFallDetector(
+  (phone_xyz_processor): EnhancedXYZProcessor(
+    (xyz_encoder): Sequential(
+      (0): Conv1d(3, 16, kernel_size=(5,), stride=(1,), padding=(2,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(7,), stride=(1,), padding=(3,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(9,), stride=(1,), padding=(4,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (attention): MultiheadAttention(
+      (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (phone_smv_processor): EnhancedSMVProcessor(
+    (smv_encoder): Sequential(
+      (0): Conv1d(1, 16, kernel_size=(7,), stride=(1,), padding=(3,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(11,), stride=(1,), padding=(5,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(15,), stride=(1,), padding=(7,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (threshold_learner): Sequential(
+      (0): AdaptiveMaxPool1d(output_size=1)
+      (1): Flatten(start_dim=1, end_dim=-1)
+      (2): Linear(in_features=32, out_features=16, bias=True)
+      (3): GELU(approximate='none')
+      (4): Dropout(p=0.1, inplace=False)
+      (5): Linear(in_features=16, out_features=8, bias=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Linear(in_features=8, out_features=1, bias=True)
+      (9): Sigmoid()
+    )
+  )
+  (watch_xyz_processor): EnhancedXYZProcessor(
+    (xyz_encoder): Sequential(
+      (0): Conv1d(3, 16, kernel_size=(5,), stride=(1,), padding=(2,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(7,), stride=(1,), padding=(3,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(9,), stride=(1,), padding=(4,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (attention): MultiheadAttention(
+      (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (watch_smv_processor): EnhancedSMVProcessor(
+    (smv_encoder): Sequential(
+      (0): Conv1d(1, 16, kernel_size=(7,), stride=(1,), padding=(3,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(11,), stride=(1,), padding=(5,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(15,), stride=(1,), padding=(7,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (threshold_learner): Sequential(
+      (0): AdaptiveMaxPool1d(output_size=1)
+      (1): Flatten(start_dim=1, end_dim=-1)
+      (2): Linear(in_features=32, out_features=16, bias=True)
+      (3): GELU(approximate='none')
+      (4): Dropout(p=0.1, inplace=False)
+      (5): Linear(in_features=16, out_features=8, bias=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Linear(in_features=8, out_features=1, bias=True)
+      (9): Sigmoid()
+    )
+  )
+  (fusion): Sequential(
+    (0): Linear(in_features=128, out_features=96, bias=True)
+    (1): LayerNorm((96,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=96, out_features=64, bias=True)
+    (5): LayerNorm((64,), eps=1e-05, elementwise_affine=True)
+    (6): GELU(approximate='none')
+    (7): Dropout(p=0.1, inplace=False)
+    (8): Linear(in_features=64, out_features=32, bias=True)
+  )
+  (transformer): TransformerEncoder(
+    (layers): ModuleList(
+      (0-5): 6 x TransformerEncoderLayer(
+        (self_attn): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+        )
+        (linear1): Linear(in_features=32, out_features=128, bias=True)
+        (dropout): Dropout(p=0.1, inplace=False)
+        (linear2): Linear(in_features=128, out_features=32, bias=True)
+        (norm1): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+        (norm2): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+        (dropout1): Dropout(p=0.1, inplace=False)
+        (dropout2): Dropout(p=0.1, inplace=False)
+      )
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (classifier): Sequential(
+    (0): Linear(in_features=64, out_features=32, bias=True)
+    (1): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=32, out_features=16, bias=True)
+    (5): LayerNorm((16,), eps=1e-05, elementwise_affine=True)
+    (6): GELU(approximate='none')
+    (7): Dropout(p=0.1, inplace=False)
+    (8): Linear(in_features=16, out_features=2, bias=True)
+  )
+  (fall_feature_extractor): Sequential(
+    (0): Linear(in_features=32, out_features=16, bias=True)
+    (1): LayerNorm((16,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=16, out_features=32, bias=True)
+  )
+) loaded successfully
+[ Thu Dec  5 01:05:58 2024 ] 
+Starting K-Fold Cross-Validation...
+[ Thu Dec  5 01:05:58 2024 ] 
+==================== Fold 1/5 ====================
+[ Thu Dec  5 01:05:58 2024 ] Error in cross-validation: SMVOptimizedTrainer.load_model() missing 2 required positional arguments: 'model' and 'model_args'
+[ Thu Dec  5 01:05:58 2024 ] Loading dataset...
+[ Thu Dec  5 01:05:58 2024 ] All available subjects in matched trials: [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+[ Thu Dec  5 01:05:58 2024 ] Subjects available for training/validation/test: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
+[ Thu Dec  5 01:05:58 2024 ] 
+Split:
+[ Thu Dec  5 01:05:58 2024 ] Training subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39]
+[ Thu Dec  5 01:05:58 2024 ] Validation subjects: [43, 44]
+[ Thu Dec  5 01:05:58 2024 ] Test subjects: [45, 46]
+[ Thu Dec  5 01:06:01 2024 ] Training set class distribution: [245 161]
+[ Thu Dec  5 01:06:01 2024 ] Created train dataloader with 406 samples
+[ Thu Dec  5 01:06:02 2024 ] Created val dataloader with 110 samples
+[ Thu Dec  5 01:06:03 2024 ] Created test dataloader with 97 samples
+[ Thu Dec  5 01:06:03 2024 ] Starting training...
+[ Thu Dec  5 01:06:03 2024 ] 
+Epoch 0/300
+[ Thu Dec  5 01:06:05 2024 ] Training - Loss: 1.0210, Acc: 44.09%, F1: 0.5455
+[ Thu Dec  5 01:06:05 2024 ] Validation - Loss: 1.0387, Acc: 38.18%, F1: 0.5000, AUC: 0.3270
+[ Thu Dec  5 01:06:05 2024 ] F1 score improved by 0.5000!
+[ Thu Dec  5 01:06:05 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_0_f1_0.5000.pth
+[ Thu Dec  5 01:06:05 2024 ] 
+Epoch 1/300
+[ Thu Dec  5 01:06:06 2024 ] Training - Loss: 1.0102, Acc: 46.06%, F1: 0.5513
+[ Thu Dec  5 01:06:06 2024 ] Validation - Loss: 1.0344, Acc: 42.73%, F1: 0.5772, AUC: 0.3880
+[ Thu Dec  5 01:06:06 2024 ] F1 score improved by 0.0772!
+[ Thu Dec  5 01:06:06 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_1_f1_0.5772.pth
+[ Thu Dec  5 01:06:06 2024 ] 
+Epoch 2/300
+[ Thu Dec  5 01:06:07 2024 ] Training - Loss: 0.9765, Acc: 55.42%, F1: 0.6595
+[ Thu Dec  5 01:06:07 2024 ] Validation - Loss: 0.9921, Acc: 45.45%, F1: 0.5833, AUC: 0.5485
+[ Thu Dec  5 01:06:07 2024 ] F1 score improved by 0.0062!
+[ Thu Dec  5 01:06:07 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_2_f1_0.5833.pth
+[ Thu Dec  5 01:06:07 2024 ] 
+Epoch 3/300
+[ Thu Dec  5 01:06:08 2024 ] Training - Loss: 0.9343, Acc: 59.36%, F1: 0.6829
+[ Thu Dec  5 01:06:08 2024 ] Validation - Loss: 0.9469, Acc: 55.45%, F1: 0.6202, AUC: 0.6812
+[ Thu Dec  5 01:06:08 2024 ] F1 score improved by 0.0368!
+[ Thu Dec  5 01:06:08 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_3_f1_0.6202.pth
+[ Thu Dec  5 01:06:08 2024 ] 
+Epoch 4/300
+[ Thu Dec  5 01:06:09 2024 ] Training - Loss: 0.8736, Acc: 72.41%, F1: 0.7692
+[ Thu Dec  5 01:06:09 2024 ] Validation - Loss: 0.8592, Acc: 72.73%, F1: 0.7222, AUC: 0.8117
+[ Thu Dec  5 01:06:09 2024 ] F1 score improved by 0.1021!
+[ Thu Dec  5 01:06:09 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_4_f1_0.7222.pth
+[ Thu Dec  5 01:06:09 2024 ] 
+Epoch 5/300
+[ Thu Dec  5 01:06:10 2024 ] Training - Loss: 0.7903, Acc: 76.11%, F1: 0.8000
+[ Thu Dec  5 01:06:10 2024 ] Validation - Loss: 0.7875, Acc: 78.18%, F1: 0.7895, AUC: 0.8759
+[ Thu Dec  5 01:06:10 2024 ] F1 score improved by 0.0673!
+[ Thu Dec  5 01:06:10 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_5_f1_0.7895.pth
+[ Thu Dec  5 01:06:10 2024 ] 
+Epoch 6/300
+[ Thu Dec  5 01:06:11 2024 ] Training - Loss: 0.7110, Acc: 81.77%, F1: 0.8653
+[ Thu Dec  5 01:06:11 2024 ] Validation - Loss: 0.7136, Acc: 84.55%, F1: 0.8411, AUC: 0.9139
+[ Thu Dec  5 01:06:11 2024 ] F1 score improved by 0.0516!
+[ Thu Dec  5 01:06:11 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_6_f1_0.8411.pth
+[ Thu Dec  5 01:06:11 2024 ] 
+Epoch 7/300
+[ Thu Dec  5 01:06:12 2024 ] Training - Loss: 0.6617, Acc: 84.24%, F1: 0.8895
+[ Thu Dec  5 01:06:12 2024 ] Validation - Loss: 0.6841, Acc: 88.18%, F1: 0.8829, AUC: 0.9113
+[ Thu Dec  5 01:06:12 2024 ] F1 score improved by 0.0418!
+[ Thu Dec  5 01:06:12 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_7_f1_0.8829.pth
+[ Thu Dec  5 01:06:12 2024 ] 
+Epoch 8/300
+[ Thu Dec  5 01:06:13 2024 ] Training - Loss: 0.6339, Acc: 85.47%, F1: 0.8975
+[ Thu Dec  5 01:06:13 2024 ] Validation - Loss: 0.7802, Acc: 76.36%, F1: 0.7292, AUC: 0.8623
+[ Thu Dec  5 01:06:13 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:13 2024 ] 
+Epoch 9/300
+[ Thu Dec  5 01:06:14 2024 ] Training - Loss: 0.6230, Acc: 85.71%, F1: 0.9006
+[ Thu Dec  5 01:06:14 2024 ] Validation - Loss: 0.7598, Acc: 76.36%, F1: 0.7547, AUC: 0.8623
+[ Thu Dec  5 01:06:14 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:14 2024 ] 
+Epoch 10/300
+[ Thu Dec  5 01:06:15 2024 ] Training - Loss: 0.5358, Acc: 89.41%, F1: 0.9481
+[ Thu Dec  5 01:06:15 2024 ] Validation - Loss: 0.7636, Acc: 80.00%, F1: 0.7755, AUC: 0.8888
+[ Thu Dec  5 01:06:15 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:15 2024 ] 
+Epoch 11/300
+[ Thu Dec  5 01:06:16 2024 ] Training - Loss: 0.5439, Acc: 88.67%, F1: 0.9397
+[ Thu Dec  5 01:06:16 2024 ] Validation - Loss: 0.9527, Acc: 72.73%, F1: 0.6939, AUC: 0.7845
+[ Thu Dec  5 01:06:16 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:16 2024 ] 
+Epoch 12/300
+[ Thu Dec  5 01:06:17 2024 ] Training - Loss: 0.5550, Acc: 86.95%, F1: 0.9215
+[ Thu Dec  5 01:06:17 2024 ] Validation - Loss: 0.8205, Acc: 79.09%, F1: 0.7810, AUC: 0.8504
+[ Thu Dec  5 01:06:17 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:17 2024 ] 
+Epoch 13/300
+[ Thu Dec  5 01:06:18 2024 ] Training - Loss: 0.5186, Acc: 88.92%, F1: 0.9438
+[ Thu Dec  5 01:06:18 2024 ] Validation - Loss: 0.9176, Acc: 70.91%, F1: 0.6800, AUC: 0.8037
+[ Thu Dec  5 01:06:18 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:18 2024 ] 
+Epoch 14/300
+[ Thu Dec  5 01:06:19 2024 ] Training - Loss: 0.5154, Acc: 88.67%, F1: 0.9417
+[ Thu Dec  5 01:06:19 2024 ] Validation - Loss: 0.8423, Acc: 71.82%, F1: 0.7304, AUC: 0.8457
+[ Thu Dec  5 01:06:19 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:19 2024 ] 
+Epoch 15/300
+[ Thu Dec  5 01:06:20 2024 ] Training - Loss: 0.4982, Acc: 89.66%, F1: 0.9451
+[ Thu Dec  5 01:06:20 2024 ] Validation - Loss: 0.6357, Acc: 83.64%, F1: 0.8421, AUC: 0.9259
+[ Thu Dec  5 01:06:20 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:20 2024 ] 
+Epoch 16/300
+[ Thu Dec  5 01:06:21 2024 ] Training - Loss: 0.4938, Acc: 89.66%, F1: 0.9495
+[ Thu Dec  5 01:06:21 2024 ] Validation - Loss: 0.6617, Acc: 82.73%, F1: 0.8348, AUC: 0.9096
+[ Thu Dec  5 01:06:21 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:21 2024 ] 
+Epoch 17/300
+[ Thu Dec  5 01:06:22 2024 ] Training - Loss: 0.4664, Acc: 90.64%, F1: 0.9604
+[ Thu Dec  5 01:06:22 2024 ] Validation - Loss: 0.7662, Acc: 80.91%, F1: 0.8073, AUC: 0.9106
+[ Thu Dec  5 01:06:22 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:22 2024 ] 
+Epoch 18/300
+[ Thu Dec  5 01:06:23 2024 ] Training - Loss: 0.4463, Acc: 91.87%, F1: 0.9740
+[ Thu Dec  5 01:06:23 2024 ] Validation - Loss: 0.8690, Acc: 76.36%, F1: 0.7547, AUC: 0.8835
+[ Thu Dec  5 01:06:23 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:23 2024 ] 
+Epoch 19/300
+[ Thu Dec  5 01:06:24 2024 ] Training - Loss: 0.4716, Acc: 89.41%, F1: 0.9460
+[ Thu Dec  5 01:06:24 2024 ] Validation - Loss: 0.7718, Acc: 81.82%, F1: 0.8000, AUC: 0.9017
+[ Thu Dec  5 01:06:24 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:24 2024 ] 
+Epoch 20/300
+[ Thu Dec  5 01:06:25 2024 ] Training - Loss: 0.4695, Acc: 90.39%, F1: 0.9558
+[ Thu Dec  5 01:06:25 2024 ] Validation - Loss: 0.6335, Acc: 85.45%, F1: 0.8491, AUC: 0.9295
+[ Thu Dec  5 01:06:25 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:25 2024 ] 
+Epoch 21/300
+[ Thu Dec  5 01:06:26 2024 ] Training - Loss: 0.4885, Acc: 88.92%, F1: 0.9415
+[ Thu Dec  5 01:06:26 2024 ] Validation - Loss: 1.0538, Acc: 71.82%, F1: 0.7048, AUC: 0.7987
+[ Thu Dec  5 01:06:26 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:26 2024 ] 
+Epoch 22/300
+[ Thu Dec  5 01:06:27 2024 ] Training - Loss: 0.4192, Acc: 91.87%, F1: 0.9704
+[ Thu Dec  5 01:06:27 2024 ] Validation - Loss: 0.8929, Acc: 77.27%, F1: 0.7619, AUC: 0.8934
+[ Thu Dec  5 01:06:27 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:27 2024 ] 
+Epoch 23/300
+[ Thu Dec  5 01:06:28 2024 ] Training - Loss: 0.4382, Acc: 91.87%, F1: 0.9708
+[ Thu Dec  5 01:06:28 2024 ] Validation - Loss: 0.8154, Acc: 79.09%, F1: 0.7890, AUC: 0.9050
+[ Thu Dec  5 01:06:28 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:28 2024 ] 
+Epoch 24/300
+[ Thu Dec  5 01:06:29 2024 ] Training - Loss: 0.4092, Acc: 92.36%, F1: 0.9777
+[ Thu Dec  5 01:06:29 2024 ] Validation - Loss: 0.7864, Acc: 80.00%, F1: 0.8000, AUC: 0.9020
+[ Thu Dec  5 01:06:29 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:29 2024 ] 
+Epoch 25/300
+[ Thu Dec  5 01:06:30 2024 ] Training - Loss: 0.4293, Acc: 91.63%, F1: 0.9701
+[ Thu Dec  5 01:06:30 2024 ] Validation - Loss: 0.9113, Acc: 78.18%, F1: 0.7736, AUC: 0.8967
+[ Thu Dec  5 01:06:30 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:30 2024 ] 
+Epoch 26/300
+[ Thu Dec  5 01:06:31 2024 ] Training - Loss: 0.4323, Acc: 91.13%, F1: 0.9650
+[ Thu Dec  5 01:06:31 2024 ] Validation - Loss: 0.9784, Acc: 75.45%, F1: 0.7568, AUC: 0.8504
+[ Thu Dec  5 01:06:31 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:31 2024 ] 
+Epoch 27/300
+[ Thu Dec  5 01:06:32 2024 ] Training - Loss: 0.4116, Acc: 91.63%, F1: 0.9659
+[ Thu Dec  5 01:06:33 2024 ] Validation - Loss: 0.8590, Acc: 80.00%, F1: 0.7963, AUC: 0.9126
+[ Thu Dec  5 01:06:33 2024 ] No improvement in F1 score for 20 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:33 2024 ] 
+Epoch 28/300
+[ Thu Dec  5 01:06:33 2024 ] Training - Loss: 0.4335, Acc: 91.13%, F1: 0.9639
+[ Thu Dec  5 01:06:33 2024 ] Validation - Loss: 0.7273, Acc: 81.82%, F1: 0.8182, AUC: 0.9282
+[ Thu Dec  5 01:06:33 2024 ] No improvement in F1 score for 21 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:33 2024 ] 
+Epoch 29/300
+[ Thu Dec  5 01:06:34 2024 ] Training - Loss: 0.4573, Acc: 90.15%, F1: 0.9500
+[ Thu Dec  5 01:06:34 2024 ] Validation - Loss: 0.6817, Acc: 82.73%, F1: 0.8257, AUC: 0.9272
+[ Thu Dec  5 01:06:34 2024 ] No improvement in F1 score for 22 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:34 2024 ] 
+Epoch 30/300
+[ Thu Dec  5 01:06:35 2024 ] Training - Loss: 0.4181, Acc: 92.36%, F1: 0.9761
+[ Thu Dec  5 01:06:35 2024 ] Validation - Loss: 0.7490, Acc: 82.73%, F1: 0.8288, AUC: 0.9235
+[ Thu Dec  5 01:06:35 2024 ] No improvement in F1 score for 23 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:35 2024 ] 
+Epoch 31/300
+[ Thu Dec  5 01:06:36 2024 ] Training - Loss: 0.4144, Acc: 91.63%, F1: 0.9679
+[ Thu Dec  5 01:06:36 2024 ] Validation - Loss: 0.6961, Acc: 83.64%, F1: 0.8448, AUC: 0.9272
+[ Thu Dec  5 01:06:36 2024 ] No improvement in F1 score for 24 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:36 2024 ] 
+Epoch 32/300
+[ Thu Dec  5 01:06:37 2024 ] Training - Loss: 0.3838, Acc: 92.36%, F1: 0.9771
+[ Thu Dec  5 01:06:38 2024 ] Validation - Loss: 0.6804, Acc: 83.64%, F1: 0.8393, AUC: 0.9386
+[ Thu Dec  5 01:06:38 2024 ] No improvement in F1 score for 25 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:38 2024 ] 
+Epoch 33/300
+[ Thu Dec  5 01:06:39 2024 ] Training - Loss: 0.3925, Acc: 92.12%, F1: 0.9750
+[ Thu Dec  5 01:06:39 2024 ] Validation - Loss: 0.6679, Acc: 84.55%, F1: 0.8468, AUC: 0.9391
+[ Thu Dec  5 01:06:39 2024 ] No improvement in F1 score for 26 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:39 2024 ] 
+Epoch 34/300
+[ Thu Dec  5 01:06:40 2024 ] Training - Loss: 0.3915, Acc: 92.36%, F1: 0.9782
+[ Thu Dec  5 01:06:40 2024 ] Validation - Loss: 0.6675, Acc: 83.64%, F1: 0.8393, AUC: 0.9447
+[ Thu Dec  5 01:06:40 2024 ] No improvement in F1 score for 27 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:40 2024 ] 
+Epoch 35/300
+[ Thu Dec  5 01:06:41 2024 ] Training - Loss: 0.3881, Acc: 92.61%, F1: 0.9779
+[ Thu Dec  5 01:06:41 2024 ] Validation - Loss: 0.6365, Acc: 84.55%, F1: 0.8468, AUC: 0.9487
+[ Thu Dec  5 01:06:41 2024 ] No improvement in F1 score for 28 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:06:41 2024 ] 
+Epoch 36/300
+[ Thu Dec  5 01:06:42 2024 ] Training - Loss: 0.3574, Acc: 93.60%, F1: 0.9886
+[ Thu Dec  5 01:06:42 2024 ] Validation - Loss: 0.5040, Acc: 90.91%, F1: 0.9091, AUC: 0.9633
+[ Thu Dec  5 01:06:42 2024 ] F1 score improved by 0.0262!
+[ Thu Dec  5 01:06:42 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_36_f1_0.9091.pth
+[ Thu Dec  5 01:06:42 2024 ] 
+Epoch 37/300
+[ Thu Dec  5 01:06:43 2024 ] Training - Loss: 0.3828, Acc: 92.36%, F1: 0.9776
+[ Thu Dec  5 01:06:43 2024 ] Validation - Loss: 0.6708, Acc: 87.27%, F1: 0.8654, AUC: 0.9335
+[ Thu Dec  5 01:06:43 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:43 2024 ] 
+Epoch 38/300
+[ Thu Dec  5 01:06:44 2024 ] Training - Loss: 0.3394, Acc: 93.60%, F1: 0.9888
+[ Thu Dec  5 01:06:44 2024 ] Validation - Loss: 0.6460, Acc: 87.27%, F1: 0.8654, AUC: 0.9447
+[ Thu Dec  5 01:06:44 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:44 2024 ] 
+Epoch 39/300
+[ Thu Dec  5 01:06:45 2024 ] Training - Loss: 0.3422, Acc: 93.35%, F1: 0.9870
+[ Thu Dec  5 01:06:45 2024 ] Validation - Loss: 0.7304, Acc: 86.36%, F1: 0.8544, AUC: 0.9401
+[ Thu Dec  5 01:06:45 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:45 2024 ] 
+Epoch 40/300
+[ Thu Dec  5 01:06:46 2024 ] Training - Loss: 0.3728, Acc: 92.61%, F1: 0.9785
+[ Thu Dec  5 01:06:47 2024 ] Validation - Loss: 0.7388, Acc: 83.64%, F1: 0.8364, AUC: 0.9411
+[ Thu Dec  5 01:06:47 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:47 2024 ] 
+Epoch 41/300
+[ Thu Dec  5 01:06:47 2024 ] Training - Loss: 0.3384, Acc: 93.35%, F1: 0.9867
+[ Thu Dec  5 01:06:47 2024 ] Validation - Loss: 0.8391, Acc: 80.91%, F1: 0.8108, AUC: 0.9298
+[ Thu Dec  5 01:06:47 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:47 2024 ] 
+Epoch 42/300
+[ Thu Dec  5 01:06:48 2024 ] Training - Loss: 0.3690, Acc: 93.10%, F1: 0.9815
+[ Thu Dec  5 01:06:49 2024 ] Validation - Loss: 0.6978, Acc: 84.55%, F1: 0.8468, AUC: 0.9494
+[ Thu Dec  5 01:06:49 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:49 2024 ] 
+Epoch 43/300
+[ Thu Dec  5 01:06:50 2024 ] Training - Loss: 0.3149, Acc: 94.09%, F1: 0.9951
+[ Thu Dec  5 01:06:50 2024 ] Validation - Loss: 0.7698, Acc: 86.36%, F1: 0.8544, AUC: 0.9513
+[ Thu Dec  5 01:06:50 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:50 2024 ] 
+Epoch 44/300
+[ Thu Dec  5 01:06:50 2024 ] Training - Loss: 0.3834, Acc: 91.87%, F1: 0.9711
+[ Thu Dec  5 01:06:51 2024 ] Validation - Loss: 0.6950, Acc: 89.09%, F1: 0.8776, AUC: 0.9222
+[ Thu Dec  5 01:06:51 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:51 2024 ] 
+Epoch 45/300
+[ Thu Dec  5 01:06:52 2024 ] Training - Loss: 0.3701, Acc: 92.61%, F1: 0.9778
+[ Thu Dec  5 01:06:52 2024 ] Validation - Loss: 0.7502, Acc: 85.45%, F1: 0.8462, AUC: 0.9202
+[ Thu Dec  5 01:06:52 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:52 2024 ] 
+Epoch 46/300
+[ Thu Dec  5 01:06:53 2024 ] Training - Loss: 0.3340, Acc: 93.84%, F1: 0.9922
+[ Thu Dec  5 01:06:53 2024 ] Validation - Loss: 0.6435, Acc: 87.27%, F1: 0.8679, AUC: 0.9419
+[ Thu Dec  5 01:06:53 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:53 2024 ] 
+Epoch 47/300
+[ Thu Dec  5 01:06:54 2024 ] Training - Loss: 0.3210, Acc: 93.84%, F1: 0.9922
+[ Thu Dec  5 01:06:54 2024 ] Validation - Loss: 0.7231, Acc: 86.36%, F1: 0.8544, AUC: 0.9298
+[ Thu Dec  5 01:06:54 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:54 2024 ] 
+Epoch 48/300
+[ Thu Dec  5 01:06:55 2024 ] Training - Loss: 0.3340, Acc: 93.60%, F1: 0.9903
+[ Thu Dec  5 01:06:55 2024 ] Validation - Loss: 0.7375, Acc: 88.18%, F1: 0.8713, AUC: 0.9225
+[ Thu Dec  5 01:06:55 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:55 2024 ] 
+Epoch 49/300
+[ Thu Dec  5 01:06:56 2024 ] Training - Loss: 0.3346, Acc: 93.10%, F1: 0.9836
+[ Thu Dec  5 01:06:56 2024 ] Validation - Loss: 0.6263, Acc: 90.91%, F1: 0.9000, AUC: 0.9424
+[ Thu Dec  5 01:06:56 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:56 2024 ] 
+Epoch 50/300
+[ Thu Dec  5 01:06:57 2024 ] Training - Loss: 0.3561, Acc: 92.61%, F1: 0.9784
+[ Thu Dec  5 01:06:57 2024 ] Validation - Loss: 0.8444, Acc: 86.36%, F1: 0.8387, AUC: 0.9090
+[ Thu Dec  5 01:06:57 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:57 2024 ] 
+Epoch 51/300
+[ Thu Dec  5 01:06:58 2024 ] Training - Loss: 0.3618, Acc: 92.61%, F1: 0.9797
+[ Thu Dec  5 01:06:58 2024 ] Validation - Loss: 0.8774, Acc: 84.55%, F1: 0.8132, AUC: 0.9010
+[ Thu Dec  5 01:06:58 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:58 2024 ] 
+Epoch 52/300
+[ Thu Dec  5 01:06:59 2024 ] Training - Loss: 0.3713, Acc: 90.89%, F1: 0.9649
+[ Thu Dec  5 01:06:59 2024 ] Validation - Loss: 0.5767, Acc: 89.09%, F1: 0.8889, AUC: 0.9586
+[ Thu Dec  5 01:06:59 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:06:59 2024 ] 
+Epoch 53/300
+[ Thu Dec  5 01:07:00 2024 ] Training - Loss: 0.3380, Acc: 92.86%, F1: 0.9812
+[ Thu Dec  5 01:07:00 2024 ] Validation - Loss: 0.6309, Acc: 89.09%, F1: 0.8929, AUC: 0.9427
+[ Thu Dec  5 01:07:00 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:00 2024 ] 
+Epoch 54/300
+[ Thu Dec  5 01:07:01 2024 ] Training - Loss: 0.3128, Acc: 93.84%, F1: 0.9921
+[ Thu Dec  5 01:07:01 2024 ] Validation - Loss: 0.6315, Acc: 89.09%, F1: 0.8824, AUC: 0.9543
+[ Thu Dec  5 01:07:01 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:01 2024 ] 
+Epoch 55/300
+[ Thu Dec  5 01:07:02 2024 ] Training - Loss: 0.3191, Acc: 93.60%, F1: 0.9900
+[ Thu Dec  5 01:07:02 2024 ] Validation - Loss: 0.7601, Acc: 88.18%, F1: 0.8687, AUC: 0.9474
+[ Thu Dec  5 01:07:02 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:02 2024 ] 
+Epoch 56/300
+[ Thu Dec  5 01:07:03 2024 ] Training - Loss: 0.3229, Acc: 93.60%, F1: 0.9899
+[ Thu Dec  5 01:07:03 2024 ] Validation - Loss: 0.7830, Acc: 87.27%, F1: 0.8627, AUC: 0.9378
+[ Thu Dec  5 01:07:03 2024 ] No improvement in F1 score for 20 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:03 2024 ] 
+Epoch 57/300
+[ Thu Dec  5 01:07:04 2024 ] Training - Loss: 0.3084, Acc: 94.09%, F1: 0.9946
+[ Thu Dec  5 01:07:04 2024 ] Validation - Loss: 0.7592, Acc: 85.45%, F1: 0.8491, AUC: 0.9437
+[ Thu Dec  5 01:07:04 2024 ] No improvement in F1 score for 21 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:04 2024 ] 
+Epoch 58/300
+[ Thu Dec  5 01:07:05 2024 ] Training - Loss: 0.3259, Acc: 93.10%, F1: 0.9848
+[ Thu Dec  5 01:07:05 2024 ] Validation - Loss: 0.6953, Acc: 86.36%, F1: 0.8624, AUC: 0.9573
+[ Thu Dec  5 01:07:05 2024 ] No improvement in F1 score for 22 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:05 2024 ] 
+Epoch 59/300
+[ Thu Dec  5 01:07:06 2024 ] Training - Loss: 0.3541, Acc: 92.36%, F1: 0.9751
+[ Thu Dec  5 01:07:06 2024 ] Validation - Loss: 0.6872, Acc: 88.18%, F1: 0.8738, AUC: 0.9596
+[ Thu Dec  5 01:07:06 2024 ] No improvement in F1 score for 23 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:07:06 2024 ] 
+Epoch 60/300
+[ Thu Dec  5 01:07:07 2024 ] Training - Loss: 0.3377, Acc: 92.61%, F1: 0.9784
+[ Thu Dec  5 01:07:07 2024 ] Validation - Loss: 0.5532, Acc: 91.82%, F1: 0.9159, AUC: 0.9702
+[ Thu Dec  5 01:07:07 2024 ] F1 score improved by 0.0068!
+[ Thu Dec  5 01:07:08 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_60_f1_0.9159.pth
+[ Thu Dec  5 01:07:08 2024 ] 
+Epoch 61/300
+[ Thu Dec  5 01:07:08 2024 ] Training - Loss: 0.3438, Acc: 92.86%, F1: 0.9814
+[ Thu Dec  5 01:07:09 2024 ] Validation - Loss: 0.7117, Acc: 89.09%, F1: 0.8750, AUC: 0.9629
+[ Thu Dec  5 01:07:09 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:09 2024 ] 
+Epoch 62/300
+[ Thu Dec  5 01:07:10 2024 ] Training - Loss: 0.3168, Acc: 93.35%, F1: 0.9871
+[ Thu Dec  5 01:07:10 2024 ] Validation - Loss: 0.6802, Acc: 89.09%, F1: 0.8776, AUC: 0.9679
+[ Thu Dec  5 01:07:10 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:10 2024 ] 
+Epoch 63/300
+[ Thu Dec  5 01:07:11 2024 ] Training - Loss: 0.3140, Acc: 93.84%, F1: 0.9926
+[ Thu Dec  5 01:07:11 2024 ] Validation - Loss: 0.6033, Acc: 90.91%, F1: 0.9000, AUC: 0.9725
+[ Thu Dec  5 01:07:11 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:11 2024 ] 
+Epoch 64/300
+[ Thu Dec  5 01:07:12 2024 ] Training - Loss: 0.2981, Acc: 94.09%, F1: 0.9947
+[ Thu Dec  5 01:07:12 2024 ] Validation - Loss: 0.6363, Acc: 89.09%, F1: 0.8846, AUC: 0.9705
+[ Thu Dec  5 01:07:12 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:12 2024 ] 
+Epoch 65/300
+[ Thu Dec  5 01:07:13 2024 ] Training - Loss: 0.3329, Acc: 93.10%, F1: 0.9829
+[ Thu Dec  5 01:07:13 2024 ] Validation - Loss: 0.6722, Acc: 88.18%, F1: 0.8762, AUC: 0.9649
+[ Thu Dec  5 01:07:13 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:13 2024 ] 
+Epoch 66/300
+[ Thu Dec  5 01:07:14 2024 ] Training - Loss: 0.2968, Acc: 93.60%, F1: 0.9907
+[ Thu Dec  5 01:07:14 2024 ] Validation - Loss: 0.7002, Acc: 88.18%, F1: 0.8687, AUC: 0.9616
+[ Thu Dec  5 01:07:14 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:14 2024 ] 
+Epoch 67/300
+[ Thu Dec  5 01:07:15 2024 ] Training - Loss: 0.2959, Acc: 94.09%, F1: 0.9947
+[ Thu Dec  5 01:07:15 2024 ] Validation - Loss: 0.7924, Acc: 87.27%, F1: 0.8600, AUC: 0.9520
+[ Thu Dec  5 01:07:15 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:15 2024 ] 
+Epoch 68/300
+[ Thu Dec  5 01:07:16 2024 ] Training - Loss: 0.2988, Acc: 93.84%, F1: 0.9923
+[ Thu Dec  5 01:07:16 2024 ] Validation - Loss: 0.7074, Acc: 90.00%, F1: 0.8911, AUC: 0.9570
+[ Thu Dec  5 01:07:16 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:16 2024 ] 
+Epoch 69/300
+[ Thu Dec  5 01:07:17 2024 ] Training - Loss: 0.2806, Acc: 94.09%, F1: 0.9951
+[ Thu Dec  5 01:07:17 2024 ] Validation - Loss: 0.7659, Acc: 86.36%, F1: 0.8649, AUC: 0.9540
+[ Thu Dec  5 01:07:17 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:17 2024 ] 
+Epoch 70/300
+[ Thu Dec  5 01:07:18 2024 ] Training - Loss: 0.2937, Acc: 93.60%, F1: 0.9905
+[ Thu Dec  5 01:07:18 2024 ] Validation - Loss: 0.8026, Acc: 85.45%, F1: 0.8491, AUC: 0.9543
+[ Thu Dec  5 01:07:18 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:18 2024 ] 
+Epoch 71/300
+[ Thu Dec  5 01:07:19 2024 ] Training - Loss: 0.3089, Acc: 93.84%, F1: 0.9913
+[ Thu Dec  5 01:07:19 2024 ] Validation - Loss: 0.6518, Acc: 90.00%, F1: 0.8972, AUC: 0.9633
+[ Thu Dec  5 01:07:19 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:19 2024 ] 
+Epoch 72/300
+[ Thu Dec  5 01:07:20 2024 ] Training - Loss: 0.2963, Acc: 93.84%, F1: 0.9927
+[ Thu Dec  5 01:07:20 2024 ] Validation - Loss: 0.8923, Acc: 81.82%, F1: 0.8214, AUC: 0.9361
+[ Thu Dec  5 01:07:20 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:20 2024 ] 
+Epoch 73/300
+[ Thu Dec  5 01:07:21 2024 ] Training - Loss: 0.3346, Acc: 92.86%, F1: 0.9798
+[ Thu Dec  5 01:07:21 2024 ] Validation - Loss: 0.8684, Acc: 83.64%, F1: 0.8393, AUC: 0.9348
+[ Thu Dec  5 01:07:21 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:21 2024 ] 
+Epoch 74/300
+[ Thu Dec  5 01:07:22 2024 ] Training - Loss: 0.3153, Acc: 93.60%, F1: 0.9885
+[ Thu Dec  5 01:07:22 2024 ] Validation - Loss: 0.9473, Acc: 82.73%, F1: 0.8224, AUC: 0.9285
+[ Thu Dec  5 01:07:22 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:22 2024 ] 
+Epoch 75/300
+[ Thu Dec  5 01:07:23 2024 ] Training - Loss: 0.2756, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:07:23 2024 ] Validation - Loss: 0.8104, Acc: 85.45%, F1: 0.8545, AUC: 0.9457
+[ Thu Dec  5 01:07:23 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:23 2024 ] 
+Epoch 76/300
+[ Thu Dec  5 01:07:24 2024 ] Training - Loss: 0.2879, Acc: 93.84%, F1: 0.9924
+[ Thu Dec  5 01:07:24 2024 ] Validation - Loss: 0.9436, Acc: 82.73%, F1: 0.8224, AUC: 0.9398
+[ Thu Dec  5 01:07:24 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:24 2024 ] 
+Epoch 77/300
+[ Thu Dec  5 01:07:25 2024 ] Training - Loss: 0.2844, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:07:25 2024 ] Validation - Loss: 0.7198, Acc: 88.18%, F1: 0.8785, AUC: 0.9523
+[ Thu Dec  5 01:07:25 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:25 2024 ] 
+Epoch 78/300
+[ Thu Dec  5 01:07:26 2024 ] Training - Loss: 0.2854, Acc: 93.84%, F1: 0.9928
+[ Thu Dec  5 01:07:26 2024 ] Validation - Loss: 0.8139, Acc: 85.45%, F1: 0.8519, AUC: 0.9421
+[ Thu Dec  5 01:07:26 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:26 2024 ] 
+Epoch 79/300
+[ Thu Dec  5 01:07:27 2024 ] Training - Loss: 0.3588, Acc: 92.61%, F1: 0.9808
+[ Thu Dec  5 01:07:27 2024 ] Validation - Loss: 0.7949, Acc: 86.36%, F1: 0.8673, AUC: 0.9464
+[ Thu Dec  5 01:07:27 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:27 2024 ] 
+Epoch 80/300
+[ Thu Dec  5 01:07:28 2024 ] Training - Loss: 0.2832, Acc: 94.09%, F1: 0.9946
+[ Thu Dec  5 01:07:28 2024 ] Validation - Loss: 0.6951, Acc: 88.18%, F1: 0.8785, AUC: 0.9540
+[ Thu Dec  5 01:07:28 2024 ] No improvement in F1 score for 20 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:28 2024 ] 
+Epoch 81/300
+[ Thu Dec  5 01:07:29 2024 ] Training - Loss: 0.3417, Acc: 92.61%, F1: 0.9783
+[ Thu Dec  5 01:07:30 2024 ] Validation - Loss: 0.7228, Acc: 88.18%, F1: 0.8829, AUC: 0.9672
+[ Thu Dec  5 01:07:30 2024 ] No improvement in F1 score for 21 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:30 2024 ] 
+Epoch 82/300
+[ Thu Dec  5 01:07:30 2024 ] Training - Loss: 0.3572, Acc: 92.36%, F1: 0.9778
+[ Thu Dec  5 01:07:30 2024 ] Validation - Loss: 0.9734, Acc: 84.55%, F1: 0.8350, AUC: 0.9335
+[ Thu Dec  5 01:07:30 2024 ] No improvement in F1 score for 22 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:30 2024 ] 
+Epoch 83/300
+[ Thu Dec  5 01:07:31 2024 ] Training - Loss: 0.2907, Acc: 93.84%, F1: 0.9922
+[ Thu Dec  5 01:07:31 2024 ] Validation - Loss: 0.7728, Acc: 86.36%, F1: 0.8571, AUC: 0.9434
+[ Thu Dec  5 01:07:31 2024 ] No improvement in F1 score for 23 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:31 2024 ] 
+Epoch 84/300
+[ Thu Dec  5 01:07:32 2024 ] Training - Loss: 0.2816, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:07:32 2024 ] Validation - Loss: 0.8648, Acc: 86.36%, F1: 0.8571, AUC: 0.9417
+[ Thu Dec  5 01:07:32 2024 ] No improvement in F1 score for 24 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:32 2024 ] 
+Epoch 85/300
+[ Thu Dec  5 01:07:33 2024 ] Training - Loss: 0.2952, Acc: 93.84%, F1: 0.9926
+[ Thu Dec  5 01:07:33 2024 ] Validation - Loss: 1.0897, Acc: 81.82%, F1: 0.8113, AUC: 0.9080
+[ Thu Dec  5 01:07:33 2024 ] No improvement in F1 score for 25 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:33 2024 ] 
+Epoch 86/300
+[ Thu Dec  5 01:07:34 2024 ] Training - Loss: 0.2702, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:07:34 2024 ] Validation - Loss: 0.8183, Acc: 85.45%, F1: 0.8571, AUC: 0.9434
+[ Thu Dec  5 01:07:34 2024 ] No improvement in F1 score for 26 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:34 2024 ] 
+Epoch 87/300
+[ Thu Dec  5 01:07:35 2024 ] Training - Loss: 0.2901, Acc: 93.84%, F1: 0.9923
+[ Thu Dec  5 01:07:35 2024 ] Validation - Loss: 0.8026, Acc: 86.36%, F1: 0.8649, AUC: 0.9414
+[ Thu Dec  5 01:07:35 2024 ] No improvement in F1 score for 27 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:35 2024 ] 
+Epoch 88/300
+[ Thu Dec  5 01:07:36 2024 ] Training - Loss: 0.2700, Acc: 94.09%, F1: 0.9951
+[ Thu Dec  5 01:07:36 2024 ] Validation - Loss: 1.0748, Acc: 83.64%, F1: 0.8269, AUC: 0.9225
+[ Thu Dec  5 01:07:36 2024 ] No improvement in F1 score for 28 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:36 2024 ] 
+Epoch 89/300
+[ Thu Dec  5 01:07:37 2024 ] Training - Loss: 0.2940, Acc: 94.09%, F1: 0.9945
+[ Thu Dec  5 01:07:37 2024 ] Validation - Loss: 1.0214, Acc: 83.64%, F1: 0.8302, AUC: 0.9328
+[ Thu Dec  5 01:07:37 2024 ] No improvement in F1 score for 29 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:37 2024 ] 
+Epoch 90/300
+[ Thu Dec  5 01:07:38 2024 ] Training - Loss: 0.2658, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:07:38 2024 ] Validation - Loss: 0.9471, Acc: 84.55%, F1: 0.8411, AUC: 0.9245
+[ Thu Dec  5 01:07:38 2024 ] No improvement in F1 score for 30 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:38 2024 ] 
+Epoch 91/300
+[ Thu Dec  5 01:07:39 2024 ] Training - Loss: 0.2944, Acc: 93.84%, F1: 0.9919
+[ Thu Dec  5 01:07:39 2024 ] Validation - Loss: 0.9312, Acc: 84.55%, F1: 0.8411, AUC: 0.9447
+[ Thu Dec  5 01:07:39 2024 ] No improvement in F1 score for 31 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:39 2024 ] 
+Epoch 92/300
+[ Thu Dec  5 01:07:40 2024 ] Training - Loss: 0.2940, Acc: 93.84%, F1: 0.9928
+[ Thu Dec  5 01:07:40 2024 ] Validation - Loss: 0.8867, Acc: 85.45%, F1: 0.8491, AUC: 0.9441
+[ Thu Dec  5 01:07:40 2024 ] No improvement in F1 score for 32 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:40 2024 ] 
+Epoch 93/300
+[ Thu Dec  5 01:07:41 2024 ] Training - Loss: 0.3237, Acc: 92.86%, F1: 0.9820
+[ Thu Dec  5 01:07:41 2024 ] Validation - Loss: 0.6429, Acc: 89.09%, F1: 0.8909, AUC: 0.9725
+[ Thu Dec  5 01:07:41 2024 ] No improvement in F1 score for 33 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:41 2024 ] 
+Epoch 94/300
+[ Thu Dec  5 01:07:42 2024 ] Training - Loss: 0.3037, Acc: 93.84%, F1: 0.9923
+[ Thu Dec  5 01:07:42 2024 ] Validation - Loss: 0.7533, Acc: 90.00%, F1: 0.8911, AUC: 0.9560
+[ Thu Dec  5 01:07:42 2024 ] No improvement in F1 score for 34 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:42 2024 ] 
+Epoch 95/300
+[ Thu Dec  5 01:07:43 2024 ] Training - Loss: 0.2655, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:07:43 2024 ] Validation - Loss: 0.8705, Acc: 88.18%, F1: 0.8713, AUC: 0.9328
+[ Thu Dec  5 01:07:43 2024 ] No improvement in F1 score for 35 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:43 2024 ] 
+Epoch 96/300
+[ Thu Dec  5 01:07:44 2024 ] Training - Loss: 0.2739, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:07:44 2024 ] Validation - Loss: 0.9542, Acc: 85.45%, F1: 0.8462, AUC: 0.9278
+[ Thu Dec  5 01:07:44 2024 ] No improvement in F1 score for 36 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:44 2024 ] 
+Epoch 97/300
+[ Thu Dec  5 01:07:45 2024 ] Training - Loss: 0.2639, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:07:45 2024 ] Validation - Loss: 0.8585, Acc: 87.27%, F1: 0.8654, AUC: 0.9351
+[ Thu Dec  5 01:07:45 2024 ] No improvement in F1 score for 37 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:45 2024 ] 
+Epoch 98/300
+[ Thu Dec  5 01:07:46 2024 ] Training - Loss: 0.2663, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:07:46 2024 ] Validation - Loss: 0.9683, Acc: 84.55%, F1: 0.8350, AUC: 0.9335
+[ Thu Dec  5 01:07:46 2024 ] No improvement in F1 score for 38 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:46 2024 ] 
+Epoch 99/300
+[ Thu Dec  5 01:07:47 2024 ] Training - Loss: 0.3049, Acc: 93.35%, F1: 0.9873
+[ Thu Dec  5 01:07:47 2024 ] Validation - Loss: 0.7163, Acc: 90.91%, F1: 0.9000, AUC: 0.9576
+[ Thu Dec  5 01:07:47 2024 ] No improvement in F1 score for 39 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:47 2024 ] 
+Epoch 100/300
+[ Thu Dec  5 01:07:48 2024 ] Training - Loss: 0.2771, Acc: 94.09%, F1: 0.9945
+[ Thu Dec  5 01:07:48 2024 ] Validation - Loss: 0.8343, Acc: 89.09%, F1: 0.8776, AUC: 0.9503
+[ Thu Dec  5 01:07:48 2024 ] No improvement in F1 score for 40 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:48 2024 ] 
+Epoch 101/300
+[ Thu Dec  5 01:07:49 2024 ] Training - Loss: 0.2720, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:07:49 2024 ] Validation - Loss: 0.9401, Acc: 88.18%, F1: 0.8660, AUC: 0.9437
+[ Thu Dec  5 01:07:49 2024 ] No improvement in F1 score for 41 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:49 2024 ] 
+Epoch 102/300
+[ Thu Dec  5 01:07:50 2024 ] Training - Loss: 0.2754, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:07:50 2024 ] Validation - Loss: 0.9348, Acc: 87.27%, F1: 0.8571, AUC: 0.9490
+[ Thu Dec  5 01:07:50 2024 ] No improvement in F1 score for 42 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:50 2024 ] 
+Epoch 103/300
+[ Thu Dec  5 01:07:50 2024 ] Training - Loss: 0.2954, Acc: 93.84%, F1: 0.9919
+[ Thu Dec  5 01:07:51 2024 ] Validation - Loss: 0.7598, Acc: 87.27%, F1: 0.8679, AUC: 0.9583
+[ Thu Dec  5 01:07:51 2024 ] No improvement in F1 score for 43 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:51 2024 ] 
+Epoch 104/300
+[ Thu Dec  5 01:07:51 2024 ] Training - Loss: 0.2789, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:07:52 2024 ] Validation - Loss: 0.8960, Acc: 86.36%, F1: 0.8571, AUC: 0.9507
+[ Thu Dec  5 01:07:52 2024 ] No improvement in F1 score for 44 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:52 2024 ] 
+Epoch 105/300
+[ Thu Dec  5 01:07:52 2024 ] Training - Loss: 0.2676, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:07:53 2024 ] Validation - Loss: 0.9087, Acc: 87.27%, F1: 0.8571, AUC: 0.9566
+[ Thu Dec  5 01:07:53 2024 ] No improvement in F1 score for 45 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:53 2024 ] 
+Epoch 106/300
+[ Thu Dec  5 01:07:53 2024 ] Training - Loss: 0.2543, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:07:54 2024 ] Validation - Loss: 0.9392, Acc: 88.18%, F1: 0.8660, AUC: 0.9517
+[ Thu Dec  5 01:07:54 2024 ] No improvement in F1 score for 46 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:54 2024 ] 
+Epoch 107/300
+[ Thu Dec  5 01:07:54 2024 ] Training - Loss: 0.2756, Acc: 93.84%, F1: 0.9928
+[ Thu Dec  5 01:07:55 2024 ] Validation - Loss: 0.9791, Acc: 85.45%, F1: 0.8400, AUC: 0.9474
+[ Thu Dec  5 01:07:55 2024 ] No improvement in F1 score for 47 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:55 2024 ] 
+Epoch 108/300
+[ Thu Dec  5 01:07:56 2024 ] Training - Loss: 0.2825, Acc: 93.84%, F1: 0.9923
+[ Thu Dec  5 01:07:56 2024 ] Validation - Loss: 0.8364, Acc: 87.27%, F1: 0.8654, AUC: 0.9593
+[ Thu Dec  5 01:07:56 2024 ] No improvement in F1 score for 48 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:56 2024 ] 
+Epoch 109/300
+[ Thu Dec  5 01:07:57 2024 ] Training - Loss: 0.2699, Acc: 94.09%, F1: 0.9950
+[ Thu Dec  5 01:07:57 2024 ] Validation - Loss: 0.9103, Acc: 86.36%, F1: 0.8571, AUC: 0.9421
+[ Thu Dec  5 01:07:57 2024 ] No improvement in F1 score for 49 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:57 2024 ] 
+Epoch 110/300
+[ Thu Dec  5 01:07:58 2024 ] Training - Loss: 0.2747, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:07:58 2024 ] Validation - Loss: 0.8763, Acc: 85.45%, F1: 0.8545, AUC: 0.9409
+[ Thu Dec  5 01:07:58 2024 ] No improvement in F1 score for 50 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:58 2024 ] 
+Epoch 111/300
+[ Thu Dec  5 01:07:59 2024 ] Training - Loss: 0.2883, Acc: 93.84%, F1: 0.9919
+[ Thu Dec  5 01:07:59 2024 ] Validation - Loss: 0.9205, Acc: 84.55%, F1: 0.8411, AUC: 0.9464
+[ Thu Dec  5 01:07:59 2024 ] No improvement in F1 score for 51 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:07:59 2024 ] 
+Epoch 112/300
+[ Thu Dec  5 01:08:00 2024 ] Training - Loss: 0.2757, Acc: 94.09%, F1: 0.9947
+[ Thu Dec  5 01:08:00 2024 ] Validation - Loss: 0.9410, Acc: 86.36%, F1: 0.8544, AUC: 0.9417
+[ Thu Dec  5 01:08:00 2024 ] No improvement in F1 score for 52 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:00 2024 ] 
+Epoch 113/300
+[ Thu Dec  5 01:08:01 2024 ] Training - Loss: 0.2708, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:08:01 2024 ] Validation - Loss: 0.7922, Acc: 89.09%, F1: 0.8800, AUC: 0.9517
+[ Thu Dec  5 01:08:01 2024 ] No improvement in F1 score for 53 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:01 2024 ] 
+Epoch 114/300
+[ Thu Dec  5 01:08:02 2024 ] Training - Loss: 0.2795, Acc: 94.09%, F1: 0.9944
+[ Thu Dec  5 01:08:02 2024 ] Validation - Loss: 0.7036, Acc: 90.00%, F1: 0.8932, AUC: 0.9596
+[ Thu Dec  5 01:08:02 2024 ] No improvement in F1 score for 54 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:02 2024 ] 
+Epoch 115/300
+[ Thu Dec  5 01:08:03 2024 ] Training - Loss: 0.2737, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:08:03 2024 ] Validation - Loss: 0.7277, Acc: 89.09%, F1: 0.8846, AUC: 0.9599
+[ Thu Dec  5 01:08:03 2024 ] No improvement in F1 score for 55 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:03 2024 ] 
+Epoch 116/300
+[ Thu Dec  5 01:08:04 2024 ] Training - Loss: 0.2634, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:08:04 2024 ] Validation - Loss: 0.7222, Acc: 89.09%, F1: 0.8846, AUC: 0.9527
+[ Thu Dec  5 01:08:04 2024 ] No improvement in F1 score for 56 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:04 2024 ] 
+Epoch 117/300
+[ Thu Dec  5 01:08:05 2024 ] Training - Loss: 0.2878, Acc: 93.84%, F1: 0.9924
+[ Thu Dec  5 01:08:05 2024 ] Validation - Loss: 0.6502, Acc: 91.82%, F1: 0.9109, AUC: 0.9467
+[ Thu Dec  5 01:08:05 2024 ] No improvement in F1 score for 57 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:05 2024 ] 
+Epoch 118/300
+[ Thu Dec  5 01:08:06 2024 ] Training - Loss: 0.2716, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:08:06 2024 ] Validation - Loss: 0.6415, Acc: 91.82%, F1: 0.9109, AUC: 0.9639
+[ Thu Dec  5 01:08:06 2024 ] No improvement in F1 score for 58 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:06 2024 ] 
+Epoch 119/300
+[ Thu Dec  5 01:08:07 2024 ] Training - Loss: 0.2701, Acc: 94.33%, F1: 0.9972
+[ Thu Dec  5 01:08:07 2024 ] Validation - Loss: 0.6517, Acc: 90.00%, F1: 0.8932, AUC: 0.9603
+[ Thu Dec  5 01:08:07 2024 ] No improvement in F1 score for 59 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:07 2024 ] 
+Epoch 120/300
+[ Thu Dec  5 01:08:08 2024 ] Training - Loss: 0.2699, Acc: 94.33%, F1: 0.9972
+[ Thu Dec  5 01:08:08 2024 ] Validation - Loss: 0.6473, Acc: 90.91%, F1: 0.9020, AUC: 0.9626
+[ Thu Dec  5 01:08:08 2024 ] No improvement in F1 score for 60 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:08 2024 ] 
+Epoch 121/300
+[ Thu Dec  5 01:08:09 2024 ] Training - Loss: 0.2550, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:08:09 2024 ] Validation - Loss: 0.6984, Acc: 89.09%, F1: 0.8846, AUC: 0.9533
+[ Thu Dec  5 01:08:09 2024 ] No improvement in F1 score for 61 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:09 2024 ] 
+Epoch 122/300
+[ Thu Dec  5 01:08:10 2024 ] Training - Loss: 0.2671, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:08:10 2024 ] Validation - Loss: 0.7633, Acc: 88.18%, F1: 0.8738, AUC: 0.9497
+[ Thu Dec  5 01:08:10 2024 ] No improvement in F1 score for 62 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:10 2024 ] 
+Epoch 123/300
+[ Thu Dec  5 01:08:11 2024 ] Training - Loss: 0.2643, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:08:11 2024 ] Validation - Loss: 0.7999, Acc: 90.00%, F1: 0.8911, AUC: 0.9361
+[ Thu Dec  5 01:08:11 2024 ] No improvement in F1 score for 63 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:11 2024 ] 
+Epoch 124/300
+[ Thu Dec  5 01:08:12 2024 ] Training - Loss: 0.2607, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:08:12 2024 ] Validation - Loss: 0.8067, Acc: 90.00%, F1: 0.8911, AUC: 0.9353
+[ Thu Dec  5 01:08:12 2024 ] No improvement in F1 score for 64 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:12 2024 ] 
+Epoch 125/300
+[ Thu Dec  5 01:08:13 2024 ] Training - Loss: 0.2750, Acc: 93.84%, F1: 0.9924
+[ Thu Dec  5 01:08:13 2024 ] Validation - Loss: 0.9288, Acc: 88.18%, F1: 0.8687, AUC: 0.9163
+[ Thu Dec  5 01:08:13 2024 ] No improvement in F1 score for 65 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:13 2024 ] 
+Epoch 126/300
+[ Thu Dec  5 01:08:14 2024 ] Training - Loss: 0.2655, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:08:14 2024 ] Validation - Loss: 0.8016, Acc: 89.09%, F1: 0.8800, AUC: 0.9364
+[ Thu Dec  5 01:08:14 2024 ] No improvement in F1 score for 66 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:14 2024 ] 
+Epoch 127/300
+[ Thu Dec  5 01:08:15 2024 ] Training - Loss: 0.2708, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:08:16 2024 ] Validation - Loss: 0.8649, Acc: 89.09%, F1: 0.8800, AUC: 0.9298
+[ Thu Dec  5 01:08:16 2024 ] No improvement in F1 score for 67 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:16 2024 ] 
+Epoch 128/300
+[ Thu Dec  5 01:08:17 2024 ] Training - Loss: 0.2556, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:08:17 2024 ] Validation - Loss: 0.8655, Acc: 89.09%, F1: 0.8800, AUC: 0.9219
+[ Thu Dec  5 01:08:17 2024 ] No improvement in F1 score for 68 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:17 2024 ] 
+Epoch 129/300
+[ Thu Dec  5 01:08:18 2024 ] Training - Loss: 0.2543, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:08:18 2024 ] Validation - Loss: 0.8459, Acc: 88.18%, F1: 0.8713, AUC: 0.9265
+[ Thu Dec  5 01:08:18 2024 ] No improvement in F1 score for 69 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:18 2024 ] 
+Epoch 130/300
+[ Thu Dec  5 01:08:19 2024 ] Training - Loss: 0.2589, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:08:19 2024 ] Validation - Loss: 0.8317, Acc: 88.18%, F1: 0.8738, AUC: 0.9424
+[ Thu Dec  5 01:08:19 2024 ] No improvement in F1 score for 70 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:19 2024 ] 
+Epoch 131/300
+[ Thu Dec  5 01:08:20 2024 ] Training - Loss: 0.2661, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:08:21 2024 ] Validation - Loss: 0.7899, Acc: 89.09%, F1: 0.8824, AUC: 0.9480
+[ Thu Dec  5 01:08:21 2024 ] No improvement in F1 score for 71 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:21 2024 ] 
+Epoch 132/300
+[ Thu Dec  5 01:08:22 2024 ] Training - Loss: 0.2598, Acc: 94.33%, F1: 0.9977
+[ Thu Dec  5 01:08:22 2024 ] Validation - Loss: 0.8830, Acc: 88.18%, F1: 0.8713, AUC: 0.9249
+[ Thu Dec  5 01:08:22 2024 ] No improvement in F1 score for 72 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:22 2024 ] 
+Epoch 133/300
+[ Thu Dec  5 01:08:23 2024 ] Training - Loss: 0.2756, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:08:23 2024 ] Validation - Loss: 0.8434, Acc: 86.36%, F1: 0.8624, AUC: 0.9398
+[ Thu Dec  5 01:08:23 2024 ] No improvement in F1 score for 73 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:23 2024 ] 
+Epoch 134/300
+[ Thu Dec  5 01:08:24 2024 ] Training - Loss: 0.2694, Acc: 94.33%, F1: 0.9972
+[ Thu Dec  5 01:08:24 2024 ] Validation - Loss: 0.7102, Acc: 89.09%, F1: 0.8889, AUC: 0.9556
+[ Thu Dec  5 01:08:24 2024 ] No improvement in F1 score for 74 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:24 2024 ] 
+Epoch 135/300
+[ Thu Dec  5 01:08:25 2024 ] Training - Loss: 0.2505, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:08:26 2024 ] Validation - Loss: 0.8568, Acc: 88.18%, F1: 0.8738, AUC: 0.9451
+[ Thu Dec  5 01:08:26 2024 ] No improvement in F1 score for 75 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:26 2024 ] 
+Early stopping triggered after 135 epochs. Best F1: 0.9159
+[ Thu Dec  5 01:08:26 2024 ] 
+Training completed!
+[ Thu Dec  5 01:08:26 2024 ] Best Validation Metrics:
+[ Thu Dec  5 01:08:26 2024 ] F1 Score: 0.9159
+[ Thu Dec  5 01:08:26 2024 ] Accuracy: 91.82%
+[ Thu Dec  5 01:08:26 2024 ] Loss: 0.5532
+[ Thu Dec  5 01:08:26 2024 ] 
+Loading best model from ./work_dir/smartfallmm/mobile/model_epoch_60_f1_0.9159.pth for testing...
+[ Thu Dec  5 01:08:26 2024 ] 
+Evaluating on test set...
+[ Thu Dec  5 01:08:26 2024 ] 
+Test Set Results:
+ - Loss: 0.6666
+ - Accuracy: 76.29%
+ - F1 Score: 0.7013
+ - AUC: 1.0000
+[ Thu Dec  5 01:14:32 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:15:50 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:15:50 2024 ] Setting up environment...
+[ Thu Dec  5 01:15:51 2024 ] Using GPU device 0
+[ Thu Dec  5 01:15:51 2024 ] Initializing components...
+[ Thu Dec  5 01:15:51 2024 ] Model EnhancedDualPathFallDetector(
+  (phone_xyz_processor): EnhancedXYZProcessor(
+    (xyz_encoder): Sequential(
+      (0): Conv1d(3, 16, kernel_size=(5,), stride=(1,), padding=(2,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(7,), stride=(1,), padding=(3,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(9,), stride=(1,), padding=(4,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (attention): MultiheadAttention(
+      (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (phone_smv_processor): EnhancedSMVProcessor(
+    (smv_encoder): Sequential(
+      (0): Conv1d(1, 16, kernel_size=(7,), stride=(1,), padding=(3,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(11,), stride=(1,), padding=(5,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(15,), stride=(1,), padding=(7,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (threshold_learner): Sequential(
+      (0): AdaptiveMaxPool1d(output_size=1)
+      (1): Flatten(start_dim=1, end_dim=-1)
+      (2): Linear(in_features=32, out_features=16, bias=True)
+      (3): GELU(approximate='none')
+      (4): Dropout(p=0.1, inplace=False)
+      (5): Linear(in_features=16, out_features=8, bias=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Linear(in_features=8, out_features=1, bias=True)
+      (9): Sigmoid()
+    )
+  )
+  (watch_xyz_processor): EnhancedXYZProcessor(
+    (xyz_encoder): Sequential(
+      (0): Conv1d(3, 16, kernel_size=(5,), stride=(1,), padding=(2,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(7,), stride=(1,), padding=(3,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(9,), stride=(1,), padding=(4,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (attention): MultiheadAttention(
+      (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (watch_smv_processor): EnhancedSMVProcessor(
+    (smv_encoder): Sequential(
+      (0): Conv1d(1, 16, kernel_size=(7,), stride=(1,), padding=(3,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(11,), stride=(1,), padding=(5,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(15,), stride=(1,), padding=(7,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (threshold_learner): Sequential(
+      (0): AdaptiveMaxPool1d(output_size=1)
+      (1): Flatten(start_dim=1, end_dim=-1)
+      (2): Linear(in_features=32, out_features=16, bias=True)
+      (3): GELU(approximate='none')
+      (4): Dropout(p=0.1, inplace=False)
+      (5): Linear(in_features=16, out_features=8, bias=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Linear(in_features=8, out_features=1, bias=True)
+      (9): Sigmoid()
+    )
+  )
+  (fusion): Sequential(
+    (0): Linear(in_features=128, out_features=96, bias=True)
+    (1): LayerNorm((96,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=96, out_features=64, bias=True)
+    (5): LayerNorm((64,), eps=1e-05, elementwise_affine=True)
+    (6): GELU(approximate='none')
+    (7): Dropout(p=0.1, inplace=False)
+    (8): Linear(in_features=64, out_features=32, bias=True)
+  )
+  (transformer): TransformerEncoder(
+    (layers): ModuleList(
+      (0-5): 6 x TransformerEncoderLayer(
+        (self_attn): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+        )
+        (linear1): Linear(in_features=32, out_features=128, bias=True)
+        (dropout): Dropout(p=0.1, inplace=False)
+        (linear2): Linear(in_features=128, out_features=32, bias=True)
+        (norm1): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+        (norm2): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+        (dropout1): Dropout(p=0.1, inplace=False)
+        (dropout2): Dropout(p=0.1, inplace=False)
+      )
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (classifier): Sequential(
+    (0): Linear(in_features=64, out_features=32, bias=True)
+    (1): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=32, out_features=16, bias=True)
+    (5): LayerNorm((16,), eps=1e-05, elementwise_affine=True)
+    (6): GELU(approximate='none')
+    (7): Dropout(p=0.1, inplace=False)
+    (8): Linear(in_features=16, out_features=2, bias=True)
+  )
+  (fall_feature_extractor): Sequential(
+    (0): Linear(in_features=32, out_features=16, bias=True)
+    (1): LayerNorm((16,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=16, out_features=32, bias=True)
+  )
+) loaded successfully
+[ Thu Dec  5 01:15:52 2024 ] 
+Starting K-Fold Cross-Validation...
+[ Thu Dec  5 01:15:52 2024 ] 
+==================== Fold 1/5 ====================
+[ Thu Dec  5 01:15:52 2024 ] Error in cross-validation: SMVOptimizedTrainer.load_model() missing 2 required positional arguments: 'model' and 'model_args'
+[ Thu Dec  5 01:15:52 2024 ] Loading dataset...
+[ Thu Dec  5 01:15:52 2024 ] All available subjects in matched trials: [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+[ Thu Dec  5 01:15:52 2024 ] Subjects available for training/validation/test: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
+[ Thu Dec  5 01:15:52 2024 ] 
+Split:
+[ Thu Dec  5 01:15:52 2024 ] Training subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39]
+[ Thu Dec  5 01:15:52 2024 ] Validation subjects: [43, 44]
+[ Thu Dec  5 01:15:52 2024 ] Test subjects: [45, 46]
+[ Thu Dec  5 01:15:55 2024 ] Training set class distribution: [245 161]
+[ Thu Dec  5 01:15:55 2024 ] Created train dataloader with 406 samples
+[ Thu Dec  5 01:15:56 2024 ] Created val dataloader with 110 samples
+[ Thu Dec  5 01:15:57 2024 ] Created test dataloader with 97 samples
+[ Thu Dec  5 01:15:57 2024 ] Starting training...
+[ Thu Dec  5 01:15:57 2024 ] 
+Epoch 0/300
+[ Thu Dec  5 01:15:59 2024 ] Training - Loss: 1.0209, Acc: 44.09%, F1: 0.5455
+[ Thu Dec  5 01:15:59 2024 ] Validation - Loss: 1.0386, Acc: 38.18%, F1: 0.5000, AUC: 0.3274
+[ Thu Dec  5 01:15:59 2024 ] F1 score improved by 0.5000!
+[ Thu Dec  5 01:15:59 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_0_f1_0.5000.pth
+[ Thu Dec  5 01:15:59 2024 ] 
+Epoch 1/300
+[ Thu Dec  5 01:16:00 2024 ] Training - Loss: 1.0102, Acc: 46.06%, F1: 0.5513
+[ Thu Dec  5 01:16:00 2024 ] Validation - Loss: 1.0343, Acc: 42.73%, F1: 0.5772, AUC: 0.3883
+[ Thu Dec  5 01:16:00 2024 ] F1 score improved by 0.0772!
+[ Thu Dec  5 01:16:00 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_1_f1_0.5772.pth
+[ Thu Dec  5 01:16:00 2024 ] 
+Epoch 2/300
+[ Thu Dec  5 01:16:01 2024 ] Training - Loss: 0.9765, Acc: 55.42%, F1: 0.6595
+[ Thu Dec  5 01:16:01 2024 ] Validation - Loss: 0.9920, Acc: 45.45%, F1: 0.5833, AUC: 0.5485
+[ Thu Dec  5 01:16:01 2024 ] F1 score improved by 0.0062!
+[ Thu Dec  5 01:16:01 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_2_f1_0.5833.pth
+[ Thu Dec  5 01:16:01 2024 ] 
+Epoch 3/300
+[ Thu Dec  5 01:16:02 2024 ] Training - Loss: 0.9342, Acc: 59.11%, F1: 0.6800
+[ Thu Dec  5 01:16:02 2024 ] Validation - Loss: 0.9468, Acc: 55.45%, F1: 0.6202, AUC: 0.6819
+[ Thu Dec  5 01:16:02 2024 ] F1 score improved by 0.0368!
+[ Thu Dec  5 01:16:02 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_3_f1_0.6202.pth
+[ Thu Dec  5 01:16:02 2024 ] 
+Epoch 4/300
+[ Thu Dec  5 01:16:03 2024 ] Training - Loss: 0.8736, Acc: 72.41%, F1: 0.7692
+[ Thu Dec  5 01:16:03 2024 ] Validation - Loss: 0.8591, Acc: 73.64%, F1: 0.7339, AUC: 0.8120
+[ Thu Dec  5 01:16:03 2024 ] F1 score improved by 0.1138!
+[ Thu Dec  5 01:16:03 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_4_f1_0.7339.pth
+[ Thu Dec  5 01:16:03 2024 ] 
+Epoch 5/300
+[ Thu Dec  5 01:16:04 2024 ] Training - Loss: 0.7904, Acc: 76.11%, F1: 0.8000
+[ Thu Dec  5 01:16:04 2024 ] Validation - Loss: 0.7872, Acc: 78.18%, F1: 0.7895, AUC: 0.8765
+[ Thu Dec  5 01:16:04 2024 ] F1 score improved by 0.0555!
+[ Thu Dec  5 01:16:04 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_5_f1_0.7895.pth
+[ Thu Dec  5 01:16:04 2024 ] 
+Epoch 6/300
+[ Thu Dec  5 01:16:05 2024 ] Training - Loss: 0.7111, Acc: 81.77%, F1: 0.8653
+[ Thu Dec  5 01:16:05 2024 ] Validation - Loss: 0.7141, Acc: 82.73%, F1: 0.8257, AUC: 0.9129
+[ Thu Dec  5 01:16:05 2024 ] F1 score improved by 0.0362!
+[ Thu Dec  5 01:16:05 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_6_f1_0.8257.pth
+[ Thu Dec  5 01:16:05 2024 ] 
+Epoch 7/300
+[ Thu Dec  5 01:16:06 2024 ] Training - Loss: 0.6616, Acc: 84.24%, F1: 0.8895
+[ Thu Dec  5 01:16:06 2024 ] Validation - Loss: 0.6845, Acc: 88.18%, F1: 0.8829, AUC: 0.9116
+[ Thu Dec  5 01:16:06 2024 ] F1 score improved by 0.0572!
+[ Thu Dec  5 01:16:06 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_7_f1_0.8829.pth
+[ Thu Dec  5 01:16:06 2024 ] 
+Epoch 8/300
+[ Thu Dec  5 01:16:07 2024 ] Training - Loss: 0.6338, Acc: 85.47%, F1: 0.8975
+[ Thu Dec  5 01:16:07 2024 ] Validation - Loss: 0.7812, Acc: 76.36%, F1: 0.7292, AUC: 0.8620
+[ Thu Dec  5 01:16:07 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:07 2024 ] 
+Epoch 9/300
+[ Thu Dec  5 01:16:08 2024 ] Training - Loss: 0.6228, Acc: 85.71%, F1: 0.9006
+[ Thu Dec  5 01:16:08 2024 ] Validation - Loss: 0.7594, Acc: 76.36%, F1: 0.7547, AUC: 0.8630
+[ Thu Dec  5 01:16:08 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:08 2024 ] 
+Epoch 10/300
+[ Thu Dec  5 01:16:09 2024 ] Training - Loss: 0.5355, Acc: 89.66%, F1: 0.9507
+[ Thu Dec  5 01:16:09 2024 ] Validation - Loss: 0.7623, Acc: 80.00%, F1: 0.7755, AUC: 0.8878
+[ Thu Dec  5 01:16:09 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:09 2024 ] 
+Epoch 11/300
+[ Thu Dec  5 01:16:10 2024 ] Training - Loss: 0.5438, Acc: 88.42%, F1: 0.9370
+[ Thu Dec  5 01:16:11 2024 ] Validation - Loss: 0.9494, Acc: 72.73%, F1: 0.6939, AUC: 0.7872
+[ Thu Dec  5 01:16:11 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:11 2024 ] 
+Epoch 12/300
+[ Thu Dec  5 01:16:11 2024 ] Training - Loss: 0.5547, Acc: 86.95%, F1: 0.9215
+[ Thu Dec  5 01:16:12 2024 ] Validation - Loss: 0.8218, Acc: 79.09%, F1: 0.7810, AUC: 0.8520
+[ Thu Dec  5 01:16:12 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:12 2024 ] 
+Epoch 13/300
+[ Thu Dec  5 01:16:13 2024 ] Training - Loss: 0.5195, Acc: 88.18%, F1: 0.9363
+[ Thu Dec  5 01:16:13 2024 ] Validation - Loss: 0.9202, Acc: 70.91%, F1: 0.6800, AUC: 0.8047
+[ Thu Dec  5 01:16:13 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:13 2024 ] 
+Epoch 14/300
+[ Thu Dec  5 01:16:14 2024 ] Training - Loss: 0.5150, Acc: 88.67%, F1: 0.9417
+[ Thu Dec  5 01:16:14 2024 ] Validation - Loss: 0.8510, Acc: 72.73%, F1: 0.7368, AUC: 0.8428
+[ Thu Dec  5 01:16:14 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:14 2024 ] 
+Epoch 15/300
+[ Thu Dec  5 01:16:15 2024 ] Training - Loss: 0.4998, Acc: 89.66%, F1: 0.9451
+[ Thu Dec  5 01:16:15 2024 ] Validation - Loss: 0.6408, Acc: 82.73%, F1: 0.8319, AUC: 0.9242
+[ Thu Dec  5 01:16:15 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:15 2024 ] 
+Epoch 16/300
+[ Thu Dec  5 01:16:16 2024 ] Training - Loss: 0.4902, Acc: 90.15%, F1: 0.9543
+[ Thu Dec  5 01:16:16 2024 ] Validation - Loss: 0.6484, Acc: 84.55%, F1: 0.8547, AUC: 0.9126
+[ Thu Dec  5 01:16:16 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:16 2024 ] 
+Epoch 17/300
+[ Thu Dec  5 01:16:17 2024 ] Training - Loss: 0.4571, Acc: 91.13%, F1: 0.9655
+[ Thu Dec  5 01:16:17 2024 ] Validation - Loss: 0.8411, Acc: 78.18%, F1: 0.7778, AUC: 0.8805
+[ Thu Dec  5 01:16:17 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:17 2024 ] 
+Epoch 18/300
+[ Thu Dec  5 01:16:18 2024 ] Training - Loss: 0.4391, Acc: 91.63%, F1: 0.9717
+[ Thu Dec  5 01:16:18 2024 ] Validation - Loss: 0.8992, Acc: 76.36%, F1: 0.7547, AUC: 0.8504
+[ Thu Dec  5 01:16:18 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:18 2024 ] 
+Epoch 19/300
+[ Thu Dec  5 01:16:19 2024 ] Training - Loss: 0.4860, Acc: 89.41%, F1: 0.9460
+[ Thu Dec  5 01:16:19 2024 ] Validation - Loss: 0.8551, Acc: 80.91%, F1: 0.7879, AUC: 0.8752
+[ Thu Dec  5 01:16:19 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:19 2024 ] 
+Epoch 20/300
+[ Thu Dec  5 01:16:19 2024 ] Training - Loss: 0.4492, Acc: 91.38%, F1: 0.9662
+[ Thu Dec  5 01:16:20 2024 ] Validation - Loss: 0.6955, Acc: 81.82%, F1: 0.8077, AUC: 0.9239
+[ Thu Dec  5 01:16:20 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:20 2024 ] 
+Epoch 21/300
+[ Thu Dec  5 01:16:21 2024 ] Training - Loss: 0.4789, Acc: 89.90%, F1: 0.9521
+[ Thu Dec  5 01:16:21 2024 ] Validation - Loss: 1.0269, Acc: 71.82%, F1: 0.7156, AUC: 0.8222
+[ Thu Dec  5 01:16:21 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:21 2024 ] 
+Epoch 22/300
+[ Thu Dec  5 01:16:22 2024 ] Training - Loss: 0.4163, Acc: 91.87%, F1: 0.9702
+[ Thu Dec  5 01:16:22 2024 ] Validation - Loss: 0.9381, Acc: 76.36%, F1: 0.7500, AUC: 0.8686
+[ Thu Dec  5 01:16:22 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:22 2024 ] 
+Epoch 23/300
+[ Thu Dec  5 01:16:22 2024 ] Training - Loss: 0.4375, Acc: 91.13%, F1: 0.9632
+[ Thu Dec  5 01:16:23 2024 ] Validation - Loss: 0.6531, Acc: 84.55%, F1: 0.8496, AUC: 0.9259
+[ Thu Dec  5 01:16:23 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:23 2024 ] 
+Epoch 24/300
+[ Thu Dec  5 01:16:23 2024 ] Training - Loss: 0.4188, Acc: 91.63%, F1: 0.9706
+[ Thu Dec  5 01:16:24 2024 ] Validation - Loss: 0.7400, Acc: 80.00%, F1: 0.7925, AUC: 0.9196
+[ Thu Dec  5 01:16:24 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:24 2024 ] 
+Epoch 25/300
+[ Thu Dec  5 01:16:25 2024 ] Training - Loss: 0.4230, Acc: 92.12%, F1: 0.9752
+[ Thu Dec  5 01:16:25 2024 ] Validation - Loss: 0.6651, Acc: 84.55%, F1: 0.8411, AUC: 0.9351
+[ Thu Dec  5 01:16:25 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:25 2024 ] 
+Epoch 26/300
+[ Thu Dec  5 01:16:26 2024 ] Training - Loss: 0.4009, Acc: 92.12%, F1: 0.9751
+[ Thu Dec  5 01:16:26 2024 ] Validation - Loss: 0.7981, Acc: 81.82%, F1: 0.8182, AUC: 0.8957
+[ Thu Dec  5 01:16:26 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.8829
+[ Thu Dec  5 01:16:26 2024 ] 
+Epoch 27/300
+[ Thu Dec  5 01:16:27 2024 ] Training - Loss: 0.4044, Acc: 92.12%, F1: 0.9713
+[ Thu Dec  5 01:16:27 2024 ] Validation - Loss: 0.5976, Acc: 89.09%, F1: 0.8846, AUC: 0.9431
+[ Thu Dec  5 01:16:27 2024 ] F1 score improved by 0.0017!
+[ Thu Dec  5 01:16:27 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_27_f1_0.8846.pth
+[ Thu Dec  5 01:16:27 2024 ] 
+Epoch 28/300
+[ Thu Dec  5 01:16:28 2024 ] Training - Loss: 0.3982, Acc: 92.36%, F1: 0.9771
+[ Thu Dec  5 01:16:28 2024 ] Validation - Loss: 0.6477, Acc: 86.36%, F1: 0.8515, AUC: 0.9381
+[ Thu Dec  5 01:16:28 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:28 2024 ] 
+Epoch 29/300
+[ Thu Dec  5 01:16:29 2024 ] Training - Loss: 0.4482, Acc: 90.15%, F1: 0.9497
+[ Thu Dec  5 01:16:29 2024 ] Validation - Loss: 0.6832, Acc: 84.55%, F1: 0.8381, AUC: 0.9070
+[ Thu Dec  5 01:16:29 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:29 2024 ] 
+Epoch 30/300
+[ Thu Dec  5 01:16:30 2024 ] Training - Loss: 0.4274, Acc: 91.38%, F1: 0.9659
+[ Thu Dec  5 01:16:30 2024 ] Validation - Loss: 0.5868, Acc: 87.27%, F1: 0.8727, AUC: 0.9434
+[ Thu Dec  5 01:16:30 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:30 2024 ] 
+Epoch 31/300
+[ Thu Dec  5 01:16:31 2024 ] Training - Loss: 0.4069, Acc: 91.87%, F1: 0.9705
+[ Thu Dec  5 01:16:31 2024 ] Validation - Loss: 0.6330, Acc: 85.45%, F1: 0.8596, AUC: 0.9355
+[ Thu Dec  5 01:16:31 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:31 2024 ] 
+Epoch 32/300
+[ Thu Dec  5 01:16:32 2024 ] Training - Loss: 0.4074, Acc: 91.63%, F1: 0.9697
+[ Thu Dec  5 01:16:32 2024 ] Validation - Loss: 0.6627, Acc: 85.45%, F1: 0.8519, AUC: 0.9338
+[ Thu Dec  5 01:16:32 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:32 2024 ] 
+Epoch 33/300
+[ Thu Dec  5 01:16:33 2024 ] Training - Loss: 0.3819, Acc: 92.86%, F1: 0.9825
+[ Thu Dec  5 01:16:33 2024 ] Validation - Loss: 0.7874, Acc: 81.82%, F1: 0.8148, AUC: 0.9163
+[ Thu Dec  5 01:16:33 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:33 2024 ] 
+Epoch 34/300
+[ Thu Dec  5 01:16:34 2024 ] Training - Loss: 0.3687, Acc: 92.36%, F1: 0.9783
+[ Thu Dec  5 01:16:34 2024 ] Validation - Loss: 0.8254, Acc: 80.00%, F1: 0.8036, AUC: 0.9215
+[ Thu Dec  5 01:16:34 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:34 2024 ] 
+Epoch 35/300
+[ Thu Dec  5 01:16:35 2024 ] Training - Loss: 0.3878, Acc: 92.61%, F1: 0.9780
+[ Thu Dec  5 01:16:35 2024 ] Validation - Loss: 0.7583, Acc: 82.73%, F1: 0.8288, AUC: 0.9302
+[ Thu Dec  5 01:16:35 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:35 2024 ] 
+Epoch 36/300
+[ Thu Dec  5 01:16:36 2024 ] Training - Loss: 0.3478, Acc: 93.60%, F1: 0.9887
+[ Thu Dec  5 01:16:36 2024 ] Validation - Loss: 0.7381, Acc: 82.73%, F1: 0.8257, AUC: 0.9414
+[ Thu Dec  5 01:16:36 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:36 2024 ] 
+Epoch 37/300
+[ Thu Dec  5 01:16:37 2024 ] Training - Loss: 0.3602, Acc: 93.10%, F1: 0.9849
+[ Thu Dec  5 01:16:37 2024 ] Validation - Loss: 1.0675, Acc: 76.36%, F1: 0.7451, AUC: 0.8749
+[ Thu Dec  5 01:16:37 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:37 2024 ] 
+Epoch 38/300
+[ Thu Dec  5 01:16:38 2024 ] Training - Loss: 0.3566, Acc: 92.86%, F1: 0.9804
+[ Thu Dec  5 01:16:38 2024 ] Validation - Loss: 0.8885, Acc: 80.91%, F1: 0.7921, AUC: 0.9086
+[ Thu Dec  5 01:16:38 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:38 2024 ] 
+Epoch 39/300
+[ Thu Dec  5 01:16:39 2024 ] Training - Loss: 0.3321, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:16:39 2024 ] Validation - Loss: 0.6941, Acc: 83.64%, F1: 0.8333, AUC: 0.9441
+[ Thu Dec  5 01:16:39 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:39 2024 ] 
+Epoch 40/300
+[ Thu Dec  5 01:16:40 2024 ] Training - Loss: 0.3453, Acc: 93.10%, F1: 0.9839
+[ Thu Dec  5 01:16:40 2024 ] Validation - Loss: 0.7116, Acc: 84.55%, F1: 0.8411, AUC: 0.9503
+[ Thu Dec  5 01:16:40 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:40 2024 ] 
+Epoch 41/300
+[ Thu Dec  5 01:16:41 2024 ] Training - Loss: 0.3712, Acc: 92.36%, F1: 0.9760
+[ Thu Dec  5 01:16:41 2024 ] Validation - Loss: 0.8504, Acc: 80.91%, F1: 0.8108, AUC: 0.9302
+[ Thu Dec  5 01:16:41 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:41 2024 ] 
+Epoch 42/300
+[ Thu Dec  5 01:16:42 2024 ] Training - Loss: 0.3695, Acc: 92.86%, F1: 0.9785
+[ Thu Dec  5 01:16:42 2024 ] Validation - Loss: 0.6235, Acc: 87.27%, F1: 0.8772, AUC: 0.9603
+[ Thu Dec  5 01:16:42 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:42 2024 ] 
+Epoch 43/300
+[ Thu Dec  5 01:16:43 2024 ] Training - Loss: 0.3463, Acc: 93.35%, F1: 0.9875
+[ Thu Dec  5 01:16:43 2024 ] Validation - Loss: 0.6271, Acc: 87.27%, F1: 0.8750, AUC: 0.9560
+[ Thu Dec  5 01:16:43 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:43 2024 ] 
+Epoch 44/300
+[ Thu Dec  5 01:16:44 2024 ] Training - Loss: 0.3628, Acc: 92.36%, F1: 0.9764
+[ Thu Dec  5 01:16:45 2024 ] Validation - Loss: 0.7887, Acc: 83.64%, F1: 0.8235, AUC: 0.9368
+[ Thu Dec  5 01:16:45 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:45 2024 ] 
+Epoch 45/300
+[ Thu Dec  5 01:16:45 2024 ] Training - Loss: 0.3479, Acc: 93.10%, F1: 0.9836
+[ Thu Dec  5 01:16:45 2024 ] Validation - Loss: 0.7131, Acc: 84.55%, F1: 0.8468, AUC: 0.9431
+[ Thu Dec  5 01:16:45 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:45 2024 ] 
+Epoch 46/300
+[ Thu Dec  5 01:16:46 2024 ] Training - Loss: 0.3105, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:16:46 2024 ] Validation - Loss: 0.6869, Acc: 86.36%, F1: 0.8598, AUC: 0.9434
+[ Thu Dec  5 01:16:46 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:46 2024 ] 
+Epoch 47/300
+[ Thu Dec  5 01:16:47 2024 ] Training - Loss: 0.3177, Acc: 93.84%, F1: 0.9922
+[ Thu Dec  5 01:16:47 2024 ] Validation - Loss: 0.9455, Acc: 79.09%, F1: 0.7850, AUC: 0.9235
+[ Thu Dec  5 01:16:47 2024 ] No improvement in F1 score for 20 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:47 2024 ] 
+Epoch 48/300
+[ Thu Dec  5 01:16:48 2024 ] Training - Loss: 0.3300, Acc: 93.60%, F1: 0.9903
+[ Thu Dec  5 01:16:48 2024 ] Validation - Loss: 1.0304, Acc: 79.09%, F1: 0.7810, AUC: 0.9209
+[ Thu Dec  5 01:16:48 2024 ] No improvement in F1 score for 21 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:48 2024 ] 
+Epoch 49/300
+[ Thu Dec  5 01:16:49 2024 ] Training - Loss: 0.3486, Acc: 92.86%, F1: 0.9809
+[ Thu Dec  5 01:16:49 2024 ] Validation - Loss: 0.7357, Acc: 84.55%, F1: 0.8381, AUC: 0.9487
+[ Thu Dec  5 01:16:49 2024 ] No improvement in F1 score for 22 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:49 2024 ] 
+Epoch 50/300
+[ Thu Dec  5 01:16:50 2024 ] Training - Loss: 0.3133, Acc: 93.84%, F1: 0.9920
+[ Thu Dec  5 01:16:50 2024 ] Validation - Loss: 0.8778, Acc: 85.45%, F1: 0.8333, AUC: 0.9318
+[ Thu Dec  5 01:16:50 2024 ] No improvement in F1 score for 23 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:50 2024 ] 
+Epoch 51/300
+[ Thu Dec  5 01:16:51 2024 ] Training - Loss: 0.3547, Acc: 92.36%, F1: 0.9772
+[ Thu Dec  5 01:16:51 2024 ] Validation - Loss: 0.9406, Acc: 82.73%, F1: 0.8041, AUC: 0.8919
+[ Thu Dec  5 01:16:51 2024 ] No improvement in F1 score for 24 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:51 2024 ] 
+Epoch 52/300
+[ Thu Dec  5 01:16:52 2024 ] Training - Loss: 0.3059, Acc: 94.09%, F1: 0.9953
+[ Thu Dec  5 01:16:52 2024 ] Validation - Loss: 0.7212, Acc: 85.45%, F1: 0.8545, AUC: 0.9431
+[ Thu Dec  5 01:16:52 2024 ] No improvement in F1 score for 25 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:52 2024 ] 
+Epoch 53/300
+[ Thu Dec  5 01:16:53 2024 ] Training - Loss: 0.3456, Acc: 92.61%, F1: 0.9787
+[ Thu Dec  5 01:16:53 2024 ] Validation - Loss: 0.6502, Acc: 88.18%, F1: 0.8807, AUC: 0.9441
+[ Thu Dec  5 01:16:53 2024 ] No improvement in F1 score for 26 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:53 2024 ] 
+Epoch 54/300
+[ Thu Dec  5 01:16:54 2024 ] Training - Loss: 0.3137, Acc: 93.60%, F1: 0.9895
+[ Thu Dec  5 01:16:54 2024 ] Validation - Loss: 0.6378, Acc: 87.27%, F1: 0.8772, AUC: 0.9444
+[ Thu Dec  5 01:16:54 2024 ] No improvement in F1 score for 27 epochs. Best F1: 0.8846
+[ Thu Dec  5 01:16:54 2024 ] 
+Epoch 55/300
+[ Thu Dec  5 01:16:55 2024 ] Training - Loss: 0.3320, Acc: 93.35%, F1: 0.9875
+[ Thu Dec  5 01:16:55 2024 ] Validation - Loss: 0.5535, Acc: 90.91%, F1: 0.9091, AUC: 0.9593
+[ Thu Dec  5 01:16:55 2024 ] F1 score improved by 0.0245!
+[ Thu Dec  5 01:16:55 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_55_f1_0.9091.pth
+[ Thu Dec  5 01:16:55 2024 ] 
+Epoch 56/300
+[ Thu Dec  5 01:16:56 2024 ] Training - Loss: 0.2978, Acc: 94.09%, F1: 0.9950
+[ Thu Dec  5 01:16:56 2024 ] Validation - Loss: 0.5711, Acc: 90.91%, F1: 0.9091, AUC: 0.9633
+[ Thu Dec  5 01:16:56 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:16:56 2024 ] 
+Epoch 57/300
+[ Thu Dec  5 01:16:57 2024 ] Training - Loss: 0.3280, Acc: 93.35%, F1: 0.9866
+[ Thu Dec  5 01:16:58 2024 ] Validation - Loss: 0.6069, Acc: 88.18%, F1: 0.8785, AUC: 0.9553
+[ Thu Dec  5 01:16:58 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:16:58 2024 ] 
+Epoch 58/300
+[ Thu Dec  5 01:16:58 2024 ] Training - Loss: 0.3079, Acc: 93.60%, F1: 0.9898
+[ Thu Dec  5 01:16:58 2024 ] Validation - Loss: 0.7050, Acc: 85.45%, F1: 0.8491, AUC: 0.9520
+[ Thu Dec  5 01:16:58 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:16:58 2024 ] 
+Epoch 59/300
+[ Thu Dec  5 01:16:59 2024 ] Training - Loss: 0.3557, Acc: 92.61%, F1: 0.9780
+[ Thu Dec  5 01:16:59 2024 ] Validation - Loss: 0.6549, Acc: 88.18%, F1: 0.8738, AUC: 0.9593
+[ Thu Dec  5 01:16:59 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.9091
+[ Thu Dec  5 01:16:59 2024 ] 
+Epoch 60/300
+[ Thu Dec  5 01:17:00 2024 ] Training - Loss: 0.3135, Acc: 93.60%, F1: 0.9891
+[ Thu Dec  5 01:17:00 2024 ] Validation - Loss: 0.5246, Acc: 91.82%, F1: 0.9174, AUC: 0.9755
+[ Thu Dec  5 01:17:00 2024 ] F1 score improved by 0.0083!
+[ Thu Dec  5 01:17:01 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_60_f1_0.9174.pth
+[ Thu Dec  5 01:17:01 2024 ] 
+Epoch 61/300
+[ Thu Dec  5 01:17:01 2024 ] Training - Loss: 0.3169, Acc: 93.60%, F1: 0.9895
+[ Thu Dec  5 01:17:02 2024 ] Validation - Loss: 0.5443, Acc: 90.91%, F1: 0.9057, AUC: 0.9656
+[ Thu Dec  5 01:17:02 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:02 2024 ] 
+Epoch 62/300
+[ Thu Dec  5 01:17:03 2024 ] Training - Loss: 0.3299, Acc: 93.10%, F1: 0.9845
+[ Thu Dec  5 01:17:03 2024 ] Validation - Loss: 0.6452, Acc: 87.27%, F1: 0.8600, AUC: 0.9576
+[ Thu Dec  5 01:17:03 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:03 2024 ] 
+Epoch 63/300
+[ Thu Dec  5 01:17:04 2024 ] Training - Loss: 0.2943, Acc: 93.84%, F1: 0.9926
+[ Thu Dec  5 01:17:04 2024 ] Validation - Loss: 0.5811, Acc: 89.09%, F1: 0.8909, AUC: 0.9626
+[ Thu Dec  5 01:17:04 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:04 2024 ] 
+Epoch 64/300
+[ Thu Dec  5 01:17:05 2024 ] Training - Loss: 0.3144, Acc: 93.60%, F1: 0.9894
+[ Thu Dec  5 01:17:05 2024 ] Validation - Loss: 0.6001, Acc: 90.00%, F1: 0.9009, AUC: 0.9659
+[ Thu Dec  5 01:17:05 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:05 2024 ] 
+Epoch 65/300
+[ Thu Dec  5 01:17:06 2024 ] Training - Loss: 0.2967, Acc: 94.33%, F1: 0.9971
+[ Thu Dec  5 01:17:06 2024 ] Validation - Loss: 0.6663, Acc: 89.09%, F1: 0.8909, AUC: 0.9553
+[ Thu Dec  5 01:17:06 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:06 2024 ] 
+Epoch 66/300
+[ Thu Dec  5 01:17:07 2024 ] Training - Loss: 0.2957, Acc: 93.84%, F1: 0.9930
+[ Thu Dec  5 01:17:07 2024 ] Validation - Loss: 0.7053, Acc: 87.27%, F1: 0.8627, AUC: 0.9547
+[ Thu Dec  5 01:17:07 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:07 2024 ] 
+Epoch 67/300
+[ Thu Dec  5 01:17:08 2024 ] Training - Loss: 0.3039, Acc: 93.60%, F1: 0.9894
+[ Thu Dec  5 01:17:08 2024 ] Validation - Loss: 0.7196, Acc: 87.27%, F1: 0.8627, AUC: 0.9503
+[ Thu Dec  5 01:17:08 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:08 2024 ] 
+Epoch 68/300
+[ Thu Dec  5 01:17:09 2024 ] Training - Loss: 0.3095, Acc: 93.60%, F1: 0.9898
+[ Thu Dec  5 01:17:09 2024 ] Validation - Loss: 0.7352, Acc: 85.45%, F1: 0.8621, AUC: 0.9427
+[ Thu Dec  5 01:17:09 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:09 2024 ] 
+Epoch 69/300
+[ Thu Dec  5 01:17:10 2024 ] Training - Loss: 0.2759, Acc: 94.33%, F1: 0.9976
+[ Thu Dec  5 01:17:10 2024 ] Validation - Loss: 0.9023, Acc: 82.73%, F1: 0.8257, AUC: 0.9421
+[ Thu Dec  5 01:17:10 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:10 2024 ] 
+Epoch 70/300
+[ Thu Dec  5 01:17:11 2024 ] Training - Loss: 0.2843, Acc: 94.09%, F1: 0.9952
+[ Thu Dec  5 01:17:11 2024 ] Validation - Loss: 0.8714, Acc: 84.55%, F1: 0.8411, AUC: 0.9417
+[ Thu Dec  5 01:17:11 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:11 2024 ] 
+Epoch 71/300
+[ Thu Dec  5 01:17:12 2024 ] Training - Loss: 0.3136, Acc: 93.60%, F1: 0.9886
+[ Thu Dec  5 01:17:12 2024 ] Validation - Loss: 0.6327, Acc: 88.18%, F1: 0.8850, AUC: 0.9639
+[ Thu Dec  5 01:17:12 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:12 2024 ] 
+Epoch 72/300
+[ Thu Dec  5 01:17:13 2024 ] Training - Loss: 0.3076, Acc: 93.60%, F1: 0.9902
+[ Thu Dec  5 01:17:13 2024 ] Validation - Loss: 0.7448, Acc: 85.45%, F1: 0.8596, AUC: 0.9484
+[ Thu Dec  5 01:17:13 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:13 2024 ] 
+Epoch 73/300
+[ Thu Dec  5 01:17:14 2024 ] Training - Loss: 0.3203, Acc: 93.35%, F1: 0.9854
+[ Thu Dec  5 01:17:14 2024 ] Validation - Loss: 0.7113, Acc: 87.27%, F1: 0.8772, AUC: 0.9533
+[ Thu Dec  5 01:17:14 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:14 2024 ] 
+Epoch 74/300
+[ Thu Dec  5 01:17:15 2024 ] Training - Loss: 0.2769, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:15 2024 ] Validation - Loss: 0.7022, Acc: 86.36%, F1: 0.8649, AUC: 0.9517
+[ Thu Dec  5 01:17:15 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:15 2024 ] 
+Epoch 75/300
+[ Thu Dec  5 01:17:16 2024 ] Training - Loss: 0.2802, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:17:16 2024 ] Validation - Loss: 0.8547, Acc: 82.73%, F1: 0.8319, AUC: 0.9374
+[ Thu Dec  5 01:17:16 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:16 2024 ] 
+Epoch 76/300
+[ Thu Dec  5 01:17:17 2024 ] Training - Loss: 0.2931, Acc: 93.84%, F1: 0.9924
+[ Thu Dec  5 01:17:17 2024 ] Validation - Loss: 0.9610, Acc: 81.82%, F1: 0.8148, AUC: 0.9391
+[ Thu Dec  5 01:17:17 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:17 2024 ] 
+Epoch 77/300
+[ Thu Dec  5 01:17:18 2024 ] Training - Loss: 0.2849, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:17:18 2024 ] Validation - Loss: 0.8521, Acc: 83.64%, F1: 0.8302, AUC: 0.9503
+[ Thu Dec  5 01:17:18 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:18 2024 ] 
+Epoch 78/300
+[ Thu Dec  5 01:17:19 2024 ] Training - Loss: 0.3268, Acc: 93.10%, F1: 0.9856
+[ Thu Dec  5 01:17:19 2024 ] Validation - Loss: 0.8369, Acc: 82.73%, F1: 0.8288, AUC: 0.9388
+[ Thu Dec  5 01:17:19 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:19 2024 ] 
+Epoch 79/300
+[ Thu Dec  5 01:17:20 2024 ] Training - Loss: 0.3153, Acc: 93.60%, F1: 0.9903
+[ Thu Dec  5 01:17:20 2024 ] Validation - Loss: 0.7341, Acc: 85.45%, F1: 0.8596, AUC: 0.9464
+[ Thu Dec  5 01:17:20 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:20 2024 ] 
+Epoch 80/300
+[ Thu Dec  5 01:17:21 2024 ] Training - Loss: 0.2706, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:21 2024 ] Validation - Loss: 0.6461, Acc: 88.18%, F1: 0.8785, AUC: 0.9547
+[ Thu Dec  5 01:17:21 2024 ] No improvement in F1 score for 20 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:21 2024 ] 
+Epoch 81/300
+[ Thu Dec  5 01:17:22 2024 ] Training - Loss: 0.3296, Acc: 93.10%, F1: 0.9836
+[ Thu Dec  5 01:17:22 2024 ] Validation - Loss: 0.6021, Acc: 89.09%, F1: 0.8868, AUC: 0.9543
+[ Thu Dec  5 01:17:22 2024 ] No improvement in F1 score for 21 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:22 2024 ] 
+Epoch 82/300
+[ Thu Dec  5 01:17:24 2024 ] Training - Loss: 0.3160, Acc: 93.10%, F1: 0.9851
+[ Thu Dec  5 01:17:24 2024 ] Validation - Loss: 0.9447, Acc: 81.82%, F1: 0.8113, AUC: 0.9255
+[ Thu Dec  5 01:17:24 2024 ] No improvement in F1 score for 22 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:24 2024 ] 
+Epoch 83/300
+[ Thu Dec  5 01:17:25 2024 ] Training - Loss: 0.2888, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:17:25 2024 ] Validation - Loss: 0.7427, Acc: 86.36%, F1: 0.8673, AUC: 0.9444
+[ Thu Dec  5 01:17:25 2024 ] No improvement in F1 score for 23 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:25 2024 ] 
+Epoch 84/300
+[ Thu Dec  5 01:17:26 2024 ] Training - Loss: 0.2714, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:17:26 2024 ] Validation - Loss: 0.7645, Acc: 85.45%, F1: 0.8596, AUC: 0.9467
+[ Thu Dec  5 01:17:26 2024 ] No improvement in F1 score for 24 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:26 2024 ] 
+Epoch 85/300
+[ Thu Dec  5 01:17:27 2024 ] Training - Loss: 0.2977, Acc: 93.84%, F1: 0.9926
+[ Thu Dec  5 01:17:27 2024 ] Validation - Loss: 0.8907, Acc: 82.73%, F1: 0.8376, AUC: 0.9282
+[ Thu Dec  5 01:17:27 2024 ] No improvement in F1 score for 25 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:27 2024 ] 
+Epoch 86/300
+[ Thu Dec  5 01:17:28 2024 ] Training - Loss: 0.2728, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:17:28 2024 ] Validation - Loss: 0.8542, Acc: 82.73%, F1: 0.8376, AUC: 0.9513
+[ Thu Dec  5 01:17:28 2024 ] No improvement in F1 score for 26 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:28 2024 ] 
+Epoch 87/300
+[ Thu Dec  5 01:17:29 2024 ] Training - Loss: 0.2849, Acc: 93.60%, F1: 0.9897
+[ Thu Dec  5 01:17:29 2024 ] Validation - Loss: 0.8428, Acc: 83.64%, F1: 0.8448, AUC: 0.9533
+[ Thu Dec  5 01:17:29 2024 ] No improvement in F1 score for 27 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:29 2024 ] 
+Epoch 88/300
+[ Thu Dec  5 01:17:30 2024 ] Training - Loss: 0.2626, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:30 2024 ] Validation - Loss: 1.0608, Acc: 78.18%, F1: 0.7818, AUC: 0.9156
+[ Thu Dec  5 01:17:30 2024 ] No improvement in F1 score for 28 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:30 2024 ] 
+Epoch 89/300
+[ Thu Dec  5 01:17:31 2024 ] Training - Loss: 0.2840, Acc: 94.09%, F1: 0.9945
+[ Thu Dec  5 01:17:31 2024 ] Validation - Loss: 0.9942, Acc: 80.91%, F1: 0.8142, AUC: 0.9351
+[ Thu Dec  5 01:17:31 2024 ] No improvement in F1 score for 29 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:31 2024 ] 
+Epoch 90/300
+[ Thu Dec  5 01:17:32 2024 ] Training - Loss: 0.2644, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:17:32 2024 ] Validation - Loss: 1.0367, Acc: 80.91%, F1: 0.8142, AUC: 0.9315
+[ Thu Dec  5 01:17:32 2024 ] No improvement in F1 score for 30 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:32 2024 ] 
+Epoch 91/300
+[ Thu Dec  5 01:17:33 2024 ] Training - Loss: 0.2642, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:33 2024 ] Validation - Loss: 0.9619, Acc: 82.73%, F1: 0.8348, AUC: 0.9424
+[ Thu Dec  5 01:17:33 2024 ] No improvement in F1 score for 31 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:33 2024 ] 
+Epoch 92/300
+[ Thu Dec  5 01:17:34 2024 ] Training - Loss: 0.2999, Acc: 93.60%, F1: 0.9904
+[ Thu Dec  5 01:17:34 2024 ] Validation - Loss: 1.0448, Acc: 80.91%, F1: 0.8108, AUC: 0.9288
+[ Thu Dec  5 01:17:34 2024 ] No improvement in F1 score for 32 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:34 2024 ] 
+Epoch 93/300
+[ Thu Dec  5 01:17:35 2024 ] Training - Loss: 0.2931, Acc: 93.60%, F1: 0.9897
+[ Thu Dec  5 01:17:35 2024 ] Validation - Loss: 0.7453, Acc: 86.36%, F1: 0.8673, AUC: 0.9533
+[ Thu Dec  5 01:17:35 2024 ] No improvement in F1 score for 33 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:35 2024 ] 
+Epoch 94/300
+[ Thu Dec  5 01:17:36 2024 ] Training - Loss: 0.2855, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:17:36 2024 ] Validation - Loss: 0.7258, Acc: 87.27%, F1: 0.8679, AUC: 0.9523
+[ Thu Dec  5 01:17:36 2024 ] No improvement in F1 score for 34 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:36 2024 ] 
+Epoch 95/300
+[ Thu Dec  5 01:17:37 2024 ] Training - Loss: 0.2759, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:17:37 2024 ] Validation - Loss: 0.8649, Acc: 85.45%, F1: 0.8519, AUC: 0.9373
+[ Thu Dec  5 01:17:37 2024 ] No improvement in F1 score for 35 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:37 2024 ] 
+Epoch 96/300
+[ Thu Dec  5 01:17:38 2024 ] Training - Loss: 0.2777, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:17:38 2024 ] Validation - Loss: 0.9199, Acc: 83.64%, F1: 0.8364, AUC: 0.9424
+[ Thu Dec  5 01:17:38 2024 ] No improvement in F1 score for 36 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:38 2024 ] 
+Epoch 97/300
+[ Thu Dec  5 01:17:39 2024 ] Training - Loss: 0.2627, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:39 2024 ] Validation - Loss: 0.8357, Acc: 86.36%, F1: 0.8598, AUC: 0.9520
+[ Thu Dec  5 01:17:39 2024 ] No improvement in F1 score for 37 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:39 2024 ] 
+Epoch 98/300
+[ Thu Dec  5 01:17:40 2024 ] Training - Loss: 0.2676, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:17:40 2024 ] Validation - Loss: 0.8932, Acc: 84.55%, F1: 0.8440, AUC: 0.9421
+[ Thu Dec  5 01:17:40 2024 ] No improvement in F1 score for 38 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:40 2024 ] 
+Epoch 99/300
+[ Thu Dec  5 01:17:41 2024 ] Training - Loss: 0.2916, Acc: 93.60%, F1: 0.9899
+[ Thu Dec  5 01:17:41 2024 ] Validation - Loss: 0.6960, Acc: 87.27%, F1: 0.8679, AUC: 0.9550
+[ Thu Dec  5 01:17:41 2024 ] No improvement in F1 score for 39 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:41 2024 ] 
+Epoch 100/300
+[ Thu Dec  5 01:17:42 2024 ] Training - Loss: 0.3279, Acc: 92.86%, F1: 0.9806
+[ Thu Dec  5 01:17:42 2024 ] Validation - Loss: 0.6911, Acc: 89.09%, F1: 0.8846, AUC: 0.9556
+[ Thu Dec  5 01:17:42 2024 ] No improvement in F1 score for 40 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:42 2024 ] 
+Epoch 101/300
+[ Thu Dec  5 01:17:43 2024 ] Training - Loss: 0.2698, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:17:43 2024 ] Validation - Loss: 0.7304, Acc: 87.27%, F1: 0.8654, AUC: 0.9540
+[ Thu Dec  5 01:17:43 2024 ] No improvement in F1 score for 41 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:43 2024 ] 
+Epoch 102/300
+[ Thu Dec  5 01:17:44 2024 ] Training - Loss: 0.2836, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:17:45 2024 ] Validation - Loss: 0.6151, Acc: 91.82%, F1: 0.9109, AUC: 0.9609
+[ Thu Dec  5 01:17:45 2024 ] No improvement in F1 score for 42 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:45 2024 ] 
+Epoch 103/300
+[ Thu Dec  5 01:17:45 2024 ] Training - Loss: 0.2763, Acc: 94.09%, F1: 0.9946
+[ Thu Dec  5 01:17:45 2024 ] Validation - Loss: 0.6142, Acc: 90.91%, F1: 0.9091, AUC: 0.9686
+[ Thu Dec  5 01:17:45 2024 ] No improvement in F1 score for 43 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:45 2024 ] 
+Epoch 104/300
+[ Thu Dec  5 01:17:46 2024 ] Training - Loss: 0.2929, Acc: 93.60%, F1: 0.9898
+[ Thu Dec  5 01:17:46 2024 ] Validation - Loss: 0.7722, Acc: 89.09%, F1: 0.8824, AUC: 0.9535
+[ Thu Dec  5 01:17:46 2024 ] No improvement in F1 score for 44 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:46 2024 ] 
+Epoch 105/300
+[ Thu Dec  5 01:17:47 2024 ] Training - Loss: 0.2577, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:48 2024 ] Validation - Loss: 0.9144, Acc: 87.27%, F1: 0.8571, AUC: 0.9523
+[ Thu Dec  5 01:17:48 2024 ] No improvement in F1 score for 45 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:48 2024 ] 
+Epoch 106/300
+[ Thu Dec  5 01:17:49 2024 ] Training - Loss: 0.2534, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:49 2024 ] Validation - Loss: 0.8247, Acc: 87.27%, F1: 0.8571, AUC: 0.9553
+[ Thu Dec  5 01:17:49 2024 ] No improvement in F1 score for 46 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:49 2024 ] 
+Epoch 107/300
+[ Thu Dec  5 01:17:50 2024 ] Training - Loss: 0.2639, Acc: 94.33%, F1: 0.9976
+[ Thu Dec  5 01:17:50 2024 ] Validation - Loss: 0.7886, Acc: 89.09%, F1: 0.8824, AUC: 0.9527
+[ Thu Dec  5 01:17:50 2024 ] No improvement in F1 score for 47 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:50 2024 ] 
+Epoch 108/300
+[ Thu Dec  5 01:17:51 2024 ] Training - Loss: 0.2892, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:17:51 2024 ] Validation - Loss: 0.6903, Acc: 88.18%, F1: 0.8762, AUC: 0.9643
+[ Thu Dec  5 01:17:51 2024 ] No improvement in F1 score for 48 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:51 2024 ] 
+Epoch 109/300
+[ Thu Dec  5 01:17:52 2024 ] Training - Loss: 0.2780, Acc: 93.60%, F1: 0.9899
+[ Thu Dec  5 01:17:52 2024 ] Validation - Loss: 0.8797, Acc: 85.45%, F1: 0.8491, AUC: 0.9494
+[ Thu Dec  5 01:17:52 2024 ] No improvement in F1 score for 49 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:52 2024 ] 
+Epoch 110/300
+[ Thu Dec  5 01:17:53 2024 ] Training - Loss: 0.2667, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:17:53 2024 ] Validation - Loss: 0.8277, Acc: 86.36%, F1: 0.8649, AUC: 0.9495
+[ Thu Dec  5 01:17:53 2024 ] No improvement in F1 score for 50 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:53 2024 ] 
+Epoch 111/300
+[ Thu Dec  5 01:17:54 2024 ] Training - Loss: 0.3027, Acc: 93.60%, F1: 0.9892
+[ Thu Dec  5 01:17:54 2024 ] Validation - Loss: 0.8760, Acc: 84.55%, F1: 0.8440, AUC: 0.9490
+[ Thu Dec  5 01:17:54 2024 ] No improvement in F1 score for 51 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:54 2024 ] 
+Epoch 112/300
+[ Thu Dec  5 01:17:55 2024 ] Training - Loss: 0.2660, Acc: 94.09%, F1: 0.9947
+[ Thu Dec  5 01:17:55 2024 ] Validation - Loss: 0.9308, Acc: 84.55%, F1: 0.8440, AUC: 0.9480
+[ Thu Dec  5 01:17:55 2024 ] No improvement in F1 score for 52 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:55 2024 ] 
+Epoch 113/300
+[ Thu Dec  5 01:17:55 2024 ] Training - Loss: 0.2685, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:17:56 2024 ] Validation - Loss: 0.8815, Acc: 86.36%, F1: 0.8598, AUC: 0.9465
+[ Thu Dec  5 01:17:56 2024 ] No improvement in F1 score for 53 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:56 2024 ] 
+Epoch 114/300
+[ Thu Dec  5 01:17:56 2024 ] Training - Loss: 0.2596, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:17:57 2024 ] Validation - Loss: 0.9187, Acc: 84.55%, F1: 0.8440, AUC: 0.9464
+[ Thu Dec  5 01:17:57 2024 ] No improvement in F1 score for 54 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:57 2024 ] 
+Epoch 115/300
+[ Thu Dec  5 01:17:58 2024 ] Training - Loss: 0.2855, Acc: 94.09%, F1: 0.9946
+[ Thu Dec  5 01:17:58 2024 ] Validation - Loss: 0.8942, Acc: 86.36%, F1: 0.8598, AUC: 0.9510
+[ Thu Dec  5 01:17:58 2024 ] No improvement in F1 score for 55 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:58 2024 ] 
+Epoch 116/300
+[ Thu Dec  5 01:17:59 2024 ] Training - Loss: 0.2715, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:17:59 2024 ] Validation - Loss: 0.8855, Acc: 86.36%, F1: 0.8598, AUC: 0.9494
+[ Thu Dec  5 01:17:59 2024 ] No improvement in F1 score for 56 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:17:59 2024 ] 
+Epoch 117/300
+[ Thu Dec  5 01:18:00 2024 ] Training - Loss: 0.2642, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:18:00 2024 ] Validation - Loss: 0.7738, Acc: 87.27%, F1: 0.8679, AUC: 0.9553
+[ Thu Dec  5 01:18:00 2024 ] No improvement in F1 score for 57 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:00 2024 ] 
+Epoch 118/300
+[ Thu Dec  5 01:18:01 2024 ] Training - Loss: 0.2570, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:01 2024 ] Validation - Loss: 0.7410, Acc: 88.18%, F1: 0.8785, AUC: 0.9576
+[ Thu Dec  5 01:18:01 2024 ] No improvement in F1 score for 58 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:01 2024 ] 
+Epoch 119/300
+[ Thu Dec  5 01:18:02 2024 ] Training - Loss: 0.2842, Acc: 94.09%, F1: 0.9944
+[ Thu Dec  5 01:18:02 2024 ] Validation - Loss: 0.7491, Acc: 87.27%, F1: 0.8679, AUC: 0.9599
+[ Thu Dec  5 01:18:02 2024 ] No improvement in F1 score for 59 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:02 2024 ] 
+Epoch 120/300
+[ Thu Dec  5 01:18:02 2024 ] Training - Loss: 0.2591, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:03 2024 ] Validation - Loss: 0.6708, Acc: 90.00%, F1: 0.8991, AUC: 0.9633
+[ Thu Dec  5 01:18:03 2024 ] No improvement in F1 score for 60 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:03 2024 ] 
+Epoch 121/300
+[ Thu Dec  5 01:18:04 2024 ] Training - Loss: 0.2607, Acc: 94.33%, F1: 0.9974
+[ Thu Dec  5 01:18:04 2024 ] Validation - Loss: 0.6883, Acc: 90.00%, F1: 0.8991, AUC: 0.9636
+[ Thu Dec  5 01:18:04 2024 ] No improvement in F1 score for 61 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:04 2024 ] 
+Epoch 122/300
+[ Thu Dec  5 01:18:05 2024 ] Training - Loss: 0.2727, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:18:05 2024 ] Validation - Loss: 0.6963, Acc: 90.00%, F1: 0.8991, AUC: 0.9689
+[ Thu Dec  5 01:18:05 2024 ] No improvement in F1 score for 62 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:05 2024 ] 
+Epoch 123/300
+[ Thu Dec  5 01:18:06 2024 ] Training - Loss: 0.2668, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:18:06 2024 ] Validation - Loss: 0.7816, Acc: 88.18%, F1: 0.8807, AUC: 0.9556
+[ Thu Dec  5 01:18:06 2024 ] No improvement in F1 score for 63 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:06 2024 ] 
+Epoch 124/300
+[ Thu Dec  5 01:18:07 2024 ] Training - Loss: 0.2748, Acc: 94.09%, F1: 0.9946
+[ Thu Dec  5 01:18:07 2024 ] Validation - Loss: 0.6740, Acc: 90.91%, F1: 0.9057, AUC: 0.9623
+[ Thu Dec  5 01:18:07 2024 ] No improvement in F1 score for 64 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:07 2024 ] 
+Epoch 125/300
+[ Thu Dec  5 01:18:08 2024 ] Training - Loss: 0.2590, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:18:08 2024 ] Validation - Loss: 0.9326, Acc: 87.27%, F1: 0.8600, AUC: 0.9401
+[ Thu Dec  5 01:18:08 2024 ] No improvement in F1 score for 65 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:08 2024 ] 
+Epoch 126/300
+[ Thu Dec  5 01:18:09 2024 ] Training - Loss: 0.2700, Acc: 94.33%, F1: 0.9973
+[ Thu Dec  5 01:18:10 2024 ] Validation - Loss: 0.8520, Acc: 89.09%, F1: 0.8776, AUC: 0.9497
+[ Thu Dec  5 01:18:10 2024 ] No improvement in F1 score for 66 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:10 2024 ] 
+Epoch 127/300
+[ Thu Dec  5 01:18:10 2024 ] Training - Loss: 0.2709, Acc: 94.09%, F1: 0.9948
+[ Thu Dec  5 01:18:11 2024 ] Validation - Loss: 0.9187, Acc: 86.36%, F1: 0.8485, AUC: 0.9451
+[ Thu Dec  5 01:18:11 2024 ] No improvement in F1 score for 67 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:11 2024 ] 
+Epoch 128/300
+[ Thu Dec  5 01:18:12 2024 ] Training - Loss: 0.2546, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:12 2024 ] Validation - Loss: 0.9293, Acc: 85.45%, F1: 0.8462, AUC: 0.9437
+[ Thu Dec  5 01:18:12 2024 ] No improvement in F1 score for 68 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:12 2024 ] 
+Epoch 129/300
+[ Thu Dec  5 01:18:12 2024 ] Training - Loss: 0.2628, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:18:13 2024 ] Validation - Loss: 0.8917, Acc: 85.45%, F1: 0.8462, AUC: 0.9475
+[ Thu Dec  5 01:18:13 2024 ] No improvement in F1 score for 69 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:13 2024 ] 
+Epoch 130/300
+[ Thu Dec  5 01:18:14 2024 ] Training - Loss: 0.2599, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:14 2024 ] Validation - Loss: 0.7670, Acc: 89.09%, F1: 0.8889, AUC: 0.9676
+[ Thu Dec  5 01:18:14 2024 ] No improvement in F1 score for 70 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:14 2024 ] 
+Epoch 131/300
+[ Thu Dec  5 01:18:15 2024 ] Training - Loss: 0.2651, Acc: 94.33%, F1: 0.9975
+[ Thu Dec  5 01:18:15 2024 ] Validation - Loss: 0.6674, Acc: 90.91%, F1: 0.9057, AUC: 0.9712
+[ Thu Dec  5 01:18:15 2024 ] No improvement in F1 score for 71 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:15 2024 ] 
+Epoch 132/300
+[ Thu Dec  5 01:18:16 2024 ] Training - Loss: 0.2463, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:16 2024 ] Validation - Loss: 0.7806, Acc: 88.18%, F1: 0.8762, AUC: 0.9619
+[ Thu Dec  5 01:18:16 2024 ] No improvement in F1 score for 72 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:16 2024 ] 
+Epoch 133/300
+[ Thu Dec  5 01:18:17 2024 ] Training - Loss: 0.2703, Acc: 94.09%, F1: 0.9949
+[ Thu Dec  5 01:18:17 2024 ] Validation - Loss: 0.7689, Acc: 89.09%, F1: 0.8889, AUC: 0.9646
+[ Thu Dec  5 01:18:17 2024 ] No improvement in F1 score for 73 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:17 2024 ] 
+Epoch 134/300
+[ Thu Dec  5 01:18:17 2024 ] Training - Loss: 0.2564, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:18 2024 ] Validation - Loss: 0.6258, Acc: 91.82%, F1: 0.9159, AUC: 0.9686
+[ Thu Dec  5 01:18:18 2024 ] No improvement in F1 score for 74 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:18 2024 ] 
+Epoch 135/300
+[ Thu Dec  5 01:18:18 2024 ] Training - Loss: 0.2514, Acc: 94.58%, F1: 1.0000
+[ Thu Dec  5 01:18:19 2024 ] Validation - Loss: 0.7552, Acc: 90.00%, F1: 0.8911, AUC: 0.9576
+[ Thu Dec  5 01:18:19 2024 ] No improvement in F1 score for 75 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:19 2024 ] 
+Early stopping triggered after 135 epochs. Best F1: 0.9174
+[ Thu Dec  5 01:18:19 2024 ] 
+Training completed!
+[ Thu Dec  5 01:18:19 2024 ] Best Validation Metrics:
+[ Thu Dec  5 01:18:19 2024 ] F1 Score: 0.9174
+[ Thu Dec  5 01:18:19 2024 ] Accuracy: 91.82%
+[ Thu Dec  5 01:18:19 2024 ] Loss: 0.5246
+[ Thu Dec  5 01:18:19 2024 ] 
+Loading best model from ./work_dir/smartfallmm/mobile/model_epoch_60_f1_0.9174.pth for testing...
+[ Thu Dec  5 01:18:19 2024 ] 
+Evaluating on test set...
+[ Thu Dec  5 01:18:19 2024 ] 
+Test Set Results:
+ - Loss: 0.4148
+ - Accuracy: 98.97%
+ - F1 Score: 0.9899
+ - AUC: 1.0000
+[ Thu Dec  5 01:34:20 2024 ] Initializing basic attributes...
+[ Thu Dec  5 01:34:20 2024 ] Setting up environment...
+[ Thu Dec  5 01:34:20 2024 ] Using GPU device 0
+[ Thu Dec  5 01:34:20 2024 ] Initializing components...
+[ Thu Dec  5 01:34:20 2024 ] Model EnhancedDualPathFallDetector(
+  (phone_xyz_processor): EnhancedXYZProcessor(
+    (xyz_encoder): Sequential(
+      (0): Conv1d(3, 16, kernel_size=(5,), stride=(1,), padding=(2,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(7,), stride=(1,), padding=(3,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(9,), stride=(1,), padding=(4,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (attention): MultiheadAttention(
+      (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (phone_smv_processor): EnhancedSMVProcessor(
+    (smv_encoder): Sequential(
+      (0): Conv1d(1, 16, kernel_size=(7,), stride=(1,), padding=(3,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(11,), stride=(1,), padding=(5,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(15,), stride=(1,), padding=(7,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (threshold_learner): Sequential(
+      (0): AdaptiveMaxPool1d(output_size=1)
+      (1): Flatten(start_dim=1, end_dim=-1)
+      (2): Linear(in_features=32, out_features=16, bias=True)
+      (3): GELU(approximate='none')
+      (4): Dropout(p=0.1, inplace=False)
+      (5): Linear(in_features=16, out_features=8, bias=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Linear(in_features=8, out_features=1, bias=True)
+      (9): Sigmoid()
+    )
+  )
+  (watch_xyz_processor): EnhancedXYZProcessor(
+    (xyz_encoder): Sequential(
+      (0): Conv1d(3, 16, kernel_size=(5,), stride=(1,), padding=(2,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(7,), stride=(1,), padding=(3,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(9,), stride=(1,), padding=(4,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (attention): MultiheadAttention(
+      (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (watch_smv_processor): EnhancedSMVProcessor(
+    (smv_encoder): Sequential(
+      (0): Conv1d(1, 16, kernel_size=(7,), stride=(1,), padding=(3,))
+      (1): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (2): GELU(approximate='none')
+      (3): Dropout(p=0.1, inplace=False)
+      (4): Conv1d(16, 32, kernel_size=(11,), stride=(1,), padding=(5,))
+      (5): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Conv1d(32, 32, kernel_size=(15,), stride=(1,), padding=(7,), groups=32)
+      (9): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (10): GELU(approximate='none')
+      (11): MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (12): Dropout(p=0.1, inplace=False)
+    )
+    (threshold_learner): Sequential(
+      (0): AdaptiveMaxPool1d(output_size=1)
+      (1): Flatten(start_dim=1, end_dim=-1)
+      (2): Linear(in_features=32, out_features=16, bias=True)
+      (3): GELU(approximate='none')
+      (4): Dropout(p=0.1, inplace=False)
+      (5): Linear(in_features=16, out_features=8, bias=True)
+      (6): GELU(approximate='none')
+      (7): Dropout(p=0.1, inplace=False)
+      (8): Linear(in_features=8, out_features=1, bias=True)
+      (9): Sigmoid()
+    )
+  )
+  (fusion): Sequential(
+    (0): Linear(in_features=128, out_features=96, bias=True)
+    (1): LayerNorm((96,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=96, out_features=64, bias=True)
+    (5): LayerNorm((64,), eps=1e-05, elementwise_affine=True)
+    (6): GELU(approximate='none')
+    (7): Dropout(p=0.1, inplace=False)
+    (8): Linear(in_features=64, out_features=32, bias=True)
+  )
+  (transformer): TransformerEncoder(
+    (layers): ModuleList(
+      (0-5): 6 x TransformerEncoderLayer(
+        (self_attn): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=32, out_features=32, bias=True)
+        )
+        (linear1): Linear(in_features=32, out_features=128, bias=True)
+        (dropout): Dropout(p=0.1, inplace=False)
+        (linear2): Linear(in_features=128, out_features=32, bias=True)
+        (norm1): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+        (norm2): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+        (dropout1): Dropout(p=0.1, inplace=False)
+        (dropout2): Dropout(p=0.1, inplace=False)
+      )
+    )
+    (norm): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+  )
+  (classifier): Sequential(
+    (0): Linear(in_features=64, out_features=32, bias=True)
+    (1): LayerNorm((32,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=32, out_features=16, bias=True)
+    (5): LayerNorm((16,), eps=1e-05, elementwise_affine=True)
+    (6): GELU(approximate='none')
+    (7): Dropout(p=0.1, inplace=False)
+    (8): Linear(in_features=16, out_features=2, bias=True)
+  )
+  (fall_feature_extractor): Sequential(
+    (0): Linear(in_features=32, out_features=16, bias=True)
+    (1): LayerNorm((16,), eps=1e-05, elementwise_affine=True)
+    (2): GELU(approximate='none')
+    (3): Dropout(p=0.1, inplace=False)
+    (4): Linear(in_features=16, out_features=32, bias=True)
+  )
+) loaded successfully
+[ Thu Dec  5 01:34:22 2024 ] 
+Starting K-Fold Cross-Validation...
+[ Thu Dec  5 01:34:23 2024 ] 
+==================== Fold 1/5 ====================
+[ Thu Dec  5 01:34:23 2024 ] Error in cross-validation: SMVOptimizedTrainer.load_model() missing 2 required positional arguments: 'model' and 'model_args'
+[ Thu Dec  5 01:34:23 2024 ] Loading dataset...
+[ Thu Dec  5 01:34:23 2024 ] All available subjects in matched trials: [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+[ Thu Dec  5 01:34:23 2024 ] Subjects available for training/validation/test: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
+[ Thu Dec  5 01:34:23 2024 ] 
+Split:
+[ Thu Dec  5 01:34:23 2024 ] Training subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39]
+[ Thu Dec  5 01:34:23 2024 ] Validation subjects: [43, 44]
+[ Thu Dec  5 01:34:23 2024 ] Test subjects: [45, 46]
+[ Thu Dec  5 01:34:26 2024 ] Training set class distribution: [245 161]
+[ Thu Dec  5 01:34:26 2024 ] Created train dataloader with 406 samples
+[ Thu Dec  5 01:34:27 2024 ] Created val dataloader with 110 samples
+[ Thu Dec  5 01:34:28 2024 ] Created test dataloader with 97 samples
+[ Thu Dec  5 01:34:28 2024 ] Starting training...
+[ Thu Dec  5 01:34:28 2024 ] 
+Epoch 0/300
+[ Thu Dec  5 01:34:31 2024 ] Training - Loss: 1.0294, Acc: 42.86%, F1: 0.5435, Sensitivity: 0.6281, Specificity: 0.2624
+[ Thu Dec  5 01:34:32 2024 ] Validation - Loss: 1.0359, Acc: 40.91%, F1: 0.5324, AUC: 0.4192, Sensitivity: 0.7009, Specificity: 0.1364
+[ Thu Dec  5 01:34:32 2024 ] F1 score improved by 0.5324!
+[ Thu Dec  5 01:34:32 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_0_f1_0.5324.pth
+[ Thu Dec  5 01:34:32 2024 ] 
+Epoch 1/300
+[ Thu Dec  5 01:34:33 2024 ] Training - Loss: 1.0219, Acc: 47.04%, F1: 0.5682, Sensitivity: 0.6309, Specificity: 0.3503
+[ Thu Dec  5 01:34:33 2024 ] Validation - Loss: 1.0449, Acc: 41.82%, F1: 0.5616, AUC: 0.4307, Sensitivity: 0.7679, Specificity: 0.0913
+[ Thu Dec  5 01:34:33 2024 ] F1 score improved by 0.0293!
+[ Thu Dec  5 01:34:33 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_1_f1_0.5616.pth
+[ Thu Dec  5 01:34:33 2024 ] 
+Epoch 2/300
+[ Thu Dec  5 01:34:34 2024 ] Training - Loss: 1.0315, Acc: 47.04%, F1: 0.5643, Sensitivity: 0.6695, Specificity: 0.3314
+[ Thu Dec  5 01:34:34 2024 ] Validation - Loss: 1.0131, Acc: 42.73%, F1: 0.5714, AUC: 0.4401, Sensitivity: 0.8013, Specificity: 0.0913
+[ Thu Dec  5 01:34:34 2024 ] F1 score improved by 0.0098!
+[ Thu Dec  5 01:34:34 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_2_f1_0.5714.pth
+[ Thu Dec  5 01:34:34 2024 ] 
+Epoch 3/300
+[ Thu Dec  5 01:34:35 2024 ] Training - Loss: 1.0008, Acc: 47.78%, F1: 0.5887, Sensitivity: 0.6810, Specificity: 0.3142
+[ Thu Dec  5 01:34:35 2024 ] Validation - Loss: 0.9901, Acc: 43.64%, F1: 0.5634, AUC: 0.4475, Sensitivity: 0.7656, Specificity: 0.1347
+[ Thu Dec  5 01:34:35 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.5714
+[ Thu Dec  5 01:34:35 2024 ] 
+Epoch 4/300
+[ Thu Dec  5 01:34:36 2024 ] Training - Loss: 0.9642, Acc: 56.16%, F1: 0.6579, Sensitivity: 0.7929, Specificity: 0.3965
+[ Thu Dec  5 01:34:36 2024 ] Validation - Loss: 0.9646, Acc: 50.00%, F1: 0.5865, AUC: 0.5083, Sensitivity: 0.7500, Specificity: 0.2780
+[ Thu Dec  5 01:34:36 2024 ] F1 score improved by 0.0150!
+[ Thu Dec  5 01:34:36 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_4_f1_0.5865.pth
+[ Thu Dec  5 01:34:36 2024 ] 
+Epoch 5/300
+[ Thu Dec  5 01:34:37 2024 ] Training - Loss: 0.9330, Acc: 63.55%, F1: 0.6595, Sensitivity: 0.7730, Specificity: 0.6095
+[ Thu Dec  5 01:34:37 2024 ] Validation - Loss: 0.9180, Acc: 66.36%, F1: 0.6476, AUC: 0.6629, Sensitivity: 0.6496, Specificity: 0.6890
+[ Thu Dec  5 01:34:37 2024 ] F1 score improved by 0.0612!
+[ Thu Dec  5 01:34:37 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_5_f1_0.6476.pth
+[ Thu Dec  5 01:34:37 2024 ] 
+Epoch 6/300
+[ Thu Dec  5 01:34:38 2024 ] Training - Loss: 0.8476, Acc: 70.94%, F1: 0.7303, Sensitivity: 0.6609, Specificity: 0.8589
+[ Thu Dec  5 01:34:38 2024 ] Validation - Loss: 0.8707, Acc: 67.27%, F1: 0.6897, AUC: 0.6756, Sensitivity: 0.7455, Specificity: 0.6143
+[ Thu Dec  5 01:34:38 2024 ] F1 score improved by 0.0420!
+[ Thu Dec  5 01:34:38 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_6_f1_0.6897.pth
+[ Thu Dec  5 01:34:38 2024 ] 
+Epoch 7/300
+[ Thu Dec  5 01:34:39 2024 ] Training - Loss: 0.8038, Acc: 75.12%, F1: 0.7787, Sensitivity: 0.8116, Specificity: 0.7934
+[ Thu Dec  5 01:34:39 2024 ] Validation - Loss: 0.8254, Acc: 72.73%, F1: 0.7619, AUC: 0.7335, Sensitivity: 0.8973, Specificity: 0.5848
+[ Thu Dec  5 01:34:39 2024 ] F1 score improved by 0.0722!
+[ Thu Dec  5 01:34:39 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_7_f1_0.7619.pth
+[ Thu Dec  5 01:34:39 2024 ] 
+Epoch 8/300
+[ Thu Dec  5 01:34:40 2024 ] Training - Loss: 0.7518, Acc: 80.05%, F1: 0.8384, Sensitivity: 0.8002, Specificity: 0.9122
+[ Thu Dec  5 01:34:40 2024 ] Validation - Loss: 0.8022, Acc: 71.82%, F1: 0.7559, AUC: 0.7248, Sensitivity: 0.8973, Specificity: 0.5709
+[ Thu Dec  5 01:34:40 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.7619
+[ Thu Dec  5 01:34:40 2024 ] 
+Epoch 9/300
+[ Thu Dec  5 01:34:40 2024 ] Training - Loss: 0.7364, Acc: 79.56%, F1: 0.8365, Sensitivity: 0.8857, Specificity: 0.8095
+[ Thu Dec  5 01:34:41 2024 ] Validation - Loss: 0.7736, Acc: 75.45%, F1: 0.7874, AUC: 0.7612, Sensitivity: 0.9487, Specificity: 0.6022
+[ Thu Dec  5 01:34:41 2024 ] F1 score improved by 0.0255!
+[ Thu Dec  5 01:34:41 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_9_f1_0.7874.pth
+[ Thu Dec  5 01:34:41 2024 ] 
+Epoch 10/300
+[ Thu Dec  5 01:34:41 2024 ] Training - Loss: 0.7672, Acc: 77.09%, F1: 0.8000, Sensitivity: 0.7657, Specificity: 0.8751
+[ Thu Dec  5 01:34:42 2024 ] Validation - Loss: 0.7875, Acc: 71.82%, F1: 0.7304, AUC: 0.7208, Sensitivity: 0.7991, Specificity: 0.6629
+[ Thu Dec  5 01:34:42 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:42 2024 ] 
+Epoch 11/300
+[ Thu Dec  5 01:34:42 2024 ] Training - Loss: 0.7047, Acc: 81.77%, F1: 0.8595, Sensitivity: 0.8609, Specificity: 0.8820
+[ Thu Dec  5 01:34:43 2024 ] Validation - Loss: 0.8116, Acc: 70.91%, F1: 0.7288, AUC: 0.7127, Sensitivity: 0.8147, Specificity: 0.6317
+[ Thu Dec  5 01:34:43 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:43 2024 ] 
+Epoch 12/300
+[ Thu Dec  5 01:34:43 2024 ] Training - Loss: 0.6662, Acc: 83.50%, F1: 0.8747, Sensitivity: 0.8715, Specificity: 0.8886
+[ Thu Dec  5 01:34:44 2024 ] Validation - Loss: 0.8159, Acc: 72.73%, F1: 0.7321, AUC: 0.7289, Sensitivity: 0.7812, Specificity: 0.6925
+[ Thu Dec  5 01:34:44 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:44 2024 ] 
+Epoch 13/300
+[ Thu Dec  5 01:34:44 2024 ] Training - Loss: 0.6548, Acc: 83.25%, F1: 0.8763, Sensitivity: 0.8815, Specificity: 0.8908
+[ Thu Dec  5 01:34:45 2024 ] Validation - Loss: 0.7959, Acc: 72.73%, F1: 0.7414, AUC: 0.7302, Sensitivity: 0.8147, Specificity: 0.6629
+[ Thu Dec  5 01:34:45 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:45 2024 ] 
+Epoch 14/300
+[ Thu Dec  5 01:34:45 2024 ] Training - Loss: 0.6105, Acc: 86.95%, F1: 0.9211, Sensitivity: 0.9117, Specificity: 0.9311
+[ Thu Dec  5 01:34:46 2024 ] Validation - Loss: 0.7941, Acc: 73.64%, F1: 0.7339, AUC: 0.7370, Sensitivity: 0.7656, Specificity: 0.7220
+[ Thu Dec  5 01:34:46 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:46 2024 ] 
+Epoch 15/300
+[ Thu Dec  5 01:34:47 2024 ] Training - Loss: 0.6078, Acc: 85.96%, F1: 0.9100, Sensitivity: 0.9085, Specificity: 0.9218
+[ Thu Dec  5 01:34:47 2024 ] Validation - Loss: 0.7901, Acc: 71.82%, F1: 0.7103, AUC: 0.7181, Sensitivity: 0.7143, Specificity: 0.7220
+[ Thu Dec  5 01:34:47 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:47 2024 ] 
+Epoch 16/300
+[ Thu Dec  5 01:34:47 2024 ] Training - Loss: 0.5811, Acc: 87.44%, F1: 0.9192, Sensitivity: 0.9493, Specificity: 0.9118
+[ Thu Dec  5 01:34:48 2024 ] Validation - Loss: 0.7458, Acc: 76.36%, F1: 0.7500, AUC: 0.7627, Sensitivity: 0.7299, Specificity: 0.7994
+[ Thu Dec  5 01:34:48 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.7874
+[ Thu Dec  5 01:34:48 2024 ] 
+Epoch 17/300
+[ Thu Dec  5 01:34:49 2024 ] Training - Loss: 0.5627, Acc: 89.16%, F1: 0.9415, Sensitivity: 0.9076, Specificity: 0.9849
+[ Thu Dec  5 01:34:49 2024 ] Validation - Loss: 0.7175, Acc: 81.82%, F1: 0.8113, AUC: 0.8179, Sensitivity: 0.8125, Specificity: 0.8490
+[ Thu Dec  5 01:34:49 2024 ] F1 score improved by 0.0239!
+[ Thu Dec  5 01:34:49 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_17_f1_0.8113.pth
+[ Thu Dec  5 01:34:49 2024 ] 
+Epoch 18/300
+[ Thu Dec  5 01:34:49 2024 ] Training - Loss: 0.5533, Acc: 88.92%, F1: 0.9383, Sensitivity: 0.9379, Specificity: 0.9454
+[ Thu Dec  5 01:34:50 2024 ] Validation - Loss: 0.7423, Acc: 78.18%, F1: 0.7818, AUC: 0.7829, Sensitivity: 0.8125, Specificity: 0.7716
+[ Thu Dec  5 01:34:50 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.8113
+[ Thu Dec  5 01:34:50 2024 ] 
+Epoch 19/300
+[ Thu Dec  5 01:34:51 2024 ] Training - Loss: 0.5819, Acc: 86.70%, F1: 0.9116, Sensitivity: 0.9175, Specificity: 0.9241
+[ Thu Dec  5 01:34:51 2024 ] Validation - Loss: 0.7155, Acc: 81.82%, F1: 0.8182, AUC: 0.8193, Sensitivity: 0.8482, Specificity: 0.7994
+[ Thu Dec  5 01:34:51 2024 ] F1 score improved by 0.0069!
+[ Thu Dec  5 01:34:51 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_19_f1_0.8182.pth
+[ Thu Dec  5 01:34:51 2024 ] 
+Epoch 20/300
+[ Thu Dec  5 01:34:52 2024 ] Training - Loss: 0.5877, Acc: 86.70%, F1: 0.9149, Sensitivity: 0.8993, Specificity: 0.9380
+[ Thu Dec  5 01:34:52 2024 ] Validation - Loss: 0.7002, Acc: 83.64%, F1: 0.8200, AUC: 0.8342, Sensitivity: 0.7589, Specificity: 0.9080
+[ Thu Dec  5 01:34:52 2024 ] F1 score improved by 0.0018!
+[ Thu Dec  5 01:34:52 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_20_f1_0.8200.pth
+[ Thu Dec  5 01:34:52 2024 ] 
+Epoch 21/300
+[ Thu Dec  5 01:34:53 2024 ] Training - Loss: 0.5228, Acc: 89.90%, F1: 0.9485, Sensitivity: 0.9437, Specificity: 0.9620
+[ Thu Dec  5 01:34:53 2024 ] Validation - Loss: 0.7320, Acc: 80.91%, F1: 0.8000, AUC: 0.8085, Sensitivity: 0.7589, Specificity: 0.8289
+[ Thu Dec  5 01:34:53 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.8200
+[ Thu Dec  5 01:34:53 2024 ] 
+Epoch 22/300
+[ Thu Dec  5 01:34:54 2024 ] Training - Loss: 0.5664, Acc: 86.70%, F1: 0.9188, Sensitivity: 0.9253, Specificity: 0.9331
+[ Thu Dec  5 01:34:54 2024 ] Validation - Loss: 0.6941, Acc: 83.64%, F1: 0.8302, AUC: 0.8361, Sensitivity: 0.7924, Specificity: 0.8646
+[ Thu Dec  5 01:34:54 2024 ] F1 score improved by 0.0102!
+[ Thu Dec  5 01:34:54 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_22_f1_0.8302.pth
+[ Thu Dec  5 01:34:54 2024 ] 
+Epoch 23/300
+[ Thu Dec  5 01:34:55 2024 ] Training - Loss: 0.5241, Acc: 88.18%, F1: 0.9330, Sensitivity: 0.9313, Specificity: 0.9380
+[ Thu Dec  5 01:34:55 2024 ] Validation - Loss: 0.7737, Acc: 83.64%, F1: 0.8163, AUC: 0.8335, Sensitivity: 0.7054, Specificity: 0.9236
+[ Thu Dec  5 01:34:55 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.8302
+[ Thu Dec  5 01:34:55 2024 ] 
+Epoch 24/300
+[ Thu Dec  5 01:34:56 2024 ] Training - Loss: 0.5320, Acc: 89.41%, F1: 0.9440, Sensitivity: 0.9512, Specificity: 0.9451
+[ Thu Dec  5 01:34:56 2024 ] Validation - Loss: 0.7558, Acc: 82.73%, F1: 0.8155, AUC: 0.8261, Sensitivity: 0.7589, Specificity: 0.8785
+[ Thu Dec  5 01:34:56 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.8302
+[ Thu Dec  5 01:34:56 2024 ] 
+Epoch 25/300
+[ Thu Dec  5 01:34:57 2024 ] Training - Loss: 0.5184, Acc: 90.39%, F1: 0.9544, Sensitivity: 0.9449, Specificity: 0.9681
+[ Thu Dec  5 01:34:57 2024 ] Validation - Loss: 0.7507, Acc: 86.36%, F1: 0.8485, AUC: 0.8611, Sensitivity: 0.7589, Specificity: 0.9392
+[ Thu Dec  5 01:34:57 2024 ] F1 score improved by 0.0183!
+[ Thu Dec  5 01:34:57 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_25_f1_0.8485.pth
+[ Thu Dec  5 01:34:57 2024 ] 
+Epoch 26/300
+[ Thu Dec  5 01:34:58 2024 ] Training - Loss: 0.5078, Acc: 90.15%, F1: 0.9508, Sensitivity: 0.9565, Specificity: 0.9544
+[ Thu Dec  5 01:34:58 2024 ] Validation - Loss: 0.7013, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.7924, Specificity: 0.9392
+[ Thu Dec  5 01:34:58 2024 ] F1 score improved by 0.0228!
+[ Thu Dec  5 01:34:58 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_26_f1_0.8713.pth
+[ Thu Dec  5 01:34:58 2024 ] 
+Epoch 27/300
+[ Thu Dec  5 01:34:59 2024 ] Training - Loss: 0.5126, Acc: 89.16%, F1: 0.9396, Sensitivity: 0.9286, Specificity: 0.9587
+[ Thu Dec  5 01:34:59 2024 ] Validation - Loss: 0.6470, Acc: 90.91%, F1: 0.9000, AUC: 0.9070, Sensitivity: 0.8281, Specificity: 0.9705
+[ Thu Dec  5 01:34:59 2024 ] F1 score improved by 0.0287!
+[ Thu Dec  5 01:34:59 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_27_f1_0.9000.pth
+[ Thu Dec  5 01:34:59 2024 ] 
+Epoch 28/300
+[ Thu Dec  5 01:35:00 2024 ] Training - Loss: 0.4982, Acc: 90.39%, F1: 0.9542, Sensitivity: 0.9540, Specificity: 0.9631
+[ Thu Dec  5 01:35:00 2024 ] Validation - Loss: 0.6190, Acc: 90.91%, F1: 0.9000, AUC: 0.9070, Sensitivity: 0.8281, Specificity: 0.9705
+[ Thu Dec  5 01:35:00 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:00 2024 ] 
+Epoch 29/300
+[ Thu Dec  5 01:35:01 2024 ] Training - Loss: 0.5441, Acc: 87.93%, F1: 0.9239, Sensitivity: 0.9565, Specificity: 0.9223
+[ Thu Dec  5 01:35:01 2024 ] Validation - Loss: 0.5964, Acc: 87.27%, F1: 0.8727, AUC: 0.8739, Sensitivity: 0.8772, Specificity: 0.8628
+[ Thu Dec  5 01:35:01 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:01 2024 ] 
+Epoch 30/300
+[ Thu Dec  5 01:35:02 2024 ] Training - Loss: 0.5011, Acc: 89.16%, F1: 0.9405, Sensitivity: 0.9538, Specificity: 0.9399
+[ Thu Dec  5 01:35:02 2024 ] Validation - Loss: 0.6402, Acc: 90.91%, F1: 0.9000, AUC: 0.9070, Sensitivity: 0.8281, Specificity: 0.9705
+[ Thu Dec  5 01:35:02 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:02 2024 ] 
+Epoch 31/300
+[ Thu Dec  5 01:35:03 2024 ] Training - Loss: 0.5160, Acc: 89.90%, F1: 0.9499, Sensitivity: 0.9314, Specificity: 0.9751
+[ Thu Dec  5 01:35:03 2024 ] Validation - Loss: 0.6327, Acc: 90.91%, F1: 0.9000, AUC: 0.9070, Sensitivity: 0.8281, Specificity: 0.9705
+[ Thu Dec  5 01:35:03 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:03 2024 ] 
+Epoch 32/300
+[ Thu Dec  5 01:35:04 2024 ] Training - Loss: 0.4725, Acc: 90.64%, F1: 0.9558, Sensitivity: 0.9631, Specificity: 0.9587
+[ Thu Dec  5 01:35:05 2024 ] Validation - Loss: 0.6305, Acc: 90.91%, F1: 0.9000, AUC: 0.9070, Sensitivity: 0.8281, Specificity: 0.9705
+[ Thu Dec  5 01:35:05 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:05 2024 ] 
+Epoch 33/300
+[ Thu Dec  5 01:35:05 2024 ] Training - Loss: 0.5198, Acc: 88.42%, F1: 0.9333, Sensitivity: 0.9189, Specificity: 0.9529
+[ Thu Dec  5 01:35:06 2024 ] Validation - Loss: 0.6352, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9410
+[ Thu Dec  5 01:35:06 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:06 2024 ] 
+Epoch 34/300
+[ Thu Dec  5 01:35:07 2024 ] Training - Loss: 0.5405, Acc: 88.18%, F1: 0.9274, Sensitivity: 0.9279, Specificity: 0.9490
+[ Thu Dec  5 01:35:07 2024 ] Validation - Loss: 0.6489, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9410
+[ Thu Dec  5 01:35:07 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:07 2024 ] 
+Epoch 35/300
+[ Thu Dec  5 01:35:09 2024 ] Training - Loss: 0.4471, Acc: 92.12%, F1: 0.9725, Sensitivity: 0.9665, Specificity: 0.9796
+[ Thu Dec  5 01:35:09 2024 ] Validation - Loss: 0.6766, Acc: 89.09%, F1: 0.8824, AUC: 0.8894, Sensitivity: 0.8281, Specificity: 0.9410
+[ Thu Dec  5 01:35:09 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:09 2024 ] 
+Epoch 36/300
+[ Thu Dec  5 01:35:10 2024 ] Training - Loss: 0.4760, Acc: 91.38%, F1: 0.9681, Sensitivity: 0.9589, Specificity: 0.9718
+[ Thu Dec  5 01:35:10 2024 ] Validation - Loss: 0.6573, Acc: 89.09%, F1: 0.8824, AUC: 0.8894, Sensitivity: 0.8080, Specificity: 0.9410
+[ Thu Dec  5 01:35:10 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:10 2024 ] 
+Epoch 37/300
+[ Thu Dec  5 01:35:11 2024 ] Training - Loss: 0.4853, Acc: 89.90%, F1: 0.9479, Sensitivity: 0.9566, Specificity: 0.9554
+[ Thu Dec  5 01:35:11 2024 ] Validation - Loss: 0.6401, Acc: 89.09%, F1: 0.8824, AUC: 0.8894, Sensitivity: 0.8281, Specificity: 0.9410
+[ Thu Dec  5 01:35:11 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:11 2024 ] 
+Epoch 38/300
+[ Thu Dec  5 01:35:12 2024 ] Training - Loss: 0.4791, Acc: 90.64%, F1: 0.9553, Sensitivity: 0.9312, Specificity: 0.9852
+[ Thu Dec  5 01:35:13 2024 ] Validation - Loss: 0.6390, Acc: 90.00%, F1: 0.8911, AUC: 0.8982, Sensitivity: 0.8281, Specificity: 0.9549
+[ Thu Dec  5 01:35:13 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:13 2024 ] 
+Epoch 39/300
+[ Thu Dec  5 01:35:13 2024 ] Training - Loss: 0.4568, Acc: 90.64%, F1: 0.9535, Sensitivity: 0.9511, Specificity: 0.9710
+[ Thu Dec  5 01:35:14 2024 ] Validation - Loss: 0.6275, Acc: 90.00%, F1: 0.8911, AUC: 0.8982, Sensitivity: 0.8281, Specificity: 0.9549
+[ Thu Dec  5 01:35:14 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.9000
+[ Thu Dec  5 01:35:14 2024 ] 
+Epoch 40/300
+[ Thu Dec  5 01:35:15 2024 ] Training - Loss: 0.4497, Acc: 91.13%, F1: 0.9637, Sensitivity: 0.9751, Specificity: 0.9636
+[ Thu Dec  5 01:35:15 2024 ] Validation - Loss: 0.6224, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9549
+[ Thu Dec  5 01:35:15 2024 ] F1 score improved by 0.0020!
+[ Thu Dec  5 01:35:15 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_40_f1_0.9020.pth
+[ Thu Dec  5 01:35:15 2024 ] 
+Epoch 41/300
+[ Thu Dec  5 01:35:16 2024 ] Training - Loss: 0.4398, Acc: 91.63%, F1: 0.9692, Sensitivity: 0.9595, Specificity: 0.9820
+[ Thu Dec  5 01:35:16 2024 ] Validation - Loss: 0.6225, Acc: 91.82%, F1: 0.9109, AUC: 0.9164, Sensitivity: 0.8438, Specificity: 0.9705
+[ Thu Dec  5 01:35:16 2024 ] F1 score improved by 0.0089!
+[ Thu Dec  5 01:35:16 2024 ] Model saved to ./work_dir/smartfallmm/mobile/model_epoch_41_f1_0.9109.pth
+[ Thu Dec  5 01:35:16 2024 ] 
+Epoch 42/300
+[ Thu Dec  5 01:35:17 2024 ] Training - Loss: 0.4427, Acc: 91.38%, F1: 0.9648, Sensitivity: 0.9612, Specificity: 0.9775
+[ Thu Dec  5 01:35:17 2024 ] Validation - Loss: 0.7180, Acc: 87.27%, F1: 0.8571, AUC: 0.8699, Sensitivity: 0.7589, Specificity: 0.9566
+[ Thu Dec  5 01:35:17 2024 ] No improvement in F1 score for 1 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:17 2024 ] 
+Epoch 43/300
+[ Thu Dec  5 01:35:18 2024 ] Training - Loss: 0.4302, Acc: 91.63%, F1: 0.9689, Sensitivity: 0.9496, Specificity: 0.9909
+[ Thu Dec  5 01:35:18 2024 ] Validation - Loss: 0.7656, Acc: 83.64%, F1: 0.8235, AUC: 0.8348, Sensitivity: 0.7589, Specificity: 0.8958
+[ Thu Dec  5 01:35:18 2024 ] No improvement in F1 score for 2 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:18 2024 ] 
+Epoch 44/300
+[ Thu Dec  5 01:35:20 2024 ] Training - Loss: 0.4317, Acc: 92.12%, F1: 0.9728, Sensitivity: 0.9815, Specificity: 0.9669
+[ Thu Dec  5 01:35:20 2024 ] Validation - Loss: 0.6872, Acc: 88.18%, F1: 0.8687, AUC: 0.8793, Sensitivity: 0.7946, Specificity: 0.9549
+[ Thu Dec  5 01:35:20 2024 ] No improvement in F1 score for 3 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:20 2024 ] 
+Epoch 45/300
+[ Thu Dec  5 01:35:21 2024 ] Training - Loss: 0.4479, Acc: 91.38%, F1: 0.9621, Sensitivity: 0.9310, Specificity: 1.0000
+[ Thu Dec  5 01:35:21 2024 ] Validation - Loss: 0.7068, Acc: 88.18%, F1: 0.8660, AUC: 0.8787, Sensitivity: 0.7589, Specificity: 0.9705
+[ Thu Dec  5 01:35:21 2024 ] No improvement in F1 score for 4 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:21 2024 ] 
+Epoch 46/300
+[ Thu Dec  5 01:35:22 2024 ] Training - Loss: 0.4067, Acc: 92.86%, F1: 0.9798, Sensitivity: 0.9899, Specificity: 0.9763
+[ Thu Dec  5 01:35:22 2024 ] Validation - Loss: 0.7557, Acc: 87.27%, F1: 0.8571, AUC: 0.8699, Sensitivity: 0.7589, Specificity: 0.9549
+[ Thu Dec  5 01:35:22 2024 ] No improvement in F1 score for 5 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:22 2024 ] 
+Epoch 47/300
+[ Thu Dec  5 01:35:23 2024 ] Training - Loss: 0.4459, Acc: 91.63%, F1: 0.9672, Sensitivity: 0.9626, Specificity: 0.9819
+[ Thu Dec  5 01:35:23 2024 ] Validation - Loss: 0.7642, Acc: 88.18%, F1: 0.8660, AUC: 0.8787, Sensitivity: 0.7589, Specificity: 0.9705
+[ Thu Dec  5 01:35:23 2024 ] No improvement in F1 score for 6 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:23 2024 ] 
+Epoch 48/300
+[ Thu Dec  5 01:35:24 2024 ] Training - Loss: 0.4254, Acc: 92.12%, F1: 0.9735, Sensitivity: 0.9724, Specificity: 0.9728
+[ Thu Dec  5 01:35:24 2024 ] Validation - Loss: 0.7557, Acc: 87.27%, F1: 0.8571, AUC: 0.8699, Sensitivity: 0.7589, Specificity: 0.9549
+[ Thu Dec  5 01:35:24 2024 ] No improvement in F1 score for 7 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:24 2024 ] 
+Epoch 49/300
+[ Thu Dec  5 01:35:25 2024 ] Training - Loss: 0.4473, Acc: 91.13%, F1: 0.9637, Sensitivity: 0.9497, Specificity: 0.9880
+[ Thu Dec  5 01:35:25 2024 ] Validation - Loss: 0.7758, Acc: 84.55%, F1: 0.8283, AUC: 0.8429, Sensitivity: 0.7433, Specificity: 0.9253
+[ Thu Dec  5 01:35:25 2024 ] No improvement in F1 score for 8 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:25 2024 ] 
+Epoch 50/300
+[ Thu Dec  5 01:35:26 2024 ] Training - Loss: 0.4407, Acc: 91.13%, F1: 0.9652, Sensitivity: 0.9659, Specificity: 0.9653
+[ Thu Dec  5 01:35:27 2024 ] Validation - Loss: 0.6916, Acc: 86.36%, F1: 0.8571, AUC: 0.8631, Sensitivity: 0.8281, Specificity: 0.8941
+[ Thu Dec  5 01:35:27 2024 ] No improvement in F1 score for 9 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:27 2024 ] 
+Epoch 51/300
+[ Thu Dec  5 01:35:27 2024 ] Training - Loss: 0.4199, Acc: 92.12%, F1: 0.9730, Sensitivity: 0.9762, Specificity: 0.9800
+[ Thu Dec  5 01:35:28 2024 ] Validation - Loss: 0.6765, Acc: 87.27%, F1: 0.8654, AUC: 0.8719, Sensitivity: 0.8281, Specificity: 0.9097
+[ Thu Dec  5 01:35:28 2024 ] No improvement in F1 score for 10 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:28 2024 ] 
+Epoch 52/300
+[ Thu Dec  5 01:35:28 2024 ] Training - Loss: 0.4084, Acc: 92.86%, F1: 0.9811, Sensitivity: 0.9766, Specificity: 0.9924
+[ Thu Dec  5 01:35:29 2024 ] Validation - Loss: 0.6818, Acc: 88.18%, F1: 0.8738, AUC: 0.8807, Sensitivity: 0.8281, Specificity: 0.9253
+[ Thu Dec  5 01:35:29 2024 ] No improvement in F1 score for 11 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:29 2024 ] 
+Epoch 53/300
+[ Thu Dec  5 01:35:30 2024 ] Training - Loss: 0.4025, Acc: 92.86%, F1: 0.9835, Sensitivity: 0.9737, Specificity: 0.9956
+[ Thu Dec  5 01:35:30 2024 ] Validation - Loss: 0.7899, Acc: 84.55%, F1: 0.8317, AUC: 0.8436, Sensitivity: 0.7589, Specificity: 0.9097
+[ Thu Dec  5 01:35:30 2024 ] No improvement in F1 score for 12 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:30 2024 ] 
+Epoch 54/300
+[ Thu Dec  5 01:35:31 2024 ] Training - Loss: 0.4408, Acc: 90.64%, F1: 0.9596, Sensitivity: 0.9902, Specificity: 0.9338
+[ Thu Dec  5 01:35:31 2024 ] Validation - Loss: 0.7718, Acc: 83.64%, F1: 0.8235, AUC: 0.8348, Sensitivity: 0.7589, Specificity: 0.8941
+[ Thu Dec  5 01:35:31 2024 ] No improvement in F1 score for 13 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:31 2024 ] 
+Epoch 55/300
+[ Thu Dec  5 01:35:32 2024 ] Training - Loss: 0.4024, Acc: 92.36%, F1: 0.9777, Sensitivity: 0.9772, Specificity: 0.9793
+[ Thu Dec  5 01:35:32 2024 ] Validation - Loss: 0.7245, Acc: 88.18%, F1: 0.8660, AUC: 0.8787, Sensitivity: 0.7589, Specificity: 0.9705
+[ Thu Dec  5 01:35:32 2024 ] No improvement in F1 score for 14 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:32 2024 ] 
+Epoch 56/300
+[ Thu Dec  5 01:35:33 2024 ] Training - Loss: 0.3967, Acc: 92.61%, F1: 0.9794, Sensitivity: 0.9797, Specificity: 0.9810
+[ Thu Dec  5 01:35:33 2024 ] Validation - Loss: 0.7424, Acc: 86.36%, F1: 0.8454, AUC: 0.8605, Sensitivity: 0.7433, Specificity: 0.9549
+[ Thu Dec  5 01:35:33 2024 ] No improvement in F1 score for 15 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:33 2024 ] 
+Epoch 57/300
+[ Thu Dec  5 01:35:34 2024 ] Training - Loss: 0.4223, Acc: 91.38%, F1: 0.9651, Sensitivity: 0.9850, Specificity: 0.9524
+[ Thu Dec  5 01:35:34 2024 ] Validation - Loss: 0.7451, Acc: 85.45%, F1: 0.8367, AUC: 0.8517, Sensitivity: 0.7433, Specificity: 0.9392
+[ Thu Dec  5 01:35:34 2024 ] No improvement in F1 score for 16 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:34 2024 ] 
+Epoch 58/300
+[ Thu Dec  5 01:35:35 2024 ] Training - Loss: 0.4013, Acc: 91.87%, F1: 0.9731, Sensitivity: 0.9649, Specificity: 0.9836
+[ Thu Dec  5 01:35:35 2024 ] Validation - Loss: 0.7518, Acc: 86.36%, F1: 0.8485, AUC: 0.8611, Sensitivity: 0.7790, Specificity: 0.9392
+[ Thu Dec  5 01:35:35 2024 ] No improvement in F1 score for 17 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:35 2024 ] 
+Epoch 59/300
+[ Thu Dec  5 01:35:36 2024 ] Training - Loss: 0.3607, Acc: 93.60%, F1: 0.9911, Sensitivity: 0.9870, Specificity: 0.9956
+[ Thu Dec  5 01:35:36 2024 ] Validation - Loss: 0.7140, Acc: 87.27%, F1: 0.8654, AUC: 0.8719, Sensitivity: 0.8281, Specificity: 0.9097
+[ Thu Dec  5 01:35:36 2024 ] No improvement in F1 score for 18 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:36 2024 ] 
+Epoch 60/300
+[ Thu Dec  5 01:35:37 2024 ] Training - Loss: 0.4036, Acc: 91.63%, F1: 0.9709, Sensitivity: 0.9833, Specificity: 0.9501
+[ Thu Dec  5 01:35:37 2024 ] Validation - Loss: 0.6993, Acc: 90.00%, F1: 0.8889, AUC: 0.8976, Sensitivity: 0.7924, Specificity: 0.9705
+[ Thu Dec  5 01:35:37 2024 ] No improvement in F1 score for 19 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:37 2024 ] 
+Epoch 61/300
+[ Thu Dec  5 01:35:38 2024 ] Training - Loss: 0.3922, Acc: 92.86%, F1: 0.9805, Sensitivity: 0.9680, Specificity: 0.9931
+[ Thu Dec  5 01:35:38 2024 ] Validation - Loss: 0.6699, Acc: 90.00%, F1: 0.8889, AUC: 0.8976, Sensitivity: 0.7924, Specificity: 0.9705
+[ Thu Dec  5 01:35:38 2024 ] No improvement in F1 score for 20 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:38 2024 ] 
+Epoch 62/300
+[ Thu Dec  5 01:35:39 2024 ] Training - Loss: 0.3712, Acc: 92.86%, F1: 0.9834, Sensitivity: 0.9870, Specificity: 0.9798
+[ Thu Dec  5 01:35:40 2024 ] Validation - Loss: 0.7818, Acc: 87.27%, F1: 0.8542, AUC: 0.8692, Sensitivity: 0.7433, Specificity: 0.9705
+[ Thu Dec  5 01:35:40 2024 ] No improvement in F1 score for 21 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:40 2024 ] 
+Epoch 63/300
+[ Thu Dec  5 01:35:41 2024 ] Training - Loss: 0.4219, Acc: 91.87%, F1: 0.9716, Sensitivity: 0.9504, Specificity: 0.9956
+[ Thu Dec  5 01:35:41 2024 ] Validation - Loss: 0.7464, Acc: 87.27%, F1: 0.8542, AUC: 0.8692, Sensitivity: 0.7433, Specificity: 0.9705
+[ Thu Dec  5 01:35:41 2024 ] No improvement in F1 score for 22 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:41 2024 ] 
+Epoch 64/300
+[ Thu Dec  5 01:35:42 2024 ] Training - Loss: 0.3996, Acc: 92.12%, F1: 0.9749, Sensitivity: 0.9729, Specificity: 0.9801
+[ Thu Dec  5 01:35:42 2024 ] Validation - Loss: 0.7870, Acc: 86.36%, F1: 0.8454, AUC: 0.8605, Sensitivity: 0.7433, Specificity: 0.9549
+[ Thu Dec  5 01:35:42 2024 ] No improvement in F1 score for 23 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:42 2024 ] 
+Epoch 65/300
+[ Thu Dec  5 01:35:43 2024 ] Training - Loss: 0.4056, Acc: 91.38%, F1: 0.9655, Sensitivity: 0.9629, Specificity: 0.9760
+[ Thu Dec  5 01:35:43 2024 ] Validation - Loss: 0.7089, Acc: 89.09%, F1: 0.8800, AUC: 0.8888, Sensitivity: 0.8125, Specificity: 0.9549
+[ Thu Dec  5 01:35:43 2024 ] No improvement in F1 score for 24 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:43 2024 ] 
+Epoch 66/300
+[ Thu Dec  5 01:35:44 2024 ] Training - Loss: 0.4060, Acc: 92.36%, F1: 0.9733, Sensitivity: 0.9789, Specificity: 0.9792
+[ Thu Dec  5 01:35:44 2024 ] Validation - Loss: 0.6967, Acc: 89.09%, F1: 0.8800, AUC: 0.8888, Sensitivity: 0.8125, Specificity: 0.9549
+[ Thu Dec  5 01:35:44 2024 ] No improvement in F1 score for 25 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:44 2024 ] 
+Epoch 67/300
+[ Thu Dec  5 01:35:45 2024 ] Training - Loss: 0.3839, Acc: 92.36%, F1: 0.9769, Sensitivity: 0.9906, Specificity: 0.9629
+[ Thu Dec  5 01:35:45 2024 ] Validation - Loss: 0.6879, Acc: 89.09%, F1: 0.8800, AUC: 0.8888, Sensitivity: 0.8125, Specificity: 0.9549
+[ Thu Dec  5 01:35:45 2024 ] No improvement in F1 score for 26 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:45 2024 ] 
+Epoch 68/300
+[ Thu Dec  5 01:35:46 2024 ] Training - Loss: 0.3583, Acc: 93.60%, F1: 0.9891, Sensitivity: 0.9815, Specificity: 1.0000
+[ Thu Dec  5 01:35:46 2024 ] Validation - Loss: 0.7107, Acc: 87.27%, F1: 0.8571, AUC: 0.8699, Sensitivity: 0.7790, Specificity: 0.9549
+[ Thu Dec  5 01:35:46 2024 ] No improvement in F1 score for 27 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:46 2024 ] 
+Epoch 69/300
+[ Thu Dec  5 01:35:47 2024 ] Training - Loss: 0.4100, Acc: 91.87%, F1: 0.9727, Sensitivity: 0.9718, Specificity: 0.9766
+[ Thu Dec  5 01:35:47 2024 ] Validation - Loss: 0.6717, Acc: 90.00%, F1: 0.8911, AUC: 0.8982, Sensitivity: 0.8281, Specificity: 0.9549
+[ Thu Dec  5 01:35:47 2024 ] No improvement in F1 score for 28 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:47 2024 ] 
+Epoch 70/300
+[ Thu Dec  5 01:35:48 2024 ] Training - Loss: 0.3882, Acc: 92.61%, F1: 0.9800, Sensitivity: 0.9913, Specificity: 0.9710
+[ Thu Dec  5 01:35:49 2024 ] Validation - Loss: 0.6657, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:35:49 2024 ] No improvement in F1 score for 29 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:49 2024 ] 
+Epoch 71/300
+[ Thu Dec  5 01:35:49 2024 ] Training - Loss: 0.3646, Acc: 93.35%, F1: 0.9861, Sensitivity: 0.9853, Specificity: 0.9892
+[ Thu Dec  5 01:35:50 2024 ] Validation - Loss: 0.6585, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:35:50 2024 ] No improvement in F1 score for 30 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:50 2024 ] 
+Epoch 72/300
+[ Thu Dec  5 01:35:51 2024 ] Training - Loss: 0.3621, Acc: 93.35%, F1: 0.9875, Sensitivity: 0.9958, Specificity: 0.9826
+[ Thu Dec  5 01:35:51 2024 ] Validation - Loss: 0.6591, Acc: 89.09%, F1: 0.8846, AUC: 0.8901, Sensitivity: 0.8438, Specificity: 0.9236
+[ Thu Dec  5 01:35:51 2024 ] No improvement in F1 score for 31 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:51 2024 ] 
+Epoch 73/300
+[ Thu Dec  5 01:35:52 2024 ] Training - Loss: 0.3813, Acc: 92.36%, F1: 0.9780, Sensitivity: 0.9876, Specificity: 0.9697
+[ Thu Dec  5 01:35:52 2024 ] Validation - Loss: 0.6790, Acc: 87.27%, F1: 0.8679, AUC: 0.8726, Sensitivity: 0.8438, Specificity: 0.8941
+[ Thu Dec  5 01:35:52 2024 ] No improvement in F1 score for 32 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:52 2024 ] 
+Epoch 74/300
+[ Thu Dec  5 01:35:53 2024 ] Training - Loss: 0.3638, Acc: 92.86%, F1: 0.9818, Sensitivity: 0.9884, Specificity: 0.9760
+[ Thu Dec  5 01:35:53 2024 ] Validation - Loss: 0.7231, Acc: 85.45%, F1: 0.8462, AUC: 0.8537, Sensitivity: 0.8103, Specificity: 0.8941
+[ Thu Dec  5 01:35:53 2024 ] No improvement in F1 score for 33 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:53 2024 ] 
+Epoch 75/300
+[ Thu Dec  5 01:35:54 2024 ] Training - Loss: 0.3766, Acc: 92.86%, F1: 0.9804, Sensitivity: 0.9761, Specificity: 0.9907
+[ Thu Dec  5 01:35:54 2024 ] Validation - Loss: 0.6501, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9549
+[ Thu Dec  5 01:35:54 2024 ] No improvement in F1 score for 34 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:54 2024 ] 
+Epoch 76/300
+[ Thu Dec  5 01:35:55 2024 ] Training - Loss: 0.3654, Acc: 93.35%, F1: 0.9861, Sensitivity: 0.9820, Specificity: 0.9922
+[ Thu Dec  5 01:35:55 2024 ] Validation - Loss: 0.6720, Acc: 89.09%, F1: 0.8800, AUC: 0.8888, Sensitivity: 0.8103, Specificity: 0.9549
+[ Thu Dec  5 01:35:55 2024 ] No improvement in F1 score for 35 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:55 2024 ] 
+Epoch 77/300
+[ Thu Dec  5 01:35:56 2024 ] Training - Loss: 0.3573, Acc: 93.35%, F1: 0.9874, Sensitivity: 0.9815, Specificity: 0.9954
+[ Thu Dec  5 01:35:56 2024 ] Validation - Loss: 0.6918, Acc: 89.09%, F1: 0.8800, AUC: 0.8888, Sensitivity: 0.8103, Specificity: 0.9549
+[ Thu Dec  5 01:35:56 2024 ] No improvement in F1 score for 36 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:56 2024 ] 
+Epoch 78/300
+[ Thu Dec  5 01:35:57 2024 ] Training - Loss: 0.3811, Acc: 92.36%, F1: 0.9765, Sensitivity: 0.9902, Specificity: 0.9687
+[ Thu Dec  5 01:35:57 2024 ] Validation - Loss: 0.6669, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:35:57 2024 ] No improvement in F1 score for 37 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:57 2024 ] 
+Epoch 79/300
+[ Thu Dec  5 01:35:59 2024 ] Training - Loss: 0.3722, Acc: 92.61%, F1: 0.9796, Sensitivity: 0.9753, Specificity: 0.9839
+[ Thu Dec  5 01:35:59 2024 ] Validation - Loss: 0.6554, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9549
+[ Thu Dec  5 01:35:59 2024 ] No improvement in F1 score for 38 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:35:59 2024 ] 
+Epoch 80/300
+[ Thu Dec  5 01:36:00 2024 ] Training - Loss: 0.3603, Acc: 93.10%, F1: 0.9828, Sensitivity: 0.9896, Specificity: 0.9838
+[ Thu Dec  5 01:36:00 2024 ] Validation - Loss: 0.6718, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:00 2024 ] No improvement in F1 score for 39 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:00 2024 ] 
+Epoch 81/300
+[ Thu Dec  5 01:36:01 2024 ] Training - Loss: 0.3609, Acc: 93.10%, F1: 0.9839, Sensitivity: 0.9776, Specificity: 0.9912
+[ Thu Dec  5 01:36:01 2024 ] Validation - Loss: 0.7000, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8103, Specificity: 0.9392
+[ Thu Dec  5 01:36:01 2024 ] No improvement in F1 score for 40 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:01 2024 ] 
+Epoch 82/300
+[ Thu Dec  5 01:36:02 2024 ] Training - Loss: 0.3630, Acc: 92.86%, F1: 0.9824, Sensitivity: 0.9811, Specificity: 0.9864
+[ Thu Dec  5 01:36:02 2024 ] Validation - Loss: 0.6925, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8103, Specificity: 0.9392
+[ Thu Dec  5 01:36:02 2024 ] No improvement in F1 score for 41 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:02 2024 ] 
+Epoch 83/300
+[ Thu Dec  5 01:36:03 2024 ] Training - Loss: 0.3821, Acc: 92.36%, F1: 0.9771, Sensitivity: 0.9650, Specificity: 0.9902
+[ Thu Dec  5 01:36:04 2024 ] Validation - Loss: 0.6686, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:04 2024 ] No improvement in F1 score for 42 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:04 2024 ] 
+Epoch 84/300
+[ Thu Dec  5 01:36:04 2024 ] Training - Loss: 0.3775, Acc: 92.36%, F1: 0.9770, Sensitivity: 0.9862, Specificity: 0.9764
+[ Thu Dec  5 01:36:05 2024 ] Validation - Loss: 0.6646, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:05 2024 ] No improvement in F1 score for 43 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:05 2024 ] 
+Epoch 85/300
+[ Thu Dec  5 01:36:06 2024 ] Training - Loss: 0.3522, Acc: 93.60%, F1: 0.9890, Sensitivity: 0.9910, Specificity: 0.9910
+[ Thu Dec  5 01:36:06 2024 ] Validation - Loss: 0.6750, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:06 2024 ] No improvement in F1 score for 44 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:06 2024 ] 
+Epoch 86/300
+[ Thu Dec  5 01:36:07 2024 ] Training - Loss: 0.4288, Acc: 91.38%, F1: 0.9669, Sensitivity: 0.9545, Specificity: 0.9907
+[ Thu Dec  5 01:36:07 2024 ] Validation - Loss: 0.6768, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:07 2024 ] No improvement in F1 score for 45 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:07 2024 ] 
+Epoch 87/300
+[ Thu Dec  5 01:36:08 2024 ] Training - Loss: 0.3696, Acc: 92.86%, F1: 0.9821, Sensitivity: 0.9759, Specificity: 0.9890
+[ Thu Dec  5 01:36:08 2024 ] Validation - Loss: 0.6756, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:08 2024 ] No improvement in F1 score for 46 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:08 2024 ] 
+Epoch 88/300
+[ Thu Dec  5 01:36:09 2024 ] Training - Loss: 0.3223, Acc: 94.09%, F1: 0.9950, Sensitivity: 0.9962, Specificity: 0.9951
+[ Thu Dec  5 01:36:09 2024 ] Validation - Loss: 0.7121, Acc: 87.27%, F1: 0.8600, AUC: 0.8706, Sensitivity: 0.7946, Specificity: 0.9392
+[ Thu Dec  5 01:36:09 2024 ] No improvement in F1 score for 47 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:09 2024 ] 
+Epoch 89/300
+[ Thu Dec  5 01:36:10 2024 ] Training - Loss: 0.3758, Acc: 92.36%, F1: 0.9772, Sensitivity: 0.9835, Specificity: 0.9703
+[ Thu Dec  5 01:36:11 2024 ] Validation - Loss: 0.6781, Acc: 89.09%, F1: 0.8824, AUC: 0.8894, Sensitivity: 0.8281, Specificity: 0.9392
+[ Thu Dec  5 01:36:11 2024 ] No improvement in F1 score for 48 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:11 2024 ] 
+Epoch 90/300
+[ Thu Dec  5 01:36:12 2024 ] Training - Loss: 0.3680, Acc: 92.86%, F1: 0.9834, Sensitivity: 0.9806, Specificity: 0.9825
+[ Thu Dec  5 01:36:12 2024 ] Validation - Loss: 0.7164, Acc: 89.09%, F1: 0.8776, AUC: 0.8881, Sensitivity: 0.7946, Specificity: 0.9688
+[ Thu Dec  5 01:36:12 2024 ] No improvement in F1 score for 49 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:12 2024 ] 
+Epoch 91/300
+[ Thu Dec  5 01:36:13 2024 ] Training - Loss: 0.3354, Acc: 93.84%, F1: 0.9918, Sensitivity: 0.9843, Specificity: 1.0000
+[ Thu Dec  5 01:36:13 2024 ] Validation - Loss: 0.6521, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9531
+[ Thu Dec  5 01:36:13 2024 ] No improvement in F1 score for 50 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:13 2024 ] 
+Epoch 92/300
+[ Thu Dec  5 01:36:14 2024 ] Training - Loss: 0.3481, Acc: 92.86%, F1: 0.9837, Sensitivity: 0.9790, Specificity: 0.9905
+[ Thu Dec  5 01:36:14 2024 ] Validation - Loss: 0.6748, Acc: 89.09%, F1: 0.8800, AUC: 0.8888, Sensitivity: 0.8103, Specificity: 0.9531
+[ Thu Dec  5 01:36:14 2024 ] No improvement in F1 score for 51 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:14 2024 ] 
+Epoch 93/300
+[ Thu Dec  5 01:36:15 2024 ] Training - Loss: 0.3638, Acc: 92.86%, F1: 0.9828, Sensitivity: 0.9828, Specificity: 0.9832
+[ Thu Dec  5 01:36:16 2024 ] Validation - Loss: 0.6503, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9531
+[ Thu Dec  5 01:36:16 2024 ] No improvement in F1 score for 52 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:16 2024 ] 
+Epoch 94/300
+[ Thu Dec  5 01:36:16 2024 ] Training - Loss: 0.3856, Acc: 91.63%, F1: 0.9686, Sensitivity: 0.9782, Specificity: 0.9638
+[ Thu Dec  5 01:36:17 2024 ] Validation - Loss: 0.6180, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9531
+[ Thu Dec  5 01:36:17 2024 ] No improvement in F1 score for 53 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:17 2024 ] 
+Epoch 95/300
+[ Thu Dec  5 01:36:18 2024 ] Training - Loss: 0.3602, Acc: 93.10%, F1: 0.9842, Sensitivity: 0.9731, Specificity: 0.9960
+[ Thu Dec  5 01:36:18 2024 ] Validation - Loss: 0.6461, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:18 2024 ] No improvement in F1 score for 54 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:18 2024 ] 
+Epoch 96/300
+[ Thu Dec  5 01:36:19 2024 ] Training - Loss: 0.3304, Acc: 93.84%, F1: 0.9923, Sensitivity: 0.9870, Specificity: 1.0000
+[ Thu Dec  5 01:36:19 2024 ] Validation - Loss: 0.6509, Acc: 89.09%, F1: 0.8776, AUC: 0.8881, Sensitivity: 0.7946, Specificity: 0.9688
+[ Thu Dec  5 01:36:19 2024 ] No improvement in F1 score for 55 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:19 2024 ] 
+Epoch 97/300
+[ Thu Dec  5 01:36:20 2024 ] Training - Loss: 0.3613, Acc: 93.10%, F1: 0.9839, Sensitivity: 0.9854, Specificity: 0.9874
+[ Thu Dec  5 01:36:20 2024 ] Validation - Loss: 0.6848, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8103, Specificity: 0.9392
+[ Thu Dec  5 01:36:20 2024 ] No improvement in F1 score for 56 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:20 2024 ] 
+Epoch 98/300
+[ Thu Dec  5 01:36:21 2024 ] Training - Loss: 0.3179, Acc: 94.09%, F1: 0.9950, Sensitivity: 1.0000, Specificity: 0.9885
+[ Thu Dec  5 01:36:21 2024 ] Validation - Loss: 0.7123, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8103, Specificity: 0.9392
+[ Thu Dec  5 01:36:21 2024 ] No improvement in F1 score for 57 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:21 2024 ] 
+Epoch 99/300
+[ Thu Dec  5 01:36:22 2024 ] Training - Loss: 0.3338, Acc: 94.09%, F1: 0.9947, Sensitivity: 0.9892, Specificity: 1.0000
+[ Thu Dec  5 01:36:22 2024 ] Validation - Loss: 0.6813, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:22 2024 ] No improvement in F1 score for 58 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:22 2024 ] 
+Epoch 100/300
+[ Thu Dec  5 01:36:23 2024 ] Training - Loss: 0.3449, Acc: 93.35%, F1: 0.9878, Sensitivity: 0.9804, Specificity: 0.9956
+[ Thu Dec  5 01:36:23 2024 ] Validation - Loss: 0.6860, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8103, Specificity: 0.9392
+[ Thu Dec  5 01:36:23 2024 ] No improvement in F1 score for 59 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:23 2024 ] 
+Epoch 101/300
+[ Thu Dec  5 01:36:24 2024 ] Training - Loss: 0.3451, Acc: 93.35%, F1: 0.9873, Sensitivity: 0.9815, Specificity: 0.9954
+[ Thu Dec  5 01:36:24 2024 ] Validation - Loss: 0.7128, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8103, Specificity: 0.9392
+[ Thu Dec  5 01:36:24 2024 ] No improvement in F1 score for 60 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:24 2024 ] 
+Epoch 102/300
+[ Thu Dec  5 01:36:25 2024 ] Training - Loss: 0.3453, Acc: 93.10%, F1: 0.9856, Sensitivity: 0.9771, Specificity: 0.9951
+[ Thu Dec  5 01:36:26 2024 ] Validation - Loss: 0.8008, Acc: 87.27%, F1: 0.8571, AUC: 0.8699, Sensitivity: 0.7589, Specificity: 0.9549
+[ Thu Dec  5 01:36:26 2024 ] No improvement in F1 score for 61 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:26 2024 ] 
+Epoch 103/300
+[ Thu Dec  5 01:36:26 2024 ] Training - Loss: 0.4015, Acc: 91.38%, F1: 0.9612, Sensitivity: 0.9789, Specificity: 0.9587
+[ Thu Dec  5 01:36:27 2024 ] Validation - Loss: 0.6654, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:27 2024 ] No improvement in F1 score for 62 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:27 2024 ] 
+Epoch 104/300
+[ Thu Dec  5 01:36:28 2024 ] Training - Loss: 0.3482, Acc: 93.10%, F1: 0.9843, Sensitivity: 0.9720, Specificity: 1.0000
+[ Thu Dec  5 01:36:28 2024 ] Validation - Loss: 0.6989, Acc: 88.18%, F1: 0.8713, AUC: 0.8800, Sensitivity: 0.8125, Specificity: 0.9392
+[ Thu Dec  5 01:36:28 2024 ] No improvement in F1 score for 63 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:28 2024 ] 
+Epoch 105/300
+[ Thu Dec  5 01:36:29 2024 ] Training - Loss: 0.3271, Acc: 93.35%, F1: 0.9880, Sensitivity: 0.9847, Specificity: 0.9833
+[ Thu Dec  5 01:36:29 2024 ] Validation - Loss: 0.6915, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:29 2024 ] No improvement in F1 score for 64 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:29 2024 ] 
+Epoch 106/300
+[ Thu Dec  5 01:36:30 2024 ] Training - Loss: 0.3268, Acc: 93.60%, F1: 0.9896, Sensitivity: 1.0000, Specificity: 0.9817
+[ Thu Dec  5 01:36:30 2024 ] Validation - Loss: 0.6693, Acc: 90.00%, F1: 0.8932, AUC: 0.8989, Sensitivity: 0.8438, Specificity: 0.9392
+[ Thu Dec  5 01:36:30 2024 ] No improvement in F1 score for 65 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:30 2024 ] 
+Epoch 107/300
+[ Thu Dec  5 01:36:32 2024 ] Training - Loss: 0.3751, Acc: 92.36%, F1: 0.9765, Sensitivity: 0.9761, Specificity: 0.9811
+[ Thu Dec  5 01:36:32 2024 ] Validation - Loss: 0.6194, Acc: 91.82%, F1: 0.9109, AUC: 0.9164, Sensitivity: 0.8438, Specificity: 0.9688
+[ Thu Dec  5 01:36:32 2024 ] No improvement in F1 score for 66 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:32 2024 ] 
+Epoch 108/300
+[ Thu Dec  5 01:36:33 2024 ] Training - Loss: 0.3124, Acc: 94.33%, F1: 0.9973, Sensitivity: 0.9931, Specificity: 1.0000
+[ Thu Dec  5 01:36:33 2024 ] Validation - Loss: 0.6624, Acc: 90.91%, F1: 0.9020, AUC: 0.9076, Sensitivity: 0.8438, Specificity: 0.9531
+[ Thu Dec  5 01:36:33 2024 ] No improvement in F1 score for 67 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:33 2024 ] 
+Epoch 109/300
+[ Thu Dec  5 01:36:34 2024 ] Training - Loss: 0.3149, Acc: 93.84%, F1: 0.9921, Sensitivity: 0.9864, Specificity: 0.9954
+[ Thu Dec  5 01:36:34 2024 ] Validation - Loss: 0.6269, Acc: 91.82%, F1: 0.9109, AUC: 0.9164, Sensitivity: 0.8438, Specificity: 0.9688
+[ Thu Dec  5 01:36:34 2024 ] No improvement in F1 score for 68 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:34 2024 ] 
+Epoch 110/300
+[ Thu Dec  5 01:36:35 2024 ] Training - Loss: 0.3316, Acc: 93.35%, F1: 0.9864, Sensitivity: 0.9910, Specificity: 0.9877
+[ Thu Dec  5 01:36:36 2024 ] Validation - Loss: 0.6304, Acc: 91.82%, F1: 0.9109, AUC: 0.9164, Sensitivity: 0.8438, Specificity: 0.9688
+[ Thu Dec  5 01:36:36 2024 ] No improvement in F1 score for 69 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:36 2024 ] 
+Epoch 111/300
+[ Thu Dec  5 01:36:37 2024 ] Training - Loss: 0.3180, Acc: 94.09%, F1: 0.9948, Sensitivity: 0.9907, Specificity: 1.0000
+[ Thu Dec  5 01:36:37 2024 ] Validation - Loss: 0.6442, Acc: 91.82%, F1: 0.9109, AUC: 0.9164, Sensitivity: 0.8438, Specificity: 0.9688
+[ Thu Dec  5 01:36:37 2024 ] No improvement in F1 score for 70 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:37 2024 ] 
+Epoch 112/300
+[ Thu Dec  5 01:36:38 2024 ] Training - Loss: 0.3578, Acc: 93.10%, F1: 0.9840, Sensitivity: 0.9719, Specificity: 1.0000
+[ Thu Dec  5 01:36:38 2024 ] Validation - Loss: 0.7046, Acc: 90.00%, F1: 0.8866, AUC: 0.8969, Sensitivity: 0.7946, Specificity: 0.9844
+[ Thu Dec  5 01:36:38 2024 ] No improvement in F1 score for 71 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:38 2024 ] 
+Epoch 113/300
+[ Thu Dec  5 01:36:39 2024 ] Training - Loss: 0.3291, Acc: 93.60%, F1: 0.9897, Sensitivity: 0.9872, Specificity: 0.9954
+[ Thu Dec  5 01:36:39 2024 ] Validation - Loss: 0.6947, Acc: 90.00%, F1: 0.8889, AUC: 0.8976, Sensitivity: 0.8103, Specificity: 0.9688
+[ Thu Dec  5 01:36:39 2024 ] No improvement in F1 score for 72 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:39 2024 ] 
+Epoch 114/300
+[ Thu Dec  5 01:36:40 2024 ] Training - Loss: 0.3120, Acc: 94.33%, F1: 0.9971, Sensitivity: 0.9944, Specificity: 1.0000
+[ Thu Dec  5 01:36:40 2024 ] Validation - Loss: 0.6680, Acc: 90.00%, F1: 0.8889, AUC: 0.8976, Sensitivity: 0.8103, Specificity: 0.9688
+[ Thu Dec  5 01:36:40 2024 ] No improvement in F1 score for 73 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:40 2024 ] 
+Epoch 115/300
+[ Thu Dec  5 01:36:42 2024 ] Training - Loss: 0.3475, Acc: 92.86%, F1: 0.9814, Sensitivity: 0.9866, Specificity: 0.9766
+[ Thu Dec  5 01:36:42 2024 ] Validation - Loss: 0.6931, Acc: 90.00%, F1: 0.8889, AUC: 0.8976, Sensitivity: 0.8103, Specificity: 0.9688
+[ Thu Dec  5 01:36:42 2024 ] No improvement in F1 score for 74 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:42 2024 ] 
+Epoch 116/300
+[ Thu Dec  5 01:36:43 2024 ] Training - Loss: 0.3185, Acc: 93.60%, F1: 0.9899, Sensitivity: 0.9907, Specificity: 0.9910
+[ Thu Dec  5 01:36:43 2024 ] Validation - Loss: 0.6982, Acc: 90.00%, F1: 0.8889, AUC: 0.8976, Sensitivity: 0.8103, Specificity: 0.9688
+[ Thu Dec  5 01:36:43 2024 ] No improvement in F1 score for 75 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:43 2024 ] 
+Early stopping triggered after 116 epochs. Best F1: 0.9109
+[ Thu Dec  5 01:36:43 2024 ] 
+Training completed!
+[ Thu Dec  5 01:36:43 2024 ] Best Validation Metrics:
+[ Thu Dec  5 01:36:43 2024 ] F1 Score: 0.9109
+[ Thu Dec  5 01:36:43 2024 ] Accuracy: 91.82%
+[ Thu Dec  5 01:36:43 2024 ] Loss: 0.6225
+[ Thu Dec  5 01:36:43 2024 ] 
+Loading best model from ./work_dir/smartfallmm/mobile/model_epoch_41_f1_0.9109.pth for testing...
+[ Thu Dec  5 01:36:43 2024 ] 
+Evaluating on test set...
+[ Thu Dec  5 01:36:43 2024 ] 
+Test Set Results:
+ - Loss: 0.4992
+ - Accuracy: 92.78%
+ - F1 Score: 0.9263
+ - AUC: 0.9294
+ - Sensitivity: 0.6615
+ - Specificity: 0.9844
