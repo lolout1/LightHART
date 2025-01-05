@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set base directories
-SOURCE_DIR="../../LightHART/data/smartfallmm"
+SOURCE_DIR="../../new7/LightHART/data/"
 DEST_DIR="data/smartfallmm"
 
 # Create directory structure

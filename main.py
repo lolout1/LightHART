@@ -32,6 +32,7 @@ def get_args():
     parser.add_argument('--config' , default = './config/smartfallmm/teacher.yaml')
     parser.add_argument('--dataset', type = str, default= 'utd' )
     # Training
+    #parser.add_argument('--patience', type = int, default = 25, metavar = 'N', help = 'early stopping patience')
     parser.add_argument('--batch-size', type = int, default = 16, metavar = 'N',
                         help = 'input batch size for training (default: 8)')
 
@@ -154,7 +155,7 @@ class Trainer():
         self.optimizer = None
         self.data_loader = dict()
         self.inertial_sensors = []
-        
+        self.patience = 25
         # Initialize best metrics dictionary
         self.best_metrics = {
             'accuracy': float('-inf'),
@@ -255,7 +256,7 @@ class Trainer():
                 self.best_metrics[metric] = current_metrics[metric]
         else:
             self.early_stop_counter += 1
-            if self.early_stop_counter >= self.patience:
+            if self.early_stop_counter >= self.patience: #patience
                 self.early_stop = True
                 self.print_log(f"\nEarly stopping triggered after {self.patience} epochs without improvement")
 
@@ -330,9 +331,14 @@ class Trainer():
         all_subjects = sorted(list({trial.subject_id for trial in builder.dataset.matched_trials}))
         
         # Split subjects according to specification
-        self.test_subjects = all_subjects[-2:]  # Last 2 subjects
-        self.val_subjects = all_subjects[-4:-2]  # Next to last 2 subjects
+        self.val_subjects = all_subjects[-2:]  # Last 2 subjects
+        print("val_subjects", self.val_subjects)
+        
+        self.test_subjects = all_subjects[-4:-2]  # Next to last 2 subjects
+        print("test_subjects", self.test_subjects)
+
         self.train_subjects = all_subjects[:-4]  # All remaining subjects
+        print("train_subjects", self.train_subjects)
         
         print(f"\nSubject Split:")
         print(f"Training subjects: {self.train_subjects}")

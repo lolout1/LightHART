@@ -16,10 +16,17 @@ from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import WeightedRandomSampler
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix, f1_score, precision_recall_curve, roc_auc_score
+from sklearn.metrics import confusion_matrix, f1_score, precision_recall_curve, roc_auc_score, precision_score, recall_score
 from utils.dataset import prepare_smartfallmm, filter_subjects
 from Models.mobile import EnhancedDualPathFallDetector
 from main import import_class, str2bool, get_args
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+import seaborn as sns  # Import seaborn explicitly
+from collections import defaultdict
+import datetime
+import copy
 
 # Removed matplotlib imports to disable plotting globally
 
@@ -33,48 +40,42 @@ def init_seed(seed):
 
 class SMVAugmentation:
     """Data augmentation specific to SMV signals"""
-    def __init__(self, noise_std=0.01, mask_ratio=0.1):
-        self.noise_std = noise_std
-        self.mask_ratio = mask_ratio
+    def __init__(self, **kwargs):
+        pass
 
-    def __call__(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        augmented_data = {}
-        for key, tensor in data.items():
-            aug_tensor = tensor.clone()
-            xyz_data = tensor[:, :, :3]  # Original XYZ data
-            smv_data = tensor[:, :, 3:]  # SMV channel
-            
-            # Apply augmentations only to SMV
-            smv_data = smv_data * (torch.randn_like(smv_data) * self.noise_std + 1)  # Noise
-            smv_data = smv_data * (torch.rand_like(smv_data) > self.mask_ratio)  # Masking
-            smv_data = smv_data * (torch.randn(1).exp() * 0.1 + 1)  # Scaling
-            
-            augmented_data[key] = torch.cat([xyz_data, smv_data], dim=-1)
-        return augmented_data
+    def __call__(self, data):
+        """No augmentation, return data as is"""
+        return data
 
 class SMVOptimizedTrainer:
     def __init__(self, arg):
+        """Initialize trainer with arguments"""
         self.arg = arg
-        # First setup logging
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.global_step = 0
+        self.best_accuracy = 0
+        self.best_f1 = 0
+        self.early_stopping_patience = 10
+        self.early_stopping_counter = 0
+        
+        # Initialize metrics history
+        self.metrics_history = {
+            'train_loss': [], 'train_acc': [], 'train_f1': [], 'train_precision': [], 
+            'train_sensitivity': [], 'train_specificity': [], 'train_auc': [],
+            'val_loss': [], 'val_acc': [], 'val_f1': [], 'val_precision': [], 
+            'val_sensitivity': [], 'val_specificity': [], 'val_auc': [],
+            'test_loss': [], 'test_acc': [], 'test_f1': [], 'test_precision': [], 
+            'test_sensitivity': [], 'test_specificity': [], 'test_auc': []
+        }
+        
         self.setup_logging()
-        # Then setup other components in order
         self.setup_basic_attributes()
         self.setup_environment()
         self.initialize_components()
         
-        # Initialize cross-validation results
-        self.cv_results = {
-            'fold_metrics': [],
-            'best_models': []
-        }
+        # Store metrics for both runs
+        self.run_metrics = []
         
-        if self.arg.cross_validation:
-            self.cross_validate()
-        else:
-            self.load_data()
-            self.print_model_info()
-            self.start()
-
     def setup_logging(self):
         """Setup logging directory and file"""
         # Create work directory if it doesn't exist
@@ -106,7 +107,7 @@ class SMVOptimizedTrainer:
         self.val_subjects = []
         self.test_subjects = []
         self.early_stopping_counter = 0
-        self.early_stopping_patience = 75
+        self.early_stopping_patience = 25
         self.best_model_path = None
         self.data_loader = {}
         self.train_class_counts = None
@@ -156,7 +157,7 @@ class SMVOptimizedTrainer:
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = self.load_optimizer()
         self.scaler = GradScaler()  # For mixed precision training
-        self.augmentation = SMVAugmentation(**self.arg.aug_args)  # Data augmentation
+        self.augmentation = SMVAugmentation()  # Data augmentation
 
     def load_model(self, model, model_args):
         """Load and initialize the model"""
@@ -239,178 +240,237 @@ class SMVOptimizedTrainer:
         }
 
     def load_data(self):
-        """Loads training, validation and test datasets with balanced sampling"""
+        """Load and prepare datasets"""
         try:
-            self.print_log("Loading dataset...")
-            Feeder = import_class(self.arg.feeder)
-        
-            # First get all matched trials
+            # Get dataset builder
             builder = prepare_smartfallmm(self.arg)
-
-            # Get available subjects from matched trials
-            all_trial_subjects = set(trial.subject_id for trial in builder.dataset.matched_trials)
-            self.print_log(f"All available subjects in matched trials: {sorted(list(all_trial_subjects))}")
             
-            # Filter the subjects that are in our arg.subjects list and in the matched trials
-            available_subjects = sorted(list(all_trial_subjects & set(self.arg.subjects)))
-            self.print_log(f"Subjects available for training/validation/test: {available_subjects}")
+            # Get all available subjects
+            all_subjects = sorted(list({trial.subject_id for trial in builder.dataset.matched_trials}))
+            available_subjects = sorted(list(set(all_subjects) & set(self.arg.subjects)))
             
             if not available_subjects:
-                self.print_log("No subjects available that match both matched trials and requested subjects!")
+                self.print_log("No subjects available for training!")
                 return False
             
-            # Split for training, validation and test
-            test_subjects = available_subjects[-2:]  # Take last 2 subjects for test
-            val_subjects = available_subjects[-4:-2]  # Take next 2 subjects for validation
-            train_subjects = available_subjects[:-4]  # Rest for training
+            # Set specific test and validation subjects
+            self.train_subjects = [s for s in available_subjects if s not in self.test_subjects + self.val_subjects]
             
-            self.print_log(f"\nSplit:")
-            self.print_log(f"Training subjects: {train_subjects}")
-            self.print_log(f"Validation subjects: {val_subjects}")
-            self.print_log(f"Test subjects: {test_subjects}")
-
-            self.train_subjects = train_subjects
-            self.val_subjects = val_subjects
-            self.test_subjects = test_subjects
-
+            self.print_log(f"\nSubject Split:")
+            self.print_log(f"Training subjects: {self.train_subjects}")
+            self.print_log(f"Validation subjects: {self.val_subjects}")
+            self.print_log(f"Test subjects: {self.test_subjects}")
+            
+            # Prepare datasets
+            train_data = filter_subjects(builder, self.train_subjects)
+            val_data = filter_subjects(builder, self.val_subjects)
+            test_data = filter_subjects(builder, self.test_subjects)
+            
+            if not all([train_data, val_data, test_data]):
+                self.print_log("Error: One or more datasets are empty!")
+                return False
+            
+            # Create training dataset with balanced sampling
+            train_dataset = import_class(self.arg.feeder)(dataset=train_data, batch_size=self.arg.batch_size)
+            labels = train_dataset.labels
+            class_counts = np.bincount(labels)
+            total_samples = len(labels)
+            class_weights = total_samples / (len(class_counts) * class_counts)
+            sample_weights = class_weights[labels]
+            
+            sampler = WeightedRandomSampler(
+                weights=torch.DoubleTensor(sample_weights),
+                num_samples=len(train_dataset),
+                replacement=True
+            )
+            
+            # Create dataloaders
             self.data_loader = {}
-
-            # Create dataloaders for each split
-            for split, subjects in [('train', train_subjects), 
-                                ('val', val_subjects),
-                                ('test', test_subjects)]:
-                
-                # Filter data for current subjects
-                filtered_data = filter_subjects(builder, subjects)
-                if not filtered_data:
-                    self.print_log(f"No {split} data was loaded!")
-                    continue
-                
-                # Create dataset with filtered data
-                dataset = Feeder(dataset=filtered_data, batch_size=self.arg.batch_size)
-                
-                # For training set, create balanced sampler
-                if split == 'train':
-                    labels = dataset.labels
-                    class_counts = np.bincount(labels)
-                    total_samples = len(labels)
-                    
-                    # Calculate weights inversely proportional to class frequencies
-                    class_weights = total_samples / (len(class_counts) * class_counts)
-                    sample_weights = class_weights[labels]
-                    
-                    sampler = WeightedRandomSampler(
-                        weights=torch.DoubleTensor(sample_weights),
-                        num_samples=len(dataset),
-                        replacement=True
-                    )
-                    
-                    self.data_loader[split] = torch.utils.data.DataLoader(
-                        dataset=dataset,
-                        batch_size=self.arg.batch_size,
-                        sampler=sampler,  # Use balanced sampler for training
-                        num_workers=self.arg.num_worker,
-                        pin_memory=True if self.use_cuda else False,
-                        drop_last=True
-                    )
-                    
-                    # Store class distribution information
-                    self.train_class_counts = class_counts
-                    self.print_log(f"Training set class distribution: {class_counts}")
-                else:
-                    # For validation and test sets, no sampling needed
-                    batch_size = getattr(self.arg, f'{split}_batch_size', self.arg.batch_size)
-                    self.data_loader[split] = torch.utils.data.DataLoader(
-                        dataset=dataset,
-                        batch_size=batch_size,
-                        shuffle=False,
-                        num_workers=self.arg.num_worker,
-                        pin_memory=True if self.use_cuda else False
-                    )
-                
-                self.print_log(f"Created {split} dataloader with {len(dataset)} samples")
-        
+            self.data_loader['train'] = torch.utils.data.DataLoader(
+                dataset=train_dataset,
+                batch_size=self.arg.batch_size,
+                sampler=sampler,
+                num_workers=self.arg.num_worker,
+                pin_memory=True if self.use_cuda else False,
+                drop_last=True
+            )
+            
+            self.data_loader['val'] = torch.utils.data.DataLoader(
+                dataset=import_class(self.arg.feeder)(dataset=val_data, batch_size=self.arg.batch_size),
+                batch_size=self.arg.batch_size,
+                shuffle=False,
+                num_workers=self.arg.num_worker,
+                pin_memory=True if self.use_cuda else False
+            )
+            
+            self.data_loader['test'] = torch.utils.data.DataLoader(
+                dataset=import_class(self.arg.feeder)(dataset=test_data, batch_size=self.arg.batch_size),
+                batch_size=self.arg.batch_size,
+                shuffle=False,
+                num_workers=self.arg.num_worker,
+                pin_memory=True if self.use_cuda else False
+            )
+            
+            self.print_log(f"Created training dataloader with {len(train_dataset)} samples")
+            self.print_log(f"Created validation dataloader with {len(self.data_loader['val'].dataset)} samples")
+            self.print_log(f"Created test dataloader with {len(self.data_loader['test'].dataset)} samples")
+            
             return True
+            
         except Exception as e:
-            self.print_log(f"Error in load_data: {str(e)}")
+            self.print_log(f"Error in data loading: {str(e)}")
             traceback.print_exc()
             return False
 
     def train_epoch(self, epoch: int) -> Dict:
-        """Train for one epoch"""
+        """Train one epoch"""
         self.model.train()
+        
+        loader = self.data_loader['train']
+        process = tqdm(loader, dynamic_ncols=True)
+        
+        loss_value = []
+        acc_value = []
+        f1_value = []
+        auc_value = []
+        
+        for batch_idx, (sensor_data, label, _) in enumerate(process):  
+            self.global_step += 1
+            # Get data
+            with torch.no_grad():
+                sensor_data = {k: v.to(self.device) for k, v in sensor_data.items()}
+                label = label.to(self.device)
+            
+            # Forward
+            self.optimizer.zero_grad()
+            logits = self.model(sensor_data)  
+            
+            # Calculate loss
+            loss = self.criterion(logits, label)  
+            
+            # Backward and optimize
+            loss.backward()
+            self.optimizer.step()
+            
+            # Statistics
+            y_pred = torch.argmax(logits.data, dim=1)
+            acc = torch.mean((y_pred == label).float())
+            
+            f1 = f1_score(label.cpu().numpy(), y_pred.cpu().numpy(), average='macro')
+            try:
+                auc = roc_auc_score(label.cpu().numpy(), torch.softmax(logits.data, dim=1)[:, 1].cpu().numpy())
+            except ValueError:
+                auc = 0.0
+            
+            loss_value.append(loss.item())
+            acc_value.append(acc.item())
+            f1_value.append(f1)
+            auc_value.append(auc)
+            
+            # Print
+            lr = self.optimizer.param_groups[0]['lr']
+            process.set_description(f'Train Epoch {epoch}: {batch_idx+1}/{len(loader)} Loss: {np.mean(loss_value):.4f} Acc: {np.mean(acc_value):.4f} F1: {np.mean(f1_value):.4f} AUC: {np.mean(auc_value):.4f} LR: {lr:.6f}')
+        
+        # Statistics
+        train_metrics = {
+            'loss': np.mean(loss_value),
+            'accuracy': np.mean(acc_value) * 100,
+            'f1': np.mean(f1_value),
+            'auc': np.mean(auc_value)
+        }
+        
+        return train_metrics
+
+    def get_detailed_metrics(self, targets, predictions, logits=None):
+        """Calculate detailed metrics including F1, precision, sensitivity, specificity, and AUC"""
+        targets = np.array(targets)
+        predictions = np.array(predictions)
+        
+        # Calculate confusion matrix metrics
+        tn, fp, fn, tp = confusion_matrix(targets, predictions).ravel()
+        
+        # Calculate metrics
+        sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        f1 = 2 * (precision * sensitivity) / (precision + sensitivity) if (precision + sensitivity) > 0 else 0
+        
+        metrics = {
+            'f1': f1,
+            'precision': precision,
+            'sensitivity': sensitivity,
+            'specificity': specificity,
+        }
+        
+        # Calculate AUC if logits are provided
+        if logits is not None:
+            try:
+                probabilities = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+                auc = roc_auc_score(targets, probabilities)
+                metrics['auc'] = auc
+            except:
+                metrics['auc'] = 0.5  # Default AUC if calculation fails
+        else:
+            metrics['auc'] = 0.5
+            
+        return metrics
+
+    def validate(self, loader='val'):
+        """Validate the model"""
+        self.model.eval()
+        
         metrics = {
             'loss': 0,
             'accuracy': 0,
             'predictions': [],
             'targets': [],
-            'cls_loss': 0,
-            'smv_loss': 0,
-            'consistency_loss': 0,
-            'sensitivity': 0,
-            'specificity': 0,
+            'logits': []
         }
         
-        process = tqdm(self.data_loader['train'], desc=f'Train Epoch {epoch}')
-        for batch_idx, (inputs, targets, _) in enumerate(process):
-            inputs = self.augmentation(inputs)
-            sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
-            targets = targets.to(self.device)
-            
-            with autocast('cuda'):
-                logits, features = self.model(sensor_data)
-                loss, loss_dict = self.compute_loss(logits, targets, features)
-            
-            self.optimizer.zero_grad()
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
-            if hasattr(self, 'scheduler'):
-                self.scheduler.step()
-            
-            predictions = torch.argmax(logits, 1)
-            metrics['predictions'].extend(predictions.cpu().numpy())
-            metrics['targets'].extend(targets.cpu().numpy())
-            metrics['loss'] += loss.item()
-            metrics['cls_loss'] += loss_dict['cls_loss']
-            metrics['smv_loss'] += loss_dict['smv_loss']
-            metrics['consistency_loss'] += loss_dict['consistency_loss']
-            metrics['accuracy'] += (predictions == targets).sum().item()
-            
-            # Update sensitivity and specificity
-            true_positive = ((predictions == 1) & (targets == 1)).sum().item()
-            true_negative = ((predictions == 0) & (targets == 0)).sum().item()
-            false_negative = ((predictions == 0) & (targets == 1)).sum().item()
-            false_positive = ((predictions == 1) & (targets == 0)).sum().item()
-            
-            metrics['sensitivity'] += true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
-            metrics['specificity'] += true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
-            
-            process.set_postfix({
-                'loss': f"{loss.item():.4f}",
-                'acc': f"{100 * metrics['accuracy'] / ((batch_idx + 1) * targets.size(0)):.2f}%"
-            })
+        loader_name = 'validation' if loader == 'val' else 'test'
+        process = tqdm(self.data_loader[loader], desc=f'{loader_name.capitalize()}')
         
-        n_samples = len(self.data_loader['train'].dataset)
-        metrics['loss'] /= len(self.data_loader['train'])
+        with torch.no_grad():
+            for batch_idx, (inputs, targets, _) in enumerate(process):
+                sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
+                targets = targets.to(self.device)
+                
+                # Forward pass
+                logits = self.model(sensor_data)
+                loss = self.criterion(logits, targets)
+                
+                # Update metrics
+                predictions = torch.argmax(logits, 1)
+                metrics['predictions'].extend(predictions.cpu().numpy())
+                metrics['targets'].extend(targets.cpu().numpy())
+                metrics['logits'].append(logits.detach())
+                metrics['loss'] += loss.item()
+                metrics['accuracy'] += (predictions == targets).sum().item()
+        
+        # Calculate final metrics
+        n_samples = len(self.data_loader[loader].dataset)
+        metrics['loss'] /= len(self.data_loader[loader])
         metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
-        metrics['sensitivity'] /= len(self.data_loader['train'])
-        metrics['specificity'] /= len(self.data_loader['train'])
+        metrics['logits'] = torch.cat(metrics['logits'], dim=0)
         
-        return metrics
-
-    def update_metrics(self, metrics, predictions, targets, loss, loss_dict):
-        """Update training metrics"""
-        metrics['predictions'].extend(predictions.cpu().numpy())
-        metrics['targets'].extend(targets.cpu().numpy())
-        metrics['loss'] += loss.item()
-        metrics['cls_loss'] += loss_dict['cls_loss']
-        metrics['smv_loss'] += loss_dict['smv_loss']
-        metrics['consistency_loss'] += loss_dict['consistency_loss']
-        metrics['accuracy'] += (predictions == targets).sum().item()
+        # Calculate additional metrics
+        detailed_metrics = self.get_detailed_metrics(
+            metrics['targets'], 
+            metrics['predictions'],
+            metrics['logits']
+        )
+        metrics.update(detailed_metrics)
+        
+        # Store metrics in history
+        prefix = f'{loader}_'
+        self.metrics_history[f'{prefix}loss'].append(metrics['loss'])
+        self.metrics_history[f'{prefix}acc'].append(metrics['accuracy'])
+        self.metrics_history[f'{prefix}f1'].append(metrics['f1'])
+        self.metrics_history[f'{prefix}precision'].append(metrics['precision'])
+        self.metrics_history[f'{prefix}sensitivity'].append(metrics['sensitivity'])
+        self.metrics_history[f'{prefix}specificity'].append(metrics['specificity'])
+        self.metrics_history[f'{prefix}auc'].append(metrics['auc'])
+        
         return metrics
 
     def print_model_info(self):
@@ -469,227 +529,716 @@ class SMVOptimizedTrainer:
             self.print_log(f"Error in print_model_info: {str(e)}")
             traceback.print_exc()
 
-    def train(self):
-        """Main training loop with early stopping"""
-        try:
-            self.results = pd.DataFrame(columns=['epoch', 'train_loss', 'val_loss', 
-                                            'train_acc', 'val_acc', 'f1', 'auc', 'sensitivity', 'specificity'])
+    def save_model(self, epoch, val_metrics, test_metrics, split_info=None):
+        """Save model with detailed metrics"""
+        save_path = os.path.join(
+            self.arg.work_dir,
+            f'model_valf1_{val_metrics["f1"]:.4f}_testf1_{test_metrics["f1"]:.4f}.pt'
+        )
+        
+        save_dict = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics,
+            'test_subjects': self.test_subjects,
+            'val_subjects': self.val_subjects,
+            'config': self.arg.__dict__
+        }
+        
+        torch.save(save_dict, save_path)
+        self.print_log(f'Model saved to {save_path}')
+
+    def log_split_summary(self, split_info, best_metrics):
+        """Log detailed summary of split results"""
+        self.print_log("\n" + "="*50)
+        self.print_log(f"SPLIT {split_info['name']} SUMMARY")
+        self.print_log("="*50)
+        self.print_log(f"\nSplit Configuration:")
+        self.print_log(f"Description: {split_info['desc']}")
+        self.print_log(f"Test Subjects: {split_info['test']}")
+        self.print_log(f"Validation Subjects: {split_info['val']}")
+        
+        # Log best validation metrics
+        self.print_log("\nBest Validation Metrics:")
+        self.print_log(f"Loss: {best_metrics['val']['loss']:.4f}")
+        self.print_log(f"Accuracy: {best_metrics['val']['accuracy']:.2f}%")
+        self.print_log(f"F1 Score: {best_metrics['val']['f1']:.4f}")
+        self.print_log(f"Precision: {best_metrics['val']['precision']:.4f}")
+        self.print_log(f"Sensitivity (Recall): {best_metrics['val']['sensitivity']:.4f}")
+        self.print_log(f"Specificity: {best_metrics['val']['specificity']:.4f}")
+        self.print_log(f"AUC: {best_metrics['val']['auc']:.4f}")
+        
+        # Log corresponding test metrics
+        self.print_log("\nCorresponding Test Metrics:")
+        self.print_log(f"Loss: {best_metrics['test']['loss']:.4f}")
+        self.print_log(f"Accuracy: {best_metrics['test']['accuracy']:.2f}%")
+        self.print_log(f"F1 Score: {best_metrics['test']['f1']:.4f}")
+        self.print_log(f"Precision: {best_metrics['test']['precision']:.4f}")
+        self.print_log(f"Sensitivity (Recall): {best_metrics['test']['sensitivity']:.4f}")
+        self.print_log(f"Specificity: {best_metrics['test']['specificity']:.4f}")
+        self.print_log(f"AUC: {best_metrics['test']['auc']:.4f}")
+        
+        self.print_log("\n" + "="*50 + "\n")
+
+    def save_plots(self, save_dir, split_info, epoch_metrics, best_metrics, best_epoch):
+        """Save comprehensive training plots with detailed metrics at split end"""
+        plt.style.use('seaborn')
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle(f'Training Metrics for {split_info["name"]}\n{split_info["desc"]}', fontsize=16, y=0.95)
+        
+        # Plot Loss
+        ax1.plot(epoch_metrics['train_loss'], label='Train', marker='o')
+        ax1.plot(epoch_metrics['val_loss'], label='Validation', marker='s')
+        ax1.set_title('Loss Curves')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss')
+        ax1.legend()
+        ax1.grid(True)
+        
+        # Plot Accuracy
+        ax2.plot(epoch_metrics['train_acc'], label='Train', marker='o')
+        ax2.plot(epoch_metrics['val_acc'], label='Validation', marker='s')
+        ax2.set_title('Accuracy Curves')
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('Accuracy (%)')
+        ax2.legend()
+        ax2.grid(True)
+        
+        # Plot F1 Score
+        ax3.plot(epoch_metrics['train_f1'], label='Train', marker='o')
+        ax3.plot(epoch_metrics['val_f1'], label='Validation', marker='s')
+        ax3.set_title('F1 Score Curves')
+        ax3.set_xlabel('Epoch')
+        ax3.set_ylabel('F1 Score')
+        ax3.legend()
+        ax3.grid(True)
+        
+        # Plot ROC AUC
+        ax4.plot(epoch_metrics['train_auc'], label='Train', marker='o')
+        ax4.plot(epoch_metrics['val_auc'], label='Validation', marker='s')
+        ax4.set_title('ROC AUC Curves')
+        ax4.set_xlabel('Epoch')
+        ax4.set_ylabel('AUC')
+        ax4.legend()
+        ax4.grid(True)
+
+        # Add text box with best metrics
+        metrics_text = (
+            f'Best Validation Metrics (Epoch {best_epoch}):\n'
+            f'Loss: {best_metrics["val"]["loss"]:.4f}\n'
+            f'Accuracy: {best_metrics["val"]["accuracy"]:.2f}%\n'
+            f'F1 Score: {best_metrics["val"]["f1"]:.4f}\n'
+            f'AUC: {best_metrics["val"]["auc"]:.4f}\n\n'
+            f'Corresponding Test Metrics:\n'
+            f'Loss: {best_metrics["test"]["loss"]:.4f}\n'
+            f'Accuracy: {best_metrics["test"]["accuracy"]:.2f}%\n'
+            f'F1 Score: {best_metrics["test"]["f1"]:.4f}\n'
+            f'AUC: {best_metrics["test"]["auc"]:.4f}'
+        )
+        
+        # Add configuration details
+        config_text = (
+            f'Configuration:\n'
+            f'Model: {self.arg.model}\n'
+            f'Learning Rate: {self.arg.base_lr}\n'
+            f'Batch Size: {self.arg.batch_size}\n'
+            f'Split Info:\n'
+            f'  Test: {split_info["test"]}\n'
+            f'  Val: {split_info["val"]}'
+        )
+        
+        fig.text(0.02, 0.02, config_text, fontsize=10, va='bottom', ha='left')
+        fig.text(0.98, 0.02, metrics_text, fontsize=10, va='bottom', ha='right')
+        
+        # Save plot
+        plot_path = os.path.join(save_dir, f'split_{split_info["name"]}_final_metrics.png')
+        plt.savefig(plot_path, bbox_inches='tight', dpi=300)
+        plt.close()
+        
+        self.print_log(f'Final training curves saved to: {plot_path}')
+
+    def save_split_results(self, split_dir, results):
+        """Save detailed results for a split"""
+        results_file = os.path.join(split_dir, 'detailed_results.txt')
+        with open(results_file, 'w') as f:
+            f.write(f"Detailed Results for {results['split_name']}\n")
+            f.write("="*50 + "\n\n")
             
-            for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
-                self.print_log(f"\nEpoch {epoch}/{self.arg.num_epoch}")
+            f.write("Configuration:\n")
+            f.write(f"Description: {results['description']}\n")
+            f.write(f"Test Subjects: {results['test_subjects']}\n")
+            f.write(f"Validation Subjects: {results['val_subjects']}\n\n")
+            
+            f.write("Best Validation Metrics:\n")
+            f.write("-" * 25 + "\n")
+            for metric, value in results['val_metrics'].items():
+                if isinstance(value, (int, float)):
+                    f.write(f"{metric}: {value:.4f}\n")
+            
+            f.write("\nCorresponding Test Metrics:\n")
+            f.write("-" * 25 + "\n")
+            for metric, value in results['test_metrics'].items():
+                if isinstance(value, (int, float)):
+                    f.write(f"{metric}: {value:.4f}\n")
+
+    def save_overall_summary(self, all_results):
+        """Save comprehensive summary of all splits"""
+        summary_file = os.path.join(self.arg.work_dir, 'all_splits_summary.txt')
+        with open(summary_file, 'w') as f:
+            f.write("COMPREHENSIVE SUMMARY OF ALL SPLITS\n")
+            f.write("="*50 + "\n\n")
+            
+            # Save training configuration
+            f.write("Training Configuration\n")
+            f.write("-"*25 + "\n")
+            f.write(f"Model: {self.arg.model}\n")
+            f.write(f"Learning Rate: {self.arg.base_lr}\n")
+            f.write(f"Batch Size: {self.arg.batch_size}\n")
+            f.write(f"Max Epochs: {self.arg.num_epoch}\n")
+            f.write(f"Early Stopping Patience: {self.early_stopping_patience}\n\n")
+            
+            # Individual split results
+            f.write("Individual Split Results\n")
+            f.write("-"*25 + "\n\n")
+            for result in all_results:
+                f.write(f"Split: {result['split_name']}\n")
+                f.write(f"Description: {result['description']}\n")
+                f.write(f"Test Subjects: {result['test_subjects']}\n")
+                f.write(f"Val Subjects: {result['val_subjects']}\n\n")
                 
-                # Training phase
-                train_metrics = self.train_epoch(epoch)
-                self.print_log(
-                    f"Training - Loss: {train_metrics['loss']:.4f}, "
-                    f"Acc: {train_metrics['accuracy']:.2f}%, "
-                    f"F1: {f1_score(train_metrics['targets'], train_metrics['predictions'], zero_division=0):.4f}, "
-                    f"Sensitivity: {train_metrics['sensitivity']:.4f}, "
-                    f"Specificity: {train_metrics['specificity']:.4f}"
-                )
+                f.write("Validation Metrics:\n")
+                for metric, value in result['val_metrics'].items():
+                    if isinstance(value, (int, float)):
+                        f.write(f"  {metric}: {value:.4f}\n")
                 
-                # Validation phase
-                if 'val' in self.data_loader:
-                    val_metrics = self.validate()
-                    self.print_log(
-                        f"Validation - Loss: {val_metrics['loss']:.4f}, "
-                        f"Acc: {val_metrics['accuracy']:.2f}%, "
-                        f"F1: {f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0):.4f}, "
-                        f"AUC: {roc_auc_score(val_metrics['targets'], val_metrics['predictions']):.4f}, "
-                        f"Sensitivity: {val_metrics['sensitivity']:.4f}, "
-                        f"Specificity: {val_metrics['specificity']:.4f}"
-                    )
+                f.write("\nTest Metrics:\n")
+                for metric, value in result['test_metrics'].items():
+                    if isinstance(value, (int, float)):
+                        f.write(f"  {metric}: {value:.4f}\n")
+                f.write("\n" + "="*50 + "\n\n")
+            
+            # Calculate and write statistics across all splits
+            f.write("\nAGGREGATE STATISTICS ACROSS ALL SPLITS\n")
+            f.write("-"*50 + "\n\n")
+            
+            metrics_to_track = ['loss', 'accuracy', 'f1', 'precision', 'sensitivity', 'specificity', 'auc']
+            
+            for phase in ['val', 'test']:
+                f.write(f"{phase.upper()} METRICS:\n")
+                f.write("-"*20 + "\n")
+                
+                for metric in metrics_to_track:
+                    values = [r[f'{phase}_metrics'][metric] for r in all_results]
+                    mean = np.mean(values)
+                    std = np.std(values)
+                    min_val = np.min(values)
+                    max_val = np.max(values)
                     
-                    # Save training history
-                    self.results.loc[epoch] = [
-                        epoch,
-                        train_metrics['loss'], val_metrics['loss'],
-                        train_metrics['accuracy'], val_metrics['accuracy'],
-                        f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0),
-                        roc_auc_score(val_metrics['targets'], val_metrics['predictions']),
-                        val_metrics['sensitivity'],
-                        val_metrics['specificity']
-                    ]
-                    
-                    # Check for improvement
-                    if f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) > self.best_f1:
-                        improvement = f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) - self.best_f1
-                        self.print_log(f"F1 score improved by {improvement:.4f}!")
-                        self.best_f1 = f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0)
-                        self.best_accuracy = val_metrics['accuracy']
-                        self.best_loss = val_metrics['loss']
-                        
-                        # Save best model
-                        if self.best_model_path and os.path.exists(self.best_model_path):
-                            os.remove(self.best_model_path)
-                        
-                        self.best_model_path = os.path.join(
-                            self.arg.work_dir,
-                            f'model_epoch_{epoch}_f1_{f1_score(val_metrics["targets"], val_metrics["predictions"], zero_division=0):.4f}.pth'
-                        )
-                        
-                        torch.save({
-                            'epoch': epoch,
-                            'model_state_dict': self.model.state_dict(),
-                            'optimizer_state_dict': self.optimizer.state_dict(),
-                            'scheduler_state_dict': self.scheduler.state_dict() if hasattr(self, 'scheduler') else None,
-                            'best_f1': self.best_f1,
-                            'metrics': val_metrics
-                        }, self.best_model_path)
-                        
-                        self.print_log(f"Model saved to {self.best_model_path}")
-                        self.early_stopping_counter = 0
+                    if metric == 'accuracy':
+                        f.write(f"{metric}:\n")
+                        f.write(f"  Mean ± Std: {mean:.2f}% ± {std:.2f}%\n")
+                        f.write(f"  Range: [{min_val:.2f}% - {max_val:.2f}%]\n")
                     else:
-                        self.early_stopping_counter += 1
-                        self.print_log(
-                            f"No improvement in F1 score for {self.early_stopping_counter} epochs. "
-                            f"Best F1: {self.best_f1:.4f}"
-                        )
-                    
-                    # Early stopping check
-                    if self.early_stopping_counter >= self.early_stopping_patience:
-                        self.print_log(
-                            f"\nEarly stopping triggered after {epoch} epochs. "
-                            f"Best F1: {self.best_f1:.4f}"
-                        )
-                        break
-                
-                # Disabled plotting
-                # self.save_training_curves(epoch)
+                        f.write(f"{metric}:\n")
+                        f.write(f"  Mean ± Std: {mean:.4f} ± {std:.4f}\n")
+                        f.write(f"  Range: [{min_val:.4f} - {max_val:.4f}]\n")
+                f.write("\n")
             
-            # Final results
-            self.print_log("\nTraining completed!")
-            self.print_log(f"Best Validation Metrics:")
-            self.print_log(f"F1 Score: {self.best_f1:.4f}")
-            self.print_log(f"Accuracy: {self.best_accuracy:.2f}%")
-            self.print_log(f"Loss: {self.best_loss:.4f}")
-            
-            # Save training history
-            self.results.to_csv(os.path.join(self.arg.work_dir, 'training_history.csv'))
-            
-            # Load best model for testing
-            if self.best_model_path and os.path.exists(self.best_model_path):
-                self.print_log(f"\nLoading best model from {self.best_model_path} for testing...")
-                checkpoint = torch.load(self.best_model_path, map_location=self.device)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-            
-            # Run testing if test data is available
-            if 'test' in self.data_loader:
-                self.print_log("\nEvaluating on test set...")
-                test_metrics = self.validate_on_test()
-                self.print_log(
-                    f"\nTest Set Results:"
-                    f"\n - Loss: {test_metrics['loss']:.4f}"
-                    f"\n - Accuracy: {test_metrics['accuracy']:.2f}%"
-                    f"\n - F1 Score: {f1_score(test_metrics['targets'], test_metrics['predictions'], zero_division=0):.4f}"
-                    f"\n - AUC: {roc_auc_score(test_metrics['targets'], test_metrics['predictions']):.4f}"
-                    f"\n - Sensitivity: {test_metrics['sensitivity']:.4f}"
-                    f"\n - Specificity: {test_metrics['specificity']:.4f}"
-                )
-                
-                # Save test results
-                test_results = pd.DataFrame([test_metrics])
-                test_results.to_csv(os.path.join(self.arg.work_dir, 'test_results.csv'))
-            
-        except Exception as e:
-            self.print_log(f"Error in training loop: {str(e)}")
-            traceback.print_exc()
+            # Add timestamp
+            f.write(f"\nSummary generated at: {datetime.datetime.now()}\n")
+        
+        self.print_log(f"\nComprehensive summary saved to: {summary_file}")
 
-    def validate(self) -> Dict:
-        """Validate the model"""
-        self.model.eval()
-        metrics = {
-            'loss': 0,
-            'accuracy': 0,
-            'predictions': [],
-            'targets': [],
-            'sensitivity': 0,
-            'specificity': 0,
+    def plot_average_metrics(self, all_results):
+        """Plot average validation and training metrics across all splits"""
+        plt.style.use('seaborn-v0_8')  # Fix for matplotlib deprecation warning
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle(f'Average Training Metrics Across All {len(all_results)} Splits', fontsize=16, y=0.95)
+        
+        # Calculate average metrics
+        metrics_to_track = ['loss', 'accuracy', 'f1', 'auc']
+        phases = ['train', 'val']
+        avg_metrics = {
+            phase: {metric: [] for metric in metrics_to_track}
+            for phase in phases
         }
         
-        with torch.no_grad():
-            for inputs, targets, _ in tqdm(self.data_loader['val'], desc='Validation'):
-                sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
-                targets = targets.to(self.device)
-                logits, features = self.model(sensor_data)
-                loss, _ = self.compute_loss(logits, targets, features)
-                
-                predictions = torch.argmax(logits, 1)
-                metrics['predictions'].extend(predictions.cpu().numpy())
-                metrics['targets'].extend(targets.cpu().numpy())
-                metrics['loss'] += loss.item()
-                metrics['accuracy'] += (predictions == targets).sum().item()
-                
-                # Update sensitivity and specificity
-                true_positive = ((predictions == 1) & (targets == 1)).sum().item()
-                true_negative = ((predictions == 0) & (targets == 0)).sum().item()
-                false_negative = ((predictions == 0) & (targets == 1)).sum().item()
-                false_positive = ((predictions == 1) & (targets == 0)).sum().item()
-                
-                metrics['sensitivity'] += true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
-                metrics['specificity'] += true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
+        # Initialize metrics history if not present
+        for result in all_results:
+            if 'metrics_history' not in result:
+                result['metrics_history'] = {}
+                # Use the final metrics for each phase
+                for phase in phases:
+                    phase_metrics = result.get(f'{phase}_metrics', {})
+                    for metric in metrics_to_track:
+                        if metric in phase_metrics:
+                            result['metrics_history'][f'{phase}_{metric}'] = [phase_metrics[metric]]
         
-        n_samples = len(self.data_loader['val'].dataset)
-        metrics['loss'] /= len(self.data_loader['val'])
-        metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
-        metrics['sensitivity'] /= len(self.data_loader['val'])
-        metrics['specificity'] /= len(self.data_loader['val'])
+        # Collect metrics from all splits
+        for result in all_results:
+            for phase in phases:
+                for metric in metrics_to_track:
+                    metric_key = f'{phase}_{metric}'
+                    if metric_key in result['metrics_history']:
+                        avg_metrics[phase][metric].append(result['metrics_history'][metric_key])
+                    elif metric in result.get(f'{phase}_metrics', {}):
+                        # If no history, use the final metric as a single point
+                        avg_metrics[phase][metric].append([result[f'{phase}_metrics'][metric]])
         
-        return metrics
+        # Ensure that there is data to process
+        if avg_metrics['train']['loss']:
+            max_epochs = max(len(metrics[0]) for metrics in avg_metrics['train']['loss'])
+            # Proceed with further calculations
+            mean_metrics = {
+                phase: {metric: np.zeros(max_epochs) for metric in metrics_to_track}
+                for phase in phases
+            }
+            std_metrics = {
+                phase: {metric: np.zeros(max_epochs) for metric in metrics_to_track}
+                for phase in phases
+            }
+            
+            # Calculate statistics
+            for phase in phases:
+                for metric in metrics_to_track:
+                    metric_data = avg_metrics[phase][metric]
+                    # Pad shorter sequences with last value
+                    padded_data = [
+                        np.pad(m, (0, max_epochs - len(m)), 'edge')
+                        for m in metric_data
+                    ]
+                    metric_array = np.array(padded_data)
+                    mean_metrics[phase][metric] = np.mean(metric_array, axis=0)
+                    std_metrics[phase][metric] = np.std(metric_array, axis=0)
+            
+            epochs = np.arange(max_epochs)
+            
+            # Plot Loss
+            ax1.plot(epochs, mean_metrics['train']['loss'], label='Train', color='blue')
+            ax1.fill_between(epochs, 
+                            mean_metrics['train']['loss'] - std_metrics['train']['loss'],
+                            mean_metrics['train']['loss'] + std_metrics['train']['loss'],
+                            alpha=0.2, color='blue')
+            ax1.plot(epochs, mean_metrics['val']['loss'], label='Validation', color='red')
+            ax1.fill_between(epochs,
+                            mean_metrics['val']['loss'] - std_metrics['val']['loss'],
+                            mean_metrics['val']['loss'] + std_metrics['val']['loss'],
+                            alpha=0.2, color='red')
+            ax1.set_title('Average Loss')
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Loss')
+            ax1.legend()
+            
+            # Plot Accuracy
+            ax2.plot(epochs, mean_metrics['train']['accuracy'], label='Train', color='blue')
+            ax2.fill_between(epochs,
+                            mean_metrics['train']['accuracy'] - std_metrics['train']['accuracy'],
+                            mean_metrics['train']['accuracy'] + std_metrics['train']['accuracy'],
+                            alpha=0.2, color='blue')
+            ax2.plot(epochs, mean_metrics['val']['accuracy'], label='Validation', color='red')
+            ax2.fill_between(epochs,
+                            mean_metrics['val']['accuracy'] - std_metrics['val']['accuracy'],
+                            mean_metrics['val']['accuracy'] + std_metrics['val']['accuracy'],
+                            alpha=0.2, color='red')
+            ax2.set_title('Average Accuracy')
+            ax2.set_xlabel('Epoch')
+            ax2.set_ylabel('Accuracy (%)')
+            ax2.legend()
+            
+            # Plot F1 Score
+            ax3.plot(epochs, mean_metrics['train']['f1'], label='Train', color='blue')
+            ax3.fill_between(epochs,
+                            mean_metrics['train']['f1'] - std_metrics['train']['f1'],
+                            mean_metrics['train']['f1'] + std_metrics['train']['f1'],
+                            alpha=0.2, color='blue')
+            ax3.plot(epochs, mean_metrics['val']['f1'], label='Validation', color='red')
+            ax3.fill_between(epochs,
+                            mean_metrics['val']['f1'] - std_metrics['val']['f1'],
+                            mean_metrics['val']['f1'] + std_metrics['val']['f1'],
+                            alpha=0.2, color='red')
+            ax3.set_title('Average F1 Score')
+            ax3.set_xlabel('Epoch')
+            ax3.set_ylabel('F1 Score')
+            ax3.legend()
+            
+            # Plot AUC
+            ax4.plot(epochs, mean_metrics['train']['auc'], label='Train', color='blue')
+            ax4.fill_between(epochs,
+                            mean_metrics['train']['auc'] - std_metrics['train']['auc'],
+                            mean_metrics['train']['auc'] + std_metrics['train']['auc'],
+                            alpha=0.2, color='blue')
+            ax4.plot(epochs, mean_metrics['val']['auc'], label='Validation', color='red')
+            ax4.fill_between(epochs,
+                            mean_metrics['val']['auc'] - std_metrics['val']['auc'],
+                            mean_metrics['val']['auc'] + std_metrics['val']['auc'],
+                            alpha=0.2, color='red')
+            ax4.set_title('Average AUC')
+            ax4.set_xlabel('Epoch')
+            ax4.set_ylabel('AUC')
+            ax4.legend()
+            
+            # Add text box with average best metrics
+            best_metrics_text = f"Average Best Metrics (N={len(all_results)} splits):\n\n"
+            for phase in phases:
+                best_metrics_text += f"{phase.upper()}:\n"
+                for metric in metrics_to_track:
+                    mean_val = np.mean([max(metrics) for metrics in avg_metrics[phase][metric]])
+                    std_val = np.std([max(metrics) for metrics in avg_metrics[phase][metric]])
+                    best_metrics_text += f"{metric}: {mean_val:.4f} ± {std_val:.4f}\n"
+                best_metrics_text += "\n"
+            
+            fig.text(1.02, 0.5, best_metrics_text, fontsize=10, va='center')
+            
+            # Save plot
+            plot_path = os.path.join(self.arg.work_dir, 'average_metrics_across_splits.png')
+            plt.savefig(plot_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            
+            # Log average metrics
+            self.print_log(f"\nAVERAGE BEST METRICS ACROSS ALL {len(all_results)} SPLITS")
+            self.print_log("=" * 50)
+            for phase in phases:
+                self.print_log(f"\n{phase.upper()} Metrics:")
+                for metric in metrics_to_track:
+                    values = [max(metrics) for metrics in avg_metrics[phase][metric]]
+                    mean_val = np.mean(values)
+                    std_val = np.std(values)
+                    self.print_log(f"{metric}: {mean_val:.4f} ± {std_val:.4f}")
+            
+            self.print_log(f"\nAverage metrics plot saved to: {plot_path}")
+            
+            return {
+                'mean_metrics': mean_metrics,
+                'std_metrics': std_metrics,
+                'best_metrics': {
+                    phase: {
+                        metric: (np.mean([max(metrics) for metrics in avg_metrics[phase][metric]]),
+                               np.std([max(metrics) for metrics in avg_metrics[phase][metric]]))
+                        for metric in metrics_to_track
+                    }
+                    for phase in phases
+                }
+            }
+        else:
+            print("No training loss data available to calculate max_epochs.")
 
-    def validate_on_test(self) -> Dict:
-        """Evaluate the model on the test set"""
-        self.model.eval()
-        metrics = {
-            'loss': 0,
-            'accuracy': 0,
-            'predictions': [],
-            'targets': [],
-            'sensitivity': 0,
-            'specificity': 0,
+    def organize_results(self, all_results, avg_metrics):
+        """Organize all results into a new directory named with average test F1 score"""
+        # Calculate average test F1 score
+        test_f1_scores = [r['test_metrics']['f1'] for r in all_results]
+        avg_test_f1 = np.mean(test_f1_scores)
+        
+        # Create directory name with timestamp and metrics
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        dir_name = f"{self.arg.model}_avgF1_{avg_test_f1:.4f}_{timestamp}"
+        results_dir = os.path.join(os.path.dirname(self.arg.work_dir), "experiments", dir_name)
+        os.makedirs(results_dir, exist_ok=True)
+        
+        self.print_log(f"\nOrganizing results in directory: {results_dir}")
+        
+        # Copy config file
+        config_dir = os.path.join(results_dir, 'config')
+        os.makedirs(config_dir, exist_ok=True)
+        config_src = self.arg.config
+        config_dst = os.path.join(config_dir, os.path.basename(self.arg.config))
+        shutil.copy2(config_src, config_dst)
+        
+        # Create weights directory
+        weights_dir = os.path.join(results_dir, 'weights')
+        os.makedirs(weights_dir, exist_ok=True)
+        
+        # Copy all split results
+        splits_dir = os.path.join(results_dir, 'splits')
+        os.makedirs(splits_dir, exist_ok=True)
+        
+        for split_idx, result in enumerate(all_results):
+            split_name = f"split_{split_idx+1}"
+            split_dir = os.path.join(splits_dir, split_name)
+            os.makedirs(split_dir, exist_ok=True)
+            
+            # Copy split's model file
+            if 'model_path' in result:
+                model_src = result['model_path']
+                model_dst = os.path.join(split_dir, os.path.basename(model_src))
+                shutil.copy2(model_src, model_dst)
+                
+                # Extract and save weights separately
+                model_state = torch.load(model_src)
+                weights_path = os.path.join(weights_dir, f"{split_name}_weights.pt")
+                torch.save(model_state['model_state_dict'], weights_path)
+            
+            # Save split metrics
+            metrics_path = os.path.join(split_dir, 'metrics.txt')
+            with open(metrics_path, 'w') as f:
+                f.write(f"Split {split_idx+1} Metrics\n")
+                f.write("="*50 + "\n\n")
+                f.write("Validation Metrics:\n")
+                for k, v in result['val_metrics'].items():
+                    if isinstance(v, (int, float)):
+                        f.write(f"{k}: {v:.4f}\n")
+                f.write("\nTest Metrics:\n")
+                for k, v in result['test_metrics'].items():
+                    if isinstance(v, (int, float)):
+                        f.write(f"{k}: {v:.4f}\n")
+        
+        # Copy average metrics plot
+        if hasattr(self, 'avg_metrics_plot_path'):
+            plot_dst = os.path.join(results_dir, 'average_metrics.png')
+            shutil.copy2(self.avg_metrics_plot_path, plot_dst)
+        
+        # Save overall summary
+        summary_path = os.path.join(results_dir, 'experiment_summary.txt')
+        with open(summary_path, 'w') as f:
+            f.write(f"Experiment Summary\n")
+            f.write("="*50 + "\n\n")
+            f.write(f"Model: {self.arg.model}\n")
+            f.write(f"Average Test F1: {avg_test_f1:.4f}\n")
+            f.write(f"Number of Splits: {len(all_results)}\n\n")
+            
+            f.write("Average Metrics Across Splits:\n")
+            f.write("-"*30 + "\n")
+            for phase in ['train', 'val', 'test']:
+                f.write(f"\n{phase.upper()} Metrics:\n")
+                metrics = avg_metrics['best_metrics'].get(phase, {})
+                for metric, (mean, std) in metrics.items():
+                    f.write(f"{metric}: {mean:.4f} ± {std:.4f}\n")
+            
+            f.write("\nConfiguration:\n")
+            f.write("-"*30 + "\n")
+            for k, v in vars(self.arg).items():
+                f.write(f"{k}: {v}\n")
+        
+        self.print_log(f"Results organized in: {results_dir}")
+        return results_dir
+
+    def run_all_splits(self):
+        """Run training and evaluation on all specified splits"""
+        splits = [
+            {
+                'name': 'Split 1',
+                'test': [44, 46],
+                'val': [40, 42],
+                'desc': 'Initial split with test=[44,46], val=[40,42]'
+            },
+            {
+                'name': 'Split 2',
+                'test': [40, 42],
+                'val': [44, 46],
+                'desc': 'Reversed split with test=[40,42], val=[44,46]'
+            },
+            {
+                'name': 'Split 3',
+                'test': [45, 46],
+                'val': [44, 43],
+                'desc': 'New split with test=[45,46], val=[44,43]'
+            },
+            {
+                'name': 'Split 4',
+                'test': [44, 43],
+                'val': [45, 46],
+                'desc': 'Reversed split with test=[44,43], val=[45,46]'
+            },
+            {
+                'name': 'Split 5',
+                'test': [44, 39],
+                'val': [38, 42],
+                'desc': 'New split with test=[44,39], val=[38,42]'
+            },
+            {
+                'name': 'Split 6',
+                'test': [38, 42],
+                'val': [39, 44],
+                'desc': 'New split with test=[38,42], val=[39,44]'
+            },
+            {
+                'name': 'Split 7',
+                'test': [45, 46],
+                'val': [40, 42],
+                'desc': 'New split with test=[45,46], val=[40,42]'
+            },
+            {
+                'name': 'Split 8',
+                'test': [45, 46],
+                'val': [42, 44],
+                'desc': 'Final split with test=[45,46], val=[42,44]'
+            }
+        ]
+        
+        all_results = []
+        
+        for split in splits:
+            split_dir = os.path.join(self.arg.work_dir, f"split_{split['name'].lower()}")
+            os.makedirs(split_dir, exist_ok=True)
+            
+            self.print_log(f"\n{'='*50}")
+            self.print_log(f"Starting {split['name']}: {split['desc']}")
+            self.print_log(f"Test subjects: {split['test']}")
+            self.print_log(f"Validation subjects: {split['val']}")
+            self.print_log('='*50)
+            
+            # Set up data for this split
+            self.test_subjects = split['test']
+            self.val_subjects = split['val']
+            self.load_data()
+            
+            # Initialize new model for each split
+            self.initialize_components()
+            
+            # Train model
+            best_metrics = self.train(split_info=split)
+            
+            # Log detailed split summary
+            self.log_split_summary(split, best_metrics)
+            
+            # Save results
+            results = {
+                'split_name': split['name'],
+                'description': split['desc'],
+                'test_subjects': split['test'],
+                'val_subjects': split['val'],
+                'val_metrics': best_metrics['val'],
+                'test_metrics': best_metrics['test']
+            }
+            all_results.append(results)
+            
+            # Save detailed results to file
+            self.save_split_results(split_dir, results)
+            
+            # Clear GPU memory
+            if hasattr(self, 'model'):
+                del self.model
+            if hasattr(self, 'optimizer'):
+                del self.optimizer
+            torch.cuda.empty_cache()
+        
+        # After all splits are done, plot average metrics
+        avg_metrics = self.plot_average_metrics(all_results)
+        
+        # Save comprehensive summary
+        self.save_overall_summary(all_results)
+        
+        # Organize results in a new directory
+        self.organize_results(all_results, avg_metrics)
+        
+    def train(self, split_info=None):
+        """Training process with enhanced logging"""
+        self.print_log('\n' + '='*50)
+        self.print_log('STARTING TRAINING PHASE')
+        self.print_log('='*50)
+        self.print_log(f'Training with validation subjects: {split_info["val"]}')
+        self.print_log(f'Test subjects: {split_info["test"]} (will be evaluated only after training)')
+        
+        best_metrics = {
+            'val': {'f1': 0},
+            'test': None  # Will be evaluated only once after training is complete
         }
         
-        with torch.no_grad():
-            for inputs, targets, _ in tqdm(self.data_loader['test'], desc='Testing'):
-                sensor_data = {k: v.to(self.device) for k, v in inputs.items()}
-                targets = targets.to(self.device)
-                logits, features = self.model(sensor_data)
-                loss, _ = self.compute_loss(logits, targets, features)
-                predictions = torch.argmax(logits, 1)
-                metrics['predictions'].extend(predictions.cpu().numpy())
-                metrics['targets'].extend(targets.cpu().numpy())
-                metrics['loss'] += loss.item()
-                metrics['accuracy'] += (predictions == targets).sum().item()
-                
-                # Update sensitivity and specificity
-                true_positive = ((predictions == 1) & (targets == 1)).sum().item()
-                true_negative = ((predictions == 0) & (targets == 0)).sum().item()
-                false_negative = ((predictions == 0) & (targets == 1)).sum().item()
-                false_positive = ((predictions == 1) & (targets == 0)).sum().item()
-                
-                metrics['sensitivity'] += true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
-                metrics['specificity'] += true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
+        epoch_metrics = defaultdict(list)
+        best_epoch = 0
+        best_model_state = None
         
-        n_samples = len(self.data_loader['test'].dataset)
-        metrics['loss'] /= len(self.data_loader['test'])
-        metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
-        metrics['sensitivity'] /= len(self.data_loader['test'])
-        metrics['specificity'] /= len(self.data_loader['test'])
+        # Training Loop - Only use train and validation sets
+        for epoch in range(self.arg.num_epoch):
+            self.print_log(f'\nEpoch {epoch}/{self.arg.num_epoch-1}')
+            self.print_log('-' * 20)
+            
+            # Training Phase
+            self.model.train()
+            train_metrics = self.train_epoch(epoch)
+            self.print_log(
+                f'Training - Loss: {train_metrics["loss"]:.4f}, '
+                f'Acc: {train_metrics["accuracy"]:.2f}%, '
+                f'F1: {train_metrics["f1"]:.4f}'
+            )
+            
+            # Validation Phase
+            self.model.eval()
+            val_metrics = self.validate(loader='val')
+            self.print_log(
+                f'Validation - Loss: {val_metrics["loss"]:.4f}, '
+                f'Acc: {val_metrics["accuracy"]:.2f}%, '
+                f'F1: {val_metrics["f1"]:.4f}'
+            )
+            
+            # Store metrics history
+            epoch_metrics['train_loss'].append(train_metrics['loss'])
+            epoch_metrics['train_acc'].append(train_metrics['accuracy'])
+            epoch_metrics['train_f1'].append(train_metrics['f1'])
+            epoch_metrics['train_auc'].append(train_metrics['auc'])
+            epoch_metrics['val_loss'].append(val_metrics['loss'])
+            epoch_metrics['val_acc'].append(val_metrics['accuracy'])
+            epoch_metrics['val_f1'].append(val_metrics['f1'])
+            epoch_metrics['val_auc'].append(val_metrics['auc'])
+            
+            # Update best model if validation F1 improves
+            if val_metrics['f1'] > best_metrics['val']['f1']:
+                best_metrics['val'] = val_metrics
+                best_epoch = epoch
+                best_model_state = copy.deepcopy(self.model.state_dict())
+                self.print_log(f'New best model found at epoch {epoch}')
+            
+            # Early stopping check
+            if epoch - best_epoch >= self.early_stopping_patience:
+                self.print_log(f'Early stopping triggered after {epoch} epochs')
+                break
         
-        return metrics
-
-    def save_training_curves(self, current_epoch):
-        """Save training curves as plots - Disabled"""
-        pass  # Plotting is disabled
-
-    def finalize_metrics(self, metrics):
-        """Compute final metrics for the epoch"""
-        n_samples = len(self.data_loader['train'].dataset)
-        for key in ['loss', 'cls_loss', 'smv_loss', 'consistency_loss']:
-            metrics[key] /= len(self.data_loader['train'])
-        metrics['accuracy'] = 100 * metrics['accuracy'] / n_samples
-        metrics['f1'] = f1_score(metrics['targets'], metrics['predictions'], average='macro')
-        return metrics
+        self.print_log('\n' + '='*50)
+        self.print_log('TRAINING COMPLETED - STARTING TEST EVALUATION')
+        self.print_log('='*50)
+        
+        # Load best model for test evaluation
+        self.print_log(f"\nLoading best model from epoch {best_epoch} for test evaluation...")
+        self.model.load_state_dict(best_model_state)
+        self.model.eval()
+        
+        # Evaluate on test set exactly once
+        self.print_log(f"\nEvaluating on test subjects: {split_info['test']}")
+        test_metrics = self.validate(loader='test')
+        best_metrics['test'] = test_metrics
+        
+        # Log final metrics
+        self.print_log("\nFINAL METRICS SUMMARY")
+        self.print_log("=" * 50)
+        self.print_log(f"\nBest Validation Metrics (Epoch {best_epoch}):")
+        for k, v in best_metrics['val'].items():
+            if isinstance(v, (int, float)):
+                self.print_log(f"{k}: {v:.4f}")
+        
+        self.print_log(f"\nTest Metrics (Evaluated once after training):")
+        for k, v in best_metrics['test'].items():
+            if isinstance(v, (int, float)):
+                self.print_log(f"{k}: {v:.4f}")
+        
+        # Save final model with all metrics
+        model_name = (f'model_split{split_info["name"]}_epoch{best_epoch}_'
+                     f'valf1_{best_metrics["val"]["f1"]:.4f}_'
+                     f'testf1_{best_metrics["test"]["f1"]:.4f}.pt')
+        model_path = os.path.join(self.arg.work_dir, model_name)
+        
+        save_dict = {
+            'epoch': best_epoch,
+            'model_state_dict': best_model_state,
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'val_metrics': best_metrics['val'],
+            'test_metrics': best_metrics['test'],
+            'split_info': split_info,
+            'training_config': {
+                'val_subjects': split_info['val'],
+                'test_subjects': split_info['test'],
+                'early_stopping_patience': self.early_stopping_patience,
+                'total_epochs': epoch + 1
+            }
+        }
+        
+        torch.save(save_dict, model_path)
+        self.print_log(f'\nBest model and metrics saved to: {model_path}')
+        
+        # Save final plots
+        self.save_plots(self.arg.work_dir, split_info, epoch_metrics, best_metrics, best_epoch)
+        
+        return best_metrics
 
     def start(self):
         """Initialize and start training"""
@@ -697,270 +1246,7 @@ class SMVOptimizedTrainer:
             return
         
         self.setup_scheduler()
-        self.print_log('Starting training...')
-        self.train()
-
-    def cross_validate(self):
-        """Perform k-fold cross-validation"""
-        try:
-            self.print_log("\nStarting K-Fold Cross-Validation...")
-            
-            # Get all matched trials
-            builder = prepare_smartfallmm(self.arg)
-            all_subjects = sorted(list({trial.subject_id for trial in builder.dataset.matched_trials}))
-            
-            # Filter subjects that are in our arg.subjects list
-            available_subjects = sorted(list(set(all_subjects) & set(self.arg.subjects)))
-            n_subjects = len(available_subjects)
-            
-            if n_subjects < self.arg.n_folds:
-                self.print_log(f"Warning: Number of subjects ({n_subjects}) is less than number of folds ({self.arg.n_folds})")
-                self.arg.n_folds = n_subjects
-            
-            # Create folds
-            fold_size = n_subjects // self.arg.n_folds
-            folds = []
-            for i in range(self.arg.n_folds):
-                start_idx = i * fold_size
-                end_idx = start_idx + fold_size if i < self.arg.n_folds - 1 else n_subjects
-                folds.append(available_subjects[start_idx:end_idx])
-            
-            # Store fold metrics
-            fold_metrics = []
-            
-            # Perform k-fold cross-validation
-            for fold in range(self.arg.n_folds):
-                self.print_log(f"\n{'='*20} Fold {fold + 1}/{self.arg.n_folds} {'='*20}")
-                
-                # Reset model and optimizer for each fold
-                self.model = self.load_model()
-                self.load_optimizer()
-                if hasattr(self, 'scheduler'):
-                    self.setup_scheduler()
-                
-                # Split data for this fold
-                val_subjects = folds[fold]
-                train_subjects = []
-                for i in range(self.arg.n_folds):
-                    if i != fold:
-                        train_subjects.extend(folds[i])
-                
-                # Create dataloaders for this fold
-                self.load_fold_data(builder, train_subjects, val_subjects)
-                
-                # Train on this fold
-                fold_results = self.train_fold(fold)
-                fold_metrics.append(fold_results)
-                
-                # Clear memory
-                if hasattr(self, 'optimizer'):
-                    del self.optimizer
-                if hasattr(self, 'scheduler'):
-                    del self.scheduler
-                torch.cuda.empty_cache()
-            
-            # Compute and print average metrics across folds
-            self.print_cross_validation_results(fold_metrics)
-            
-        except Exception as e:
-            self.print_log(f"Error in cross-validation: {str(e)}")
-            traceback.print_exc()
-
-    def load_fold_data(self, builder, train_subjects, val_subjects):
-        """Load data for a specific fold"""
-        self.print_log(f"\nTraining subjects: {train_subjects}")
-        self.print_log(f"Validation subjects: {val_subjects}")
-        
-        self.data_loader = {}
-        
-        # Prepare training data
-        train_data = filter_subjects(builder, train_subjects)
-        if not train_data:
-            raise ValueError("No training data was loaded!")
-        
-        # Create training dataset
-        train_dataset = import_class(self.arg.feeder)(dataset=train_data, batch_size=self.arg.batch_size)
-        
-        # Create balanced sampler for training
-        labels = train_dataset.labels
-        class_counts = np.bincount(labels)
-        total_samples = len(labels)
-        class_weights = total_samples / (len(class_counts) * class_counts)
-        sample_weights = class_weights[labels]
-        
-        sampler = WeightedRandomSampler(
-            weights=torch.DoubleTensor(sample_weights),
-            num_samples=len(train_dataset),
-            replacement=True
-        )
-        
-        self.data_loader['train'] = torch.utils.data.DataLoader(
-            dataset=train_dataset,
-            batch_size=self.arg.batch_size,
-            sampler=sampler,
-            num_workers=self.arg.num_worker,
-            pin_memory=True if self.use_cuda else False,
-            drop_last=True
-        )
-        
-        # Prepare validation data
-        val_data = filter_subjects(builder, val_subjects)
-        if not val_data:
-            raise ValueError("No validation data was loaded!")
-        
-        self.data_loader['val'] = torch.utils.data.DataLoader(
-            dataset=import_class(self.arg.feeder)(dataset=val_data, batch_size=self.arg.batch_size),
-            batch_size=self.arg.batch_size,
-            shuffle=False,
-            num_workers=self.arg.num_worker,
-            pin_memory=True if self.use_cuda else False
-        )
-        
-        self.print_log(f"Created training dataloader with {len(train_dataset)} samples")
-        self.print_log(f"Created validation dataloader with {len(self.data_loader['val'].dataset)} samples")
-
-    def train_fold(self, fold: int) -> Dict:
-        """Train model on a specific fold"""
-        best_metrics = {
-            'fold': fold,
-            'best_epoch': 0,
-            'best_f1': 0,
-            'best_accuracy': 0,
-            'best_loss': float('inf'),
-            'best_auc': 0,
-            'best_sensitivity': 0,
-            'best_specificity': 0,
-        }
-        
-        early_stop_counter = 0
-        fold_results = pd.DataFrame(columns=['epoch', 'train_loss', 'val_loss', 
-                                           'train_acc', 'val_acc', 'f1', 'auc', 'sensitivity', 'specificity'])
-        
-        for epoch in range(self.arg.num_epoch):
-            self.print_log(f"\nFold {fold + 1} - Epoch {epoch}/{self.arg.num_epoch}")
-            
-            # Training phase
-            train_metrics = self.train_epoch(epoch)
-            self.print_log(
-                f"Training - Loss: {train_metrics['loss']:.4f}, "
-                f"Acc: {train_metrics['accuracy']:.2f}%, "
-                f"F1: {f1_score(train_metrics['targets'], train_metrics['predictions'], zero_division=0):.4f}, "
-                f"Sensitivity: {train_metrics['sensitivity']:.4f}, "
-                f"Specificity: {train_metrics['specificity']:.4f}"
-            )
-            
-            # Validation phase
-            val_metrics = self.validate()
-            self.print_log(
-                f"Validation - Loss: {val_metrics['loss']:.4f}, "
-                f"Acc: {val_metrics['accuracy']:.2f}%, "
-                f"F1: {f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0):.4f}, "
-                f"AUC: {roc_auc_score(val_metrics['targets'], val_metrics['predictions']):.4f}, "
-                f"Sensitivity: {val_metrics['sensitivity']:.4f}, "
-                f"Specificity: {val_metrics['specificity']:.4f}"
-            )
-            
-            # Save fold history
-            fold_results.loc[epoch] = [
-                epoch,
-                train_metrics['loss'], val_metrics['loss'],
-                train_metrics['accuracy'], val_metrics['accuracy'],
-                f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0),
-                roc_auc_score(val_metrics['targets'], val_metrics['predictions']),
-                val_metrics['sensitivity'],
-                val_metrics['specificity']
-            ]
-            
-            # Check for improvement
-            if f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) > best_metrics['best_f1']:
-                improvement = f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0) - best_metrics['best_f1']
-                self.print_log(f"F1 score improved by {improvement:.4f}!")
-                
-                best_metrics.update({
-                    'best_epoch': epoch,
-                    'best_f1': f1_score(val_metrics['targets'], val_metrics['predictions'], zero_division=0),
-                    'best_accuracy': val_metrics['accuracy'],
-                    'best_loss': val_metrics['loss'],
-                    'best_auc': roc_auc_score(val_metrics['targets'], val_metrics['predictions']),
-                    'best_sensitivity': val_metrics['sensitivity'],
-                    'best_specificity': val_metrics['specificity']
-                })
-                
-                # Save best model for this fold
-                fold_model_path = os.path.join(
-                    self.arg.work_dir,
-                    f'fold_{fold}_model_epoch_{epoch}_f1_{f1_score(val_metrics["targets"], val_metrics["predictions"], zero_division=0):.4f}.pth'
-                )
-                
-                torch.save({
-                    'fold': fold,
-                    'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                    'scheduler_state_dict': self.scheduler.state_dict() if hasattr(self, 'scheduler') else None,
-                    'best_f1': best_metrics['best_f1'],
-                    'metrics': val_metrics
-                }, fold_model_path)
-                
-                self.print_log(f"Model saved to {fold_model_path}")
-                early_stop_counter = 0
-            else:
-                early_stop_counter += 1
-                self.print_log(
-                    f"No improvement in F1 score for {early_stop_counter} epochs. "
-                    f"Best F1: {best_metrics['best_f1']:.4f}"
-                )
-            
-            # Early stopping check
-            if early_stop_counter >= self.early_stopping_patience:
-                self.print_log(
-                    f"\nEarly stopping triggered after {epoch} epochs. "
-                    f"Best F1: {best_metrics['best_f1']:.4f}"
-                )
-                break
-        
-        # Save fold results
-        fold_results.to_csv(os.path.join(self.arg.work_dir, f'fold_{fold}_history.csv'))
-        return best_metrics
-
-    def print_cross_validation_results(self, fold_metrics: List[Dict]):
-        """Print and save cross-validation results"""
-        self.print_log("\n" + "="*50)
-        self.print_log("Cross-Validation Results Summary")
-        self.print_log("="*50)
-        
-        # Convert metrics to DataFrame for easy analysis
-        metrics_df = pd.DataFrame(fold_metrics)
-        
-        # Calculate mean and std for each metric
-        mean_metrics = metrics_df[['best_f1', 'best_accuracy', 'best_loss', 'best_auc', 'best_sensitivity', 'best_specificity']].mean()
-        std_metrics = metrics_df[['best_f1', 'best_accuracy', 'best_loss', 'best_auc', 'best_sensitivity', 'best_specificity']].std()
-        
-        # Print results
-        self.print_log("\nAverage Metrics Across Folds:")
-        self.print_log(f"F1 Score: {mean_metrics['best_f1']:.4f} ± {std_metrics['best_f1']:.4f}")
-        self.print_log(f"Accuracy: {mean_metrics['best_accuracy']:.2f}% ± {std_metrics['best_accuracy']:.2f}%")
-        self.print_log(f"Loss: {mean_metrics['best_loss']:.4f} ± {std_metrics['best_loss']:.4f}")
-        self.print_log(f"AUC: {mean_metrics['best_auc']:.4f} ± {std_metrics['best_auc']:.4f}")
-        self.print_log(f"Sensitivity: {mean_metrics['best_sensitivity']:.4f} ± {std_metrics['best_sensitivity']:.4f}")
-        self.print_log(f"Specificity: {mean_metrics['best_specificity']:.4f} ± {std_metrics['best_specificity']:.4f}")
-        
-        # Print per-fold results
-        self.print_log("\nPer-Fold Best Results:")
-        for fold, metrics in enumerate(fold_metrics):
-            self.print_log(f"\nFold {fold + 1}:")
-            self.print_log(f"  Best Epoch: {metrics['best_epoch']}")
-            self.print_log(f"  F1 Score: {metrics['best_f1']:.4f}")
-            self.print_log(f"  Accuracy: {metrics['best_accuracy']:.2f}%")
-            self.print_log(f"  Loss: {metrics['best_loss']:.4f}")
-            self.print_log(f"  AUC: {metrics['best_auc']:.4f}")
-            self.print_log(f"  Sensitivity: {metrics['best_sensitivity']:.4f}")
-            self.print_log(f"  Specificity: {metrics['best_specificity']:.4f}")
-        
-        # Save detailed results
-        results_path = os.path.join(self.arg.work_dir, 'cross_validation_results.csv')
-        metrics_df.to_csv(results_path)
-        self.print_log(f"\nDetailed results saved to: {results_path}")
+        self.run_all_splits()
 
 def get_args():
     '''
@@ -1035,18 +1321,17 @@ def get_args():
     parser.add_argument('--result-file', type=str, help='Name of result file')
     parser.add_argument('--cross-validation', type=str2bool, default=False,
                        help='Perform k-fold cross-validation')
-    parser.add_argument('--n-folds', type=int, default=5,
+    parser.add_argument('--n-folds', type=int, default=1,
                        help='Number of folds for cross-validation')
     parser.add_argument('--aug-args', default=dict(), help='A dictionary for augmentation args')
 
     return parser
 
 def main():
-    """Main function to start training"""
     parser = get_args()
-    p = parser.parse_args()
     
-    # Load config
+    # Load arg from config file
+    p = parser.parse_args()
     if p.config is not None:
         with open(p.config, 'r', encoding='utf-8') as f:
             default_arg = yaml.safe_load(f)
@@ -1060,7 +1345,6 @@ def main():
     
     arg = parser.parse_args()
     init_seed(arg.seed)
-    
     trainer = SMVOptimizedTrainer(arg)
     trainer.start()
 
