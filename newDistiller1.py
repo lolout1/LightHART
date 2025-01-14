@@ -181,7 +181,7 @@ class FallDetectionDistiller:
         self.teacher.eval()
 
         # Student
-        self.student = TransModel(**self.arg.student_args).to(self.device)
+        self.student = LightTransformerStudent(**self.arg.student_args).to(self.device)
 
         # Optionally load pre-trained student
         if hasattr(self.arg, 'weights') and self.arg.weights:

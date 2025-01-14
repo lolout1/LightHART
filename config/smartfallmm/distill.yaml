@@ -1,9 +1,9 @@
 # Basic Configuration
-student_model: "Models.trans1.TransModel"
+student_model: "Models.StudentTrans.StudentModel"
 dataset: "smartfallmm"
 
 # Teacher Model Configuration
-teacher_model: "Models.TeacherModel.TeacherModel"
+teacher_model: "Models.TeacherModel.TransModel"
 teacher_args:
   num_joints: 32
   in_chans: 3
