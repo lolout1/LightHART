@@ -1,86 +1,83 @@
-teacher_model: Models.t3.EnhancedTeacherModel
-student_model: Models.s3.EnhancedStudentModel
-dataset: smartfallmm
+# Basic Configuration
+student_model: "Models.trans1.TransModel"
+dataset: "smartfallmm"
 
-# List of subjects for training and testing
-subjects:
-  - 29
-  - 30
-  - 31
-  - 32
-  - 34
-  - 35
-  - 36
-  - 37
-  - 38
-  - 39
-  - 40
-  - 41
-  - 42
-  - 43
-  - 44
-  - 45
-  - 46
-
-# Teacher model arguments
+# Teacher Model Configuration
+teacher_model: "Models.TeacherModel.TeacherModel"
 teacher_args:
   num_joints: 32
   in_chans: 3
   acc_coords: 4
-  spatial_embed: 128
+  hidden_dim: 256
   num_heads: 8
-  depth: 6
-  mlp_ratio: 4
-  num_classes: 2
-  dropout: 0.5
+  fusion_layers: 3
+  drop_rate: 0.1
 
-# Student model arguments
+teacher_weight: "exps/smartfall_har/kd/student/fold_1/TeacherModel_best_weights_f1_0.9353_loss_0.2529.pt"
+
+# Student Model Configuration
 student_args:
-  acc_coords: 4
-  seq_length: 128
-  num_virtual_joints: 32
-  spatial_embed: 128
-  num_heads: 8
-  depth: 6
-  mlp_ratio: 4
-  num_classes: 2
-  dropout: 0.5
+  input_channels: 3      # watch accelerometer input (x, y, z)
+  d_model: 128           # embedding dimension
+  nhead: 4               # number of attention heads
+  num_layers: 2          # number of transformer encoder layers
+  dim_feedforward: 256   # feedforward dimension in transformer
+  dropout: 0.2           # dropout rate
 
+# Dataset Configuration
 dataset_args:
-  mode: 'avg_pool'
+  mode: "avg_pool"
   max_length: 128
-  task: 'fd'               # Fall detection task
-  modalities: ['skeleton', 'accelerometer']
-  age_group: ['young', 'old']
-  sensors: ['watch']
+  task: "fd"
+  modalities: ["accelerometer", "skeleton"]
+  age_group: ["young"]
+  sensors: ["watch"]
+  normalize: true
 
-# Optimization parameters
+# Subject IDs
+subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
+
+# Training Parameters
 batch_size: 32
 test_batch_size: 32
 val_batch_size: 32
-num_epoch: 300
+num_epoch: 100
+start_epoch: 0
 
-# Dataloader
-feeder: Feeder.Make_Dataset.UTD_mm
+# Optimization Settings
+optimizer: "adamw"
+base_lr: 0.0005
+weight_decay: 0.0004
+grad_clip: 1.0
 
-distill_loss: utils.loss.DistillationLoss
+# Scheduler Configuration
+scheduler: "warmup_cosine"
+scheduler_args: {"warmup_ratio": 0.1, "min_lr": 0.000001}
+
+# Knowledge Distillation Settings
+distill_loss: "distiller.DistillationLoss"
 distill_args:
-  T: 2
   alpha: 0.7
-  feature_weight: 0.1
+  temperature: 2.0
 
-student_loss: torch.nn.CrossEntropyLoss
-loss_args: {}
-train_feeder_args:
-  batch_size: 32
+# Task-Specific Loss
+student_loss: "torch.nn.BCELoss"
+loss_args: {"reduction": "mean"}
 
-val_feeder_args:
-  batch_size: 32  
+# Data Loading
+feeder: "Feeder.Make_Dataset.UTD_mm"
+train_feeder_args: {"batch_size": 32}
+val_feeder_args: {"batch_size": 32}
+test_feeder_args: {"batch_size": 32}
 
-test_feeder_args:
-  batch_size: 32
-
+# Training Environment
+device: [0]
+num_worker: 4
 seed: 42
-optimizer: adamw
-base_lr: 0.00001
+include_val: true
+print_log: true
+phase: "train"
 
+# Output Settings
+work_dir: "exps/smartfall_fd/distillation"
+model_saved_name: "student_distilled"

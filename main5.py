@@ -86,17 +86,17 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def init_seed(seed):
-    """Initialize random seeds for reproducibility"""
-    torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False  # This may slow down training but ensures reproducibility
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
 class FallDetectionTrainer:
     def __init__(self, arg):
         self.arg = arg
+        self.early_stopping_patience = 20  # Add early stopping patience
         self.setup_environment()
         self.setup_components()
         self.setup_metrics()
@@ -319,11 +319,12 @@ class FallDetectionTrainer:
         for inputs, targets, idx in tqdm(self.data_loader['train'], desc=f'Training epoch {epoch}'):
             # Move data to device
             acc_data = inputs['accelerometer'].to(self.device)
+            skl_data = inputs['skeleton'].to(self.device)
             targets = targets.to(self.device)
             
-            # Forward pass - only use accelerometer data for student model
-            outputs = self.model(acc_data.float())
-            loss = self.criterion(outputs[0], targets.float())  # Use only the probability output
+            # Forward pass
+            outputs = self.model(acc_data.float(), skl_data.float())
+            loss = self.criterion(outputs, targets.float())
             
             # Backward pass
             self.optimizer.zero_grad()
@@ -331,7 +332,7 @@ class FallDetectionTrainer:
             self.optimizer.step()
             
             # Update metrics
-            batch_metrics = self.compute_metrics(outputs[0], targets)
+            batch_metrics = self.compute_metrics(outputs, targets)
             batch_size = targets.size(0)
             total_samples += batch_size
             
@@ -361,14 +362,15 @@ class FallDetectionTrainer:
             for inputs, targets, idx in tqdm(self.data_loader['val'], desc=f'Validating epoch {epoch}'):
                 # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
+                skl_data = inputs['skeleton'].to(self.device)
                 targets = targets.to(self.device)
                 
-                # Forward pass - only use accelerometer data for student model
-                outputs = self.model(acc_data.float())
-                loss = self.criterion(outputs[0], targets.float())  # Use only the probability output
+                # Forward pass
+                outputs = self.model(acc_data.float(), skl_data.float())
+                loss = self.criterion(outputs, targets.float())
                 
                 # Update metrics
-                batch_metrics = self.compute_metrics(outputs[0], targets)
+                batch_metrics = self.compute_metrics(outputs, targets)
                 batch_size = targets.size(0)
                 total_samples += batch_size
                 
@@ -569,9 +571,6 @@ class FallDetectionTrainer:
         """Start training process"""
         if self.arg.phase == 'train':
             try:
-                # Set seed for reproducibility
-                init_seed(42)  # Using a fixed seed
-                
                 # Phase 1: Cross-validation
                 print("\nPhase 1: Leave-Three-Out Cross-validation")
                 
@@ -582,13 +581,9 @@ class FallDetectionTrainer:
                 folds = self.create_folds(all_subjects, val_size=3)
                 epoch_metrics = []
                 best_fold_metrics = []
-                all_fold_results = []  # Store results for each fold
                 
                 # Train on each fold
                 for fold, (train_subjects, val_subjects) in enumerate(folds, 1):
-                    # Reset seed for each fold to ensure reproducibility
-                    init_seed(42 + fold)  # Different seed for each fold
-                    
                     print(f"\nFold {fold}/5")
                     print(f"Training subjects ({len(train_subjects)}): {train_subjects}")
                     print(f"Validation subjects ({len(val_subjects)}): {val_subjects}")
@@ -607,7 +602,6 @@ class FallDetectionTrainer:
                     fold_val_losses = []
                     fold_metrics = []
                     best_fold_f1 = 0
-                    best_fold_metrics_dict = None
                     best_fold_state = None
                     
                     for epoch in range(self.arg.num_epoch):
@@ -620,19 +614,17 @@ class FallDetectionTrainer:
                             # Store losses and metrics
                             fold_train_losses.append(train_metrics['loss'])
                             fold_val_losses.append(val_metrics['loss'])
-                            fold_metrics.append(val_metrics)
+                            fold_metrics.append({**val_metrics, 'epoch': epoch})
                             
                             # Track best model for this fold
                             if val_metrics['f1'] > best_fold_f1:
                                 best_fold_f1 = val_metrics['f1']
-                                best_fold_metrics_dict = val_metrics.copy()
                                 best_fold_state = {
                                     'epoch': epoch,
                                     'state_dict': self.model.state_dict(),
                                     'optimizer': self.optimizer.state_dict(),
                                     'scheduler': self.scheduler.state_dict(),
-                                    'metrics': val_metrics,
-                                    'fold': fold
+                                    'metrics': val_metrics
                                 }
                             
                             # Store metrics for optimal epoch calculation
@@ -647,15 +639,6 @@ class FallDetectionTrainer:
                             # Print epoch metrics
                             self.print_epoch_metrics(epoch, train_metrics, val_metrics)
                     
-                    # Store best results for this fold
-                    all_fold_results.append({
-                        'fold': fold,
-                        'train_subjects': train_subjects,
-                        'val_subjects': val_subjects,
-                        'best_epoch': best_fold_state['epoch'],
-                        'metrics': best_fold_metrics_dict
-                    })
-                    
                     # Save fold results
                     self.save_fold_results(fold, fold_train_losses, fold_val_losses, fold_metrics)
                     
@@ -667,59 +650,17 @@ class FallDetectionTrainer:
                             'epoch': best_fold_state['epoch'],
                             'state_dict': best_fold_state['state_dict']
                         })
-                
-                # Print cross-validation summary
-                print("\n" + "="*70)
-                print("Cross-validation Results Summary")
-                print("="*70)
-                
-                # Calculate summary statistics
-                all_metrics = {
-                    'accuracy': [], 'precision': [], 'recall': [], 'f1': [], 'best_epoch': []
-                }
-                
-                # Print results for each fold
-                print("\nResults for Each Fold:")
-                print("-"*70)
-                print(f"{'Fold':^6} {'Best Epoch':^12} {'Accuracy':^10} {'Precision':^10} {'Recall':^10} {'F1':^10}")
-                print("-"*70)
-                
-                for result in all_fold_results:
-                    fold = result['fold']
-                    metrics = result['metrics']
-                    
-                    # Print in table format
-                    print(f"{fold:^6d} {result['best_epoch']:^12d} "
-                          f"{metrics['accuracy']:^10.4f} {metrics['precision']:^10.4f} "
-                          f"{metrics['recall']:^10.4f} {metrics['f1']:^10.4f}")
-                    
-                    # Collect metrics for summary statistics
-                    for metric in all_metrics:
-                        if metric == 'best_epoch':
-                            all_metrics[metric].append(result['best_epoch'])
-                        else:
-                            all_metrics[metric].append(metrics[metric])
-                
-                print("-"*70)
-                
-                # Print average metrics
-                print("\nAverage Metrics Across All Folds:")
-                print("-"*70)
-                print(f"{'Metric':^15} {'Mean':^12} {'Std Dev':^12}")
-                print("-"*70)
-                
-                for metric in ['accuracy', 'precision', 'recall', 'f1', 'best_epoch']:
-                    values = np.array(all_metrics[metric])
-                    mean = np.mean(values)
-                    std = np.std(values)
-                    metric_name = metric.replace('_', ' ').title()
-                    print(f"{metric_name:^15} {mean:^12.4f} {std:^12.4f}")
-                
-                print("="*70)
-                
+                        
+                        # Save best fold model
+                        fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
+                        model_name = self.arg.model.split('.')[-1]
+                        best_name = f"{model_name}_fold{fold}_best_f1_{best_fold_f1:.4f}.pt"
+                        torch.save(best_fold_state, os.path.join(fold_dir, best_name))
+                        self.print_log(f"Saved best model for fold {fold} (F1: {best_fold_f1:.4f})")
+            
                 # Find best performing fold
                 best_fold = max(best_fold_metrics, key=lambda x: x['f1'])
-                print(f"\nBest Fold: {best_fold['fold']} (F1: {best_fold['f1']:.4f})")
+                self.print_log(f"\nBest performing fold: {best_fold['fold']} (F1: {best_fold['f1']:.4f})")
                 
                 # Phase 2: Train final model using best fold's configuration
                 print("\nPhase 2: Training final model on all data")
@@ -854,27 +795,233 @@ class FallDetectionTrainer:
             'val_losses': val_losses,
             'metrics': metrics
         }
-        with open(os.path.join(fold_dir, 'metrics.json'), 'w') as f:
+        
+        with open(os.path.join(fold_dir, 'results.json'), 'w') as f:
             json.dump(results, f, indent=4)
         
-        # Plot and save loss curves for this fold
-        plt.figure(figsize=(10, 6))
-        plt.plot(train_losses, label='Train Loss')
-        plt.plot(val_losses, label='Validation Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title(f'Training and Validation Loss - Fold {fold}')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(os.path.join(fold_dir, 'loss_curve.png'))
-        plt.close()
-        
-        # Log fold results
-        self.print_log(f"\nFold {fold} Results:")
-        self.print_log(f"Final Train Loss: {train_losses[-1]:.4f}")
-        self.print_log(f"Final Val Loss: {val_losses[-1]:.4f}")
-        self.print_log(f"Best Val F1: {max(m['f1'] for m in metrics):.4f}")
+        # Log best metrics for this fold
+        best_metrics = max(metrics, key=lambda x: x['f1'])
+        self.print_log(f"\nBest metrics for fold {fold}:")
+        self.print_log(f"Epoch: {best_metrics.get('epoch', 'N/A')}")
+        self.print_log(f"Val Loss: {best_metrics['loss']:.4f}")
+        self.print_log(f"F1: {best_metrics['f1']:.4f}")
+        self.print_log(f"Precision: {best_metrics['precision']:.4f}")
+        self.print_log(f"Recall: {best_metrics['recall']:.4f}")
         self.print_log(f"Results saved to: {fold_dir}")
+        
+        return best_metrics
+
+    def train_fold(self, fold):
+        """Train a single fold."""
+        self.current_fold = fold  # Track current fold
+        
+        # Initialize fold metrics
+        fold_train_losses = []
+        fold_val_losses = []
+        fold_metrics = []
+        best_fold_f1 = float('-inf')
+        epochs_without_improvement = 0
+        early_stop = False
+        best_fold_state = None
+        
+        for epoch in range(self.arg.num_epoch):
+            if early_stop:
+                self.print_log(f'Early stopping triggered for fold {fold}')
+                break
+                
+            train_metrics = self.train_epoch(epoch)
+            val_metrics = self.validate(epoch)
+            
+            # Add epoch to metrics
+            val_metrics['epoch'] = epoch
+            
+            # Save metrics
+            fold_train_losses.append(train_metrics['loss'])
+            fold_val_losses.append(val_metrics['loss'])
+            fold_metrics.append(val_metrics)
+            
+            # Early stopping check for this fold
+            current_f1 = val_metrics.get('f1', 0)
+            if current_f1 > best_fold_f1:
+                best_fold_f1 = current_f1
+                epochs_without_improvement = 0
+                best_fold_state = {
+                    'epoch': epoch,
+                    'state_dict': self.model.state_dict(),
+                    'optimizer': self.optimizer.state_dict(),
+                    'scheduler': self.scheduler.state_dict(),
+                    'metrics': val_metrics
+                }
+                self.save_model(epoch, val_metrics, is_best=True)
+                self.print_log(f'Fold {fold} - New best F1: {current_f1:.4f}')
+            else:
+                epochs_without_improvement += 1
+                self.print_log(f'Fold {fold} - Epochs without improvement: {epochs_without_improvement}/{self.early_stopping_patience}')
+                if epochs_without_improvement >= self.early_stopping_patience:
+                    early_stop = True
+                    self.print_log(f'Early stopping triggered for fold {fold} after {epoch + 1} epochs')
+                    break
+            
+            # Print epoch metrics
+            self.print_epoch_metrics(epoch, train_metrics, val_metrics)
+        
+        # Load best model state for this fold
+        if best_fold_state is not None:
+            self.model.load_state_dict(best_fold_state['state_dict'])
+            self.optimizer.load_state_dict(best_fold_state['optimizer'])
+            self.scheduler.load_state_dict(best_fold_state['scheduler'])
+            self.print_log(f'Loaded best model state for fold {fold} (F1: {best_fold_f1:.4f})')
+        
+        return fold_train_losses, fold_val_losses, fold_metrics
+
+    def cross_validate(self):
+        """Perform k-fold cross validation."""
+        all_fold_metrics = []
+        
+        for fold in range(self.arg.num_fold):
+            self.print_log(f'\nTraining Fold {fold + 1}/{self.arg.num_fold}')
+            self.print_log('-' * 50)
+            
+            # Reset model and optimizer for each fold
+            self.setup_components()
+            
+            # Setup data loaders for this fold
+            self.setup_fold_data(fold)
+            
+            # Train fold
+            train_losses, val_losses, metrics = self.train_fold(fold)
+            
+            # Save fold results and get best metrics
+            best_fold_metrics = self.save_fold_results(fold, train_losses, val_losses, metrics)
+            all_fold_metrics.append(best_fold_metrics)
+        
+        # Calculate and log average metrics across all folds
+        self.print_log('\nAverage Metrics Across All Folds:')
+        self.print_log('-' * 50)
+        avg_metrics = {
+            'loss': np.mean([m['loss'] for m in all_fold_metrics]),
+            'f1': np.mean([m['f1'] for m in all_fold_metrics]),
+            'precision': np.mean([m['precision'] for m in all_fold_metrics]),
+            'recall': np.mean([m['recall'] for m in all_fold_metrics])
+        }
+        
+        self.print_log(f"Average Val Loss: {avg_metrics['loss']:.4f}")
+        self.print_log(f"Average F1: {avg_metrics['f1']:.4f}")
+        self.print_log(f"Average Precision: {avg_metrics['precision']:.4f}")
+        self.print_log(f"Average Recall: {avg_metrics['recall']:.4f}")
+        
+        # Save average metrics
+        with open(os.path.join(self.arg.work_dir, 'average_metrics.json'), 'w') as f:
+            json.dump(avg_metrics, f, indent=4)
+    
+    def test(self):
+        """Evaluate model on test set"""
+        self.model.eval()
+        metrics = []
+        confusion = np.zeros((2, 2))  # Binary classification
+        
+        with torch.no_grad():
+            for inputs, targets, idx in tqdm(self.data_loader['test'], desc='Testing'):
+                # Move data to device
+                acc_data = inputs['accelerometer'].to(self.device)
+                skl_data = inputs['skeleton'].to(self.device)
+                targets = targets.to(self.device)
+                
+                # Forward pass
+                outputs = self.model(acc_data.float(), skl_data.float())
+                predictions = (outputs > 0.5).float()
+                
+                # Update confusion matrix
+                for pred, target in zip(predictions, targets):
+                    confusion[int(target), int(pred)] += 1
+                
+                # Compute metrics
+                batch_metrics = self.compute_metrics(outputs, targets)
+                metrics.append(batch_metrics)
+        
+        # Aggregate metrics
+        final_metrics = {
+            key: np.mean([m[key] for m in metrics]) 
+            for key in metrics[0].keys()
+        }
+        
+        # Calculate confusion matrix metrics
+        tn, fp, fn, tp = confusion.ravel()
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+        npv = tn / (tn + fn) if (tn + fn) > 0 else 0
+        
+        # Add additional metrics
+        final_metrics.update({
+            'specificity': specificity,
+            'npv': npv,
+            'confusion_matrix': confusion.tolist()
+        })
+        
+        # Save results
+        results = {
+            'metrics': final_metrics,
+            'confusion_matrix': confusion.tolist()
+        }
+        
+        save_path = os.path.join(self.arg.work_dir, 'test_results.json')
+        with open(save_path, 'w') as f:
+            json.dump(results, f, indent=4)
+        
+        # Log results
+        self.print_log('\nTest Results:')
+        self.print_log(f'Precision: {final_metrics["precision"]:.4f}')
+        self.print_log(f'Recall: {final_metrics["recall"]:.4f}')
+        self.print_log(f'F1-Score: {final_metrics["f1"]:.4f}')
+        self.print_log(f'False Alarm Rate: {final_metrics["false_alarm_rate"]:.4f}')
+        self.print_log(f'Specificity: {final_metrics["specificity"]:.4f}')
+        self.print_log(f'NPV: {final_metrics["npv"]:.4f}')
+        
+        # Plot confusion matrix
+        self.plot_confusion_matrix(confusion)
+    
+    def plot_confusion_matrix(self, confusion):
+        """Plot and save confusion matrix visualization"""
+        plt.figure(figsize=(8, 6))
+        plt.imshow(confusion, interpolation='nearest', cmap=plt.cm.Blues)
+        plt.title('Confusion Matrix')
+        
+        # Add labels
+        classes = ['Non-Fall', 'Fall']
+        tick_marks = np.arange(len(classes))
+        plt.xticks(tick_marks, classes)
+        plt.yticks(tick_marks, classes)
+        
+        # Add text annotations
+        thresh = confusion.max() / 2.
+        for i, j in itertools.product(range(confusion.shape[0]), range(confusion.shape[1])):
+            plt.text(j, i, format(confusion[i, j], 'd'),
+                     horizontalalignment="center",
+                     color="white" if confusion[i, j] > thresh else "black")
+        
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        plt.tight_layout()
+        
+        # Save plot
+        plt.savefig(os.path.join(self.arg.work_dir, 'confusion_matrix.png'))
+        plt.close()
+    
+    def print_log(self, msg, print_time=True):
+        """Print and save log messages"""
+        if print_time:
+            localtime = time.asctime(time.localtime(time.time()))
+            msg = f"[ {localtime} ] {msg}"
+        print(msg)
+        if self.arg.print_log:
+            with open(f'{self.arg.work_dir}/log.txt', 'a') as f:
+                print(msg, file=f)
+    
+    def save_config(self):
+        """Save configuration file"""
+        shutil.copy2(
+            self.arg.config,
+            os.path.join(self.arg.work_dir, os.path.basename(self.arg.config))
+        )
 
 if __name__ == "__main__":
     parser = get_args()
@@ -983,18 +1130,19 @@ class FallDetectionTrainer(FallDetectionTrainer):
             for inputs, targets, idx in tqdm(self.data_loader['test'], desc='Testing'):
                 # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
+                skl_data = inputs['skeleton'].to(self.device)
                 targets = targets.to(self.device)
                 
                 # Forward pass
-                outputs = self.model(acc_data.float())
-                predictions = (outputs[0] > 0.5).float()
+                outputs = self.model(acc_data.float(), skl_data.float())
+                predictions = (outputs > 0.5).float()
                 
                 # Update confusion matrix
                 for pred, target in zip(predictions, targets):
                     confusion[int(target), int(pred)] += 1
                 
                 # Compute metrics
-                batch_metrics = self.compute_metrics(outputs[0], targets)
+                batch_metrics = self.compute_metrics(outputs, targets)
                 metrics.append(batch_metrics)
         
         # Aggregate metrics
@@ -1080,7 +1228,3 @@ class FallDetectionTrainer(FallDetectionTrainer):
             self.arg.config,
             os.path.join(self.arg.work_dir, os.path.basename(self.arg.config))
         )
-    
-    def count_parameters(self, model):
-        """Count total trainable parameters"""
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)

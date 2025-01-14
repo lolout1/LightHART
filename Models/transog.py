@@ -89,7 +89,7 @@ class TransModel(nn.Module):
         # Input projection using Conv1D
         x = rearrange(acc_data, 'b l c -> b c l')
         x = self.input_proj(x)  # [batch_size, embed_dim, acc_frames]
-        x = rearrange(x, 'b c l -> l b c')  # [acc_frames, batch_size, embed_dim]
+        x = rearrange(x, 'b c l -> l b c')  # [acc_frames, batch_size, embed_dim ]
 
         # Transformer encoding
         x = self.encoder(x)  # [acc_frames, batch_size, embed_dim]

@@ -28,7 +28,7 @@ class TransModel(nn.Module):
                 acc_frames = 128,
                 num_classes:int = 8, 
                 num_heads = 2, 
-                acc_coords = 4, 
+                acc_coords = 3, 
                 av = False,
                 num_layer = 2, norm_first = True, 
                 embed_dim= 8, activation = 'relu',
@@ -56,7 +56,7 @@ class TransModel(nn.Module):
         self.output = Linear(16, num_classes)
         nn.init.normal_(self.output.weight, 0, math.sqrt(2. / num_classes))
     
-    def forward(self, acc_data, skl_data):
+    def forward(self, acc_data, skl_data=None):
 
         b, l, c = acc_data.shape
         x = rearrange(acc_data, 'b l c -> b c l')

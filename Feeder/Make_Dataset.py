@@ -34,7 +34,7 @@ class Utd_Dataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         # Get the batch containing the requested index
         data = self.dataset[index, :, : , :]
-        data = torch.tensor(data)
+        data = torch.tensor(data, dtype=torch.float32)
         label = self.labels[index]
         label = label - 1
         label = torch.tensor(label)
@@ -55,7 +55,7 @@ class Berkley_mhad(torch.utils.data.Dataset):
     def __getitem__(self, index):
         # Get the batch containing the requested index
         data = self.dataset[index, :, :]
-        data = torch.tensor(data)
+        data = torch.tensor(data, dtype=torch.float32)
         label = self.labels[index]
         label = label - 1
         label = torch.tensor(label)
@@ -66,8 +66,8 @@ class Bmhad_mm(torch.utils.data.Dataset):
     def __init__(self, dataset, batch_size, transform = None):
         # Load data and labels from npz file
         #dataset = np.load(npz_file)
-        self.acc_data = dataset['acc_data']
-        self.skl_data = dataset['skl_data']
+        self.acc_data = dataset['accelerometer']
+        self.skl_data = dataset['skeleton']
         self.labels = dataset['labels']
         self.num_samples = self.acc_data.shape[0]
         self.acc_seq = self.acc_data.shape[1]
@@ -81,11 +81,10 @@ class Bmhad_mm(torch.utils.data.Dataset):
     def __getitem__(self, index):
         # Get the batch containing the requested index
         data = dict()
-        skl_data = torch.tensor(self.skl_data[index, :, :, :])
-        #skl_data = skl_data.reshape((l, -1, 3))
-        acc_data = torch.tensor(self.acc_data[index, : , :])
-        data['skl_data'] = skl_data
-        data['acc_data'] =  acc_data
+        skl_data = torch.tensor(self.skl_data[index, :, :, :], dtype=torch.float32)
+        acc_data = torch.tensor(self.acc_data[index, : , :], dtype=torch.float32)
+        data['skeleton'] = skl_data
+        data['accelerometer'] =  acc_data
         label = self.labels[index]
         label = torch.tensor(label)
         label = label.long()
@@ -94,21 +93,36 @@ class Bmhad_mm(torch.utils.data.Dataset):
 
 class UTD_mm(torch.utils.data.Dataset):
     def __init__(self, dataset, batch_size):
-        self.modalities = list(dataset.keys())
-        self.modalities.remove('labels')
+        # Verify dataset has required fields
+        if not isinstance(dataset, dict):
+            raise ValueError("Dataset must be a dictionary")
+        if 'labels' not in dataset:
+            raise ValueError("Dataset missing 'labels' field")
+            
+        self.modalities = [key for key in dataset.keys() if key != 'labels']
         self.data = dataset
         self.labels = dataset['labels']
-        self.num_samples = self.labels.shape[0]
+        self.num_samples = len(self.labels)
         self.batch_size = batch_size
+        
+        print(f"Initialized dataset with {self.num_samples} samples")
+        print(f"Available modalities: {self.modalities}")
+
+    def __len__(self):
+        return self.num_samples
 
     def __getitem__(self, index):
+        if index >= self.num_samples:
+            raise IndexError(f"Index {index} out of bounds for dataset size {self.num_samples}")
+        
+        # Gather data for all modalities
         data = {}
         for modality in self.modalities:
-            modality_data = torch.tensor(self.data[modality][index])
-            data[modality] = modality_data
-        label = torch.tensor(self.labels[index]).long()
+            data[modality] = torch.tensor(self.data[modality][index], dtype=torch.float32)
+        
+        # Convert label to float and ensure it's 0 or 1
+        label = torch.tensor(float(bool(self.labels[index])), dtype=torch.float32)
         return data, label, index
-
 
     def random_crop(self,data : torch.Tensor) -> torch.Tensor:
         '''
@@ -181,27 +195,6 @@ class UTD_mm(torch.utils.data.Dataset):
     
     def __len__(self):
         return self.num_samples
-
-    def __getitem__(self, index):
-        acc_data = torch.tensor(self.acc_data[index, :, :])
-        data = dict()
-
-        watch_smv = self.cal_smv(acc_data)
-        acc_data = torch.cat((watch_smv, acc_data), dim=-1)
-        data[self.inertial_modality] = acc_data
-        
-        # Only include skeleton data if it exists
-        if self.has_skeleton:
-            skl_data = torch.tensor(self.skl_data[index, :, :, :])
-            data['skeleton'] = skl_data
-        
-        label = self.labels[index]
-        label = torch.tensor(label)
-        label = label.long()
-        return data, label, index
-
-
-
 
 if __name__ == "__main__":
     # Option 1: Create an instance

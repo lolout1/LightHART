@@ -1,0 +1,82 @@
+# Basic configuration
+model: "Models.transTeach.TeacherTransformerFusion"
+dataset: "smartfallmm"
+
+# Model parameters - these are passed directly to the model
+
+model_args:
+  d_model: 256
+  nhead: 4
+  num_layers: 2
+  dropout: 0.3
+  skeleton_dim: 96
+  watch_dim: 4  
+
+# Dataset arguments must match the exact structure expected by the dataset class
+dataset_args:
+  mode: "avg_pool"
+  max_length: 128
+  window_size: 64
+
+  task: "fd"
+  modalities: ["skeleton", "accelerometer"]
+  age_group: ["young"]
+  sensors: ["watch"]
+  normalize: true
+
+# Subject IDs as a flat list for the argument parser
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+# Training parameters that match main4.py arguments exactly
+batch_size: 32
+test_batch_size: 32 
+val_batch_size: 32
+num_epoch: 100
+start_epoch: 0
+
+# Optimizer settings that match the argument parser
+optimizer: "adamw"
+base_lr: 0.0001
+weight_decay: 0.0004
+
+# Device configuration as expected by the script
+device: [0]
+
+# Feeder settings that match main4.py's requirements
+feeder: "Feeder.Make_Dataset.UTD_mm"
+train_feeder_args:
+  batch_size: 32
+val_feeder_args:
+  batch_size: 32
+test_feeder_args:
+  batch_size: 32
+
+# Additional training settings
+num_worker: 4
+seed: 42
+include_val: true
+print_log: true
+phase: "train"
+
+# Loss function configuration 
+loss: "torch.nn.BCELoss"  # Binary Cross-Entropy Loss
+loss_args: {}
+
+# Scheduler settings
+scheduler: "cosine"
+scheduler_args:
+  warmup_epochs: 10

@@ -1,0 +1,77 @@
+dataset: 'smartfallmm'
+subjects:
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 43
+  - 44
+  - 45
+  - 46
+
+# Model Configuration
+model_args:
+  hidden_dim: 128
+  num_blocks: 4
+  dropout_rate: 0.3
+  input_channels: 3
+
+# Training Parameters
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 200  # Increased for better convergence
+
+# Optimizer Configuration
+optimizer: 'adamw'
+base_lr: 0.0005  # Slightly higher learning rate
+weight_decay: 0.01  # Increased for better regularization
+
+# Learning Rate Schedule
+scheduler: 'cosine'
+scheduler_args:
+  min_lr: 0.00001
+  warmup_epochs: 10
+  warmup_ratio: 0.1
+
+# Loss Configuration
+loss: 'Models.student.FallDetectionLoss'
+loss_args:
+  alpha: 0.75
+  gamma: 2.0
+  class_weight: 3.0  # Weighted towards fall detection
+
+# Dataset Arguments
+dataset_args:
+  mode: 'avg_pool'
+  max_length: 128
+  task: 'fd'
+  modalities: ['accelerometer']
+  age_group: ['young']
+  sensors: ['watch']
+
+# Early Stopping
+early_stopping:
+  patience: 15
+  monitor: 'val_precision'
+  mode: 'max'
+
+# Model Checkpointing
+checkpoint:
+  save_best: true
+  metric: 'val_precision'
+  mode: 'max'
+
+# Logging Configuration
+work_dir: 'exps/smartfall_fd/student/precision_focused'
+model_saved_name: 'precision_student_model'
+print_log: true
+phase: 'train'
+num_worker: 4

@@ -28,8 +28,9 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 # Local imports
 from Models.TeacherModel import TeacherModel
 from Models.StudentModel import StudentModel
-from utils.dataset import prepare_smartfallmm, filter_subjects
 from Models.StudentTrans import LightTransformerStudent
+from utils.dataset import prepare_smartfallmm, filter_subjects
+from Models.trans1 import TransModel
 
 
 ####################################################
@@ -67,7 +68,7 @@ class DistillationLoss(nn.Module):
             teacher_logits = teacher_logits.squeeze(1)
         
         # Hard label loss with ground truth
-        hard_loss = self.bce(student_logits, labels.float())
+        hard_loss = self.bce(student_logits, labels)
         
         # Soft label loss with teacher predictions
         # Apply temperature scaling
@@ -78,7 +79,7 @@ class DistillationLoss(nn.Module):
         soft_loss = self.kl_div(soft_student, soft_teacher) * (self.temperature ** 2)
         
         # Combine losses
-        total_loss = self.alpha * hard_loss + (1.0 - self.alpha) * soft_loss
+        total_loss = self.alpha * hard_loss + (1 - self.alpha) * soft_loss
         
         return total_loss
 
@@ -180,7 +181,7 @@ class FallDetectionDistiller:
         self.teacher.eval()
 
         # Student
-        self.student = StudentModel(**self.arg.student_args).to(self.device)
+        self.student = TransModel(**self.arg.student_args).to(self.device)
 
         # Optionally load pre-trained student
         if hasattr(self.arg, 'weights') and self.arg.weights:
@@ -539,21 +540,67 @@ class FallDetectionDistiller:
         if self.arg.phase == 'train':
             try:
                 # Initial subject-wise analysis
-                print("\nAnalyzing Subject Distribution:")
-                print("-" * 70)
+                self.print_log("\n" + "="*50)
+                self.print_log("Subject-wise Fall/Non-Fall Distribution Analysis")
+                self.print_log("="*50)
+                
+                all_subjects = [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
+                total_falls = 0
+                total_non_falls = 0
+                subject_analyses = []
+                
+                for subject in all_subjects:
+                    stats = self.analyze_subject_distribution(subject)
+                    total_falls += stats['falls']
+                    total_non_falls += stats['non_falls']
+                    subject_analyses.append(stats)
+                    
+                    self.print_log(f"\nSubject {stats['subject']}:")
+                    self.print_log(f"Total Samples: {stats['total']}")
+                    self.print_log(f"Falls: {stats['falls']} ({stats['falls_percent']:.2f}%)")
+                    self.print_log(f"Non-Falls: {stats['non_falls']} ({stats['non_falls_percent']:.2f}%)")
+                
+                total_samples = total_falls + total_non_falls
+                overall_stats = {
+                    'total_samples': total_samples,
+                    'total_falls': total_falls,
+                    'total_non_falls': total_non_falls,
+                    'falls_percent': (total_falls/total_samples)*100 if total_samples > 0 else 0,
+                    'non_falls_percent': (total_non_falls/total_samples)*100 if total_samples > 0 else 0,
+                    'subject_analyses': subject_analyses
+                }
+                
+                self.print_log("\n" + "-"*50)
+                self.print_log("Overall Statistics:")
+                self.print_log(f"Total Samples: {total_samples}")
+                self.print_log(f"Total Falls: {total_falls} ({overall_stats['falls_percent']:.2f}%)")
+                self.print_log(f"Total Non-Falls: {total_non_falls} ({overall_stats['non_falls_percent']:.2f}%)")
+                self.print_log("="*50 + "\n")
+                
+                # Save analysis to run directory
+                os.makedirs(self.run_dir, exist_ok=True)
+                torch.save(overall_stats, os.path.join(self.run_dir, 'subject_distribution.pt'))
+
+                # Phase 1: Cross-validation with fixed fold assignments
+                self.print_log("\nPhase 1: 5-Fold Cross-validation with Fixed Assignments")
                 
                 # Create folds using fixed assignments
-                folds = self.create_fixed_folds(self.arg.subjects)
-                fold_best_metrics = []  # Track best metrics for each fold
+                folds = self.create_fixed_folds(all_subjects)
+                epoch_metrics = []
+                best_fold_metrics = []
                 
                 # Train on each fold
                 for fold, (train_subjects, val_subjects) in enumerate(folds, 1):
-                    fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
-                    os.makedirs(fold_dir, exist_ok=True)
+                    self.print_log(f"\n{'='*50}")
+                    self.print_log(f"Starting Fold {fold}/5")
+                    self.print_log(f"{'='*50}")
+                    self.print_log(f"Training subjects ({len(train_subjects)}): {train_subjects}")
+                    self.print_log(f"Validation subjects ({len(val_subjects)}): {val_subjects}")
                     
-                    # Get teacher weight for this fold
+                    # Get and log teacher weight for this fold
                     teacher_weight = self.get_teacher_weight_for_fold(fold)
-                    self.print_log(f"\nLoading teacher weights from: {teacher_weight}")
+                    self.print_log(f"\nLoading teacher weights for fold {fold} from:")
+                    self.print_log(f"{teacher_weight}")
                     
                     # Reset models and metrics for this fold
                     self.setup_models(fold=fold)
@@ -563,9 +610,22 @@ class FallDetectionDistiller:
                     train_data = filter_subjects(builder, train_subjects)
                     val_data = filter_subjects(builder, val_subjects)
                     
-                    # Import feeder class
-                    FeederClass = import_class(self.arg.feeder)
+                    # Analyze dataset distribution
+                    self.print_log("\n" + "="*50)
+                    self.print_log(f"Dataset Distribution Analysis - Fold {fold}")
+                    self.print_log("="*50)
                     
+                    train_dist = self.analyze_dataset_distribution(train_data, "Training Set")
+                    val_dist = self.analyze_dataset_distribution(val_data, "Validation Set")
+                    
+                    # Compare distributions
+                    self.print_log("\nDistribution Comparison:")
+                    self.print_log(f"Training Falls:Non-Falls = {train_dist['falls_to_non_falls']:.3f}")
+                    self.print_log(f"Validation Falls:Non-Falls = {val_dist['falls_to_non_falls']:.3f}")
+                    self.print_log(f"Training Falls% = {train_dist['falls_percent']:.2f}%")
+                    self.print_log(f"Validation Falls% = {val_dist['falls_percent']:.2f}%")
+                    
+                    FeederClass = import_class(self.arg.feeder)
                     self.data_loader = {}
                     self.data_loader['train'] = DataLoader(
                         dataset=FeederClass(**self.arg.train_feeder_args, dataset=train_data),
@@ -585,90 +645,214 @@ class FallDetectionDistiller:
                     # Reset training components
                     self.setup_training_components()
                     
-                    # Initialize best metrics for this fold
-                    best_val_loss = float('inf')
-                    best_f1 = 0
-                    best_epoch = 0
-                    best_state = None
-                    
-                    train_losses = []
-                    val_losses = []
-                    val_metrics = []
+                    fold_train_losses = []
+                    fold_val_losses = []
+                    fold_metrics = []
+                    best_fold_f1 = 0
+                    best_fold_loss = float('inf')
+                    best_fold_state = None
+                    best_fold_train_metrics = None
+                    best_loss_state = None
                     
                     for epoch in range(self.arg.num_epoch):
                         train_metrics = self.train_epoch(epoch)
                         val_metrics = self.validate(epoch)
                         
-                        train_losses.append(train_metrics['loss'])
-                        val_losses.append(val_metrics['loss'])
+                        # Store losses and metrics
+                        fold_train_losses.append(train_metrics['loss'])
+                        fold_val_losses.append(val_metrics['loss'])
+                        fold_metrics.append(val_metrics)
                         
-                        # Update best metrics
-                        if val_metrics['f1'] > best_f1:
-                            best_f1 = val_metrics['f1']
-                            best_val_loss = val_metrics['loss']
-                            best_epoch = epoch
-                            best_state = {
-                                'epoch': epoch,
+                        # Track best F1 model for this fold
+                        is_best_f1 = val_metrics['f1'] > best_fold_f1
+                        if is_best_f1:
+                            best_fold_f1 = val_metrics['f1']
+                            best_fold_state = {
                                 'state_dict': self.student.state_dict(),
-                                'optimizer': self.optimizer.state_dict(),
-                                'scheduler': self.scheduler.state_dict(),
-                                'metrics': val_metrics
+                                'epoch': epoch,
+                                'metrics': val_metrics,
+                                'fold': fold
+                            }
+                            best_fold_train_metrics = train_metrics
+                            
+                            # Save best F1 model weights
+                            best_f1_path = os.path.join(self.run_dir, f'fold_{fold}', f'best_f1_model_fold{fold}.pt')
+                            os.makedirs(os.path.dirname(best_f1_path), exist_ok=True)
+                            torch.save(best_fold_state['state_dict'], best_f1_path)
+                            self.print_log(f"\nNew best F1 model saved! F1: {best_fold_f1:.4f}")
+                        
+                        # Track best loss model for this fold
+                        is_best_loss = val_metrics['loss'] < best_fold_loss
+                        if is_best_loss:
+                            best_fold_loss = val_metrics['loss']
+                            best_loss_state = {
+                                'state_dict': self.student.state_dict(),
+                                'epoch': epoch,
+                                'metrics': val_metrics,
+                                'fold': fold
                             }
                             
-                            # Save best model for this fold
-                            save_path = os.path.join(fold_dir, f'best_model_fold{fold}.pt')
-                            torch.save(best_state, save_path)
-                            self.print_log(f"\nNew best model saved! Fold {fold}, F1: {best_f1:.4f}, Loss: {best_val_loss:.4f}")
+                            # Save best loss model weights
+                            best_loss_path = os.path.join(self.run_dir, f'fold_{fold}', f'best_loss_model_fold{fold}.pt')
+                            os.makedirs(os.path.dirname(best_loss_path), exist_ok=True)
+                            torch.save(best_loss_state['state_dict'], best_loss_path)
+                            self.print_log(f"\nNew best loss model saved! Loss: {best_fold_loss:.4f}")
                         
-                        # Print epoch metrics
+                        # Print metrics
                         self.print_metrics('Train', epoch, train_metrics)
                         self.print_metrics('Val', epoch, val_metrics)
+                        
+                        # Store metrics for optimal epoch calculation
+                        epoch_metrics.append({
+                            'fold': fold,
+                            'epoch': epoch,
+                            'train_loss': train_metrics['loss'],
+                            'val_loss': val_metrics['loss'],
+                            'val_f1': val_metrics['f1']
+                        })
+                        
+                        # Print if this is the best epoch
+                        if is_best_f1:
+                            self.print_log(f"\n>>> New best F1 score for fold {fold}! <<<")
+                            self.print_log(f"Previous best: {best_fold_f1:.4f}")
+                            self.print_log(f"New best: {val_metrics['f1']:.4f}")
+                        
+                        if is_best_loss:
+                            self.print_log(f"\n>>> New best validation loss for fold {fold}! <<<")
+                            self.print_log(f"Previous best: {best_fold_loss:.4f}")
+                            self.print_log(f"New best: {val_metrics['loss']:.4f}")
                     
-                    # Store best metrics for this fold
-                    fold_best_metrics.append({
-                        'fold': fold,
-                        'best_f1': best_f1,
-                        'best_val_loss': best_val_loss,
-                        'best_epoch': best_epoch,
-                        'train_subjects': train_subjects,
-                        'val_subjects': val_subjects
-                    })
+                    # Print fold summary
+                    self.print_log(f"\n{'='*50}")
+                    self.print_log(f"Fold {fold} Summary")
+                    self.print_log(f"{'='*50}")
+                    
+                    # Include dataset distribution in summary
+                    self.print_log("\nDataset Distribution:")
+                    self.print_log(f"Training: {train_dist['falls']} falls, {train_dist['non_falls']} non-falls ({train_dist['falls_percent']:.2f}% falls)")
+                    self.print_log(f"Validation: {val_dist['falls']} falls, {val_dist['non_falls']} non-falls ({val_dist['falls_percent']:.2f}% falls)")
+                    
+                    self.print_log(f"\nBest F1 epoch: {best_fold_state['epoch']}")
+                    self.print_log("\nBest Training Metrics:")
+                    self.print_log(f"Loss: {best_fold_train_metrics['loss']:.4f}")
+                    self.print_log(f"F1: {best_fold_train_metrics['f1']:.4f}")
+                    self.print_log(f"Precision: {best_fold_train_metrics['precision']:.4f}")
+                    self.print_log(f"Recall: {best_fold_train_metrics['recall']:.4f}")
+                    self.print_log(f"Accuracy: {best_fold_train_metrics['accuracy']:.4f}")
+                    self.print_log("\nBest Validation Metrics:")
+                    self.print_log(f"Loss: {best_fold_state['metrics']['loss']:.4f}")
+                    self.print_log(f"F1: {best_fold_state['metrics']['f1']:.4f}")
+                    self.print_log(f"Precision: {best_fold_state['metrics']['precision']:.4f}")
+                    self.print_log(f"Recall: {best_fold_state['metrics']['recall']:.4f}")
+                    self.print_log(f"Accuracy: {best_fold_state['metrics']['accuracy']:.4f}")
+                    self.print_log(f"\nTeacher weights used:")
+                    self.print_log(f"{teacher_weight}")
                     
                     # Save fold results
-                    self.save_fold_results(fold, train_losses, val_losses, val_metrics, 
-                                         fold_dir, train_subjects, val_subjects, teacher_weight)
+                    fold_dir = os.path.join(self.run_dir, f'fold_{fold}')
+                    self.save_fold_results(fold, fold_train_losses, fold_val_losses, fold_metrics, fold_dir, train_subjects, val_subjects, teacher_weight)
+                    
+                    # Save best model for this fold
+                    if best_fold_state:
+                        best_fold_metrics.append({
+                            'fold': fold,
+                            'f1': best_fold_f1,
+                            'loss': best_fold_loss,
+                            'epoch': best_fold_state['epoch'],
+                            'metrics': best_fold_state['metrics'],
+                            'train_metrics': best_fold_train_metrics,
+                            'teacher_weight': teacher_weight
+                        })
+                        
+                        # Save best fold model
+                        lr = self.optimizer.param_groups[0]['lr']
+                        best_name = (f"student_fold{fold}_"
+                                   f"f1_{best_fold_f1:.4f}_"
+                                   f"loss_{best_fold_state['metrics']['loss']:.4f}_"
+                                   f"acc_{best_fold_state['metrics']['accuracy']:.4f}_"
+                                   f"lr_{lr:.6f}.pt")
+                        torch.save(best_fold_state, os.path.join(fold_dir, best_name))
+                        self.print_log(f"\nSaved best model for fold {fold} to:")
+                        self.print_log(f"{os.path.join(fold_dir, best_name)}")
                 
-                # Print summary of all folds
-                print("\n" + "="*70)
-                print("Cross-validation Results Summary")
-                print("="*70)
-                print(f"{'Fold':^6} {'Best Epoch':^12} {'Best F1':^10} {'Best Loss':^10}")
-                print("-"*70)
+                # Calculate and log average metrics across folds
+                avg_f1 = np.mean([m['f1'] for m in best_fold_metrics])
+                avg_precision = np.mean([m['metrics']['precision'] for m in best_fold_metrics])
+                avg_recall = np.mean([m['metrics']['recall'] for m in best_fold_metrics])
+                avg_accuracy = np.mean([m['metrics']['accuracy'] for m in best_fold_metrics])
                 
-                avg_f1 = 0
-                avg_loss = 0
-                for metrics in fold_best_metrics:
-                    print(f"{metrics['fold']:^6d} {metrics['best_epoch']:^12d} "
-                          f"{metrics['best_f1']:^10.4f} {metrics['best_val_loss']:^10.4f}")
-                    avg_f1 += metrics['best_f1']
-                    avg_loss += metrics['best_val_loss']
+                # Create summary directory
+                summary_dir = os.path.join(self.run_dir, 'cross_validation_summary')
+                os.makedirs(summary_dir, exist_ok=True)
                 
-                avg_f1 /= len(fold_best_metrics)
-                avg_loss /= len(fold_best_metrics)
-                print("-"*70)
-                print(f"{'Average':^6} {'-':^12} {avg_f1:^10.4f} {avg_loss:^10.4f}")
-                print("="*70)
+                # Save summary for each fold
+                self.print_log("\n" + "="*50)
+                self.print_log("Cross-validation Summary")
+                self.print_log("="*50)
                 
-                # Save overall results
-                torch.save({
-                    'fold_best_metrics': fold_best_metrics,
-                    'avg_f1': avg_f1,
-                    'avg_loss': avg_loss
-                }, os.path.join(self.arg.work_dir, 'cross_validation_results.pt'))
+                summary = {
+                    'folds': [],
+                    'average_metrics': {
+                        'f1': avg_f1,
+                        'precision': avg_precision,
+                        'recall': avg_recall,
+                        'accuracy': avg_accuracy
+                    }
+                }
+                
+                for fold_metrics in best_fold_metrics:
+                    fold = fold_metrics['fold']
+                    fold_dir = os.path.join(self.run_dir, f'fold_{fold}')
+                    
+                    # Load fold info
+                    fold_info = torch.load(os.path.join(fold_dir, 'fold_info.pt'))
+                    
+                    # Print fold summary
+                    self.print_log(f"\nFold {fold}:")
+                    self.print_log(f"Best Epoch: {fold_metrics['epoch']}")
+                    self.print_log(f"Training Subjects: {fold_info['train_subjects']}")
+                    self.print_log(f"Validation Subjects: {fold_info['val_subjects']}")
+                    self.print_log(f"Teacher Weights: {fold_info['teacher_weight']}")
+                    self.print_log(f"Metrics:")
+                    self.print_log(f"  F1: {fold_metrics['f1']:.4f}")
+                    self.print_log(f"  Loss: {fold_metrics['loss']:.4f}")
+                    self.print_log(f"  Precision: {fold_metrics['metrics']['precision']:.4f}")
+                    self.print_log(f"  Recall: {fold_metrics['metrics']['recall']:.4f}")
+                    self.print_log(f"  Accuracy: {fold_metrics['metrics']['accuracy']:.4f}")
+                    
+                    # Add to summary
+                    summary['folds'].append({
+                        'fold': fold,
+                        'best_epoch': fold_metrics['epoch'],
+                        'train_subjects': fold_info['train_subjects'],
+                        'val_subjects': fold_info['val_subjects'],
+                        'teacher_weight': fold_info['teacher_weight'],
+                        'metrics': fold_metrics['metrics']
+                    })
+                
+                # Print average metrics
+                self.print_log("\n" + "="*50)
+                self.print_log("Average Metrics Across All Folds:")
+                self.print_log(f"F1: {avg_f1:.4f}")
+                self.print_log(f"Precision: {avg_precision:.4f}")
+                self.print_log(f"Recall: {avg_recall:.4f}")
+                self.print_log(f"Accuracy: {avg_accuracy:.4f}")
+                self.print_log("="*50)
+                
+                # Save summary
+                summary_path = os.path.join(summary_dir, 'cross_validation_summary.pt')
+                torch.save(summary, summary_path)
+                self.print_log(f"\nSaved cross-validation summary to {summary_path}")
+                
+                # Copy config file
+                shutil.copy(self.arg.config, os.path.join(summary_dir, 'config.yaml'))
                 
             except Exception as e:
-                self.print_log("Error during training: " + str(e))
-                self.print_log("Traceback: " + traceback.format_exc())
+                self.print_log(f'Error during training: {str(e)}')
+                self.print_log(f'Traceback: {traceback.format_exc()}')
+                
+        else:
+            self.print_log('Phase must be train')
 
     def print_metrics(self, phase, epoch, metrics):
         """Print metrics in a neat format"""

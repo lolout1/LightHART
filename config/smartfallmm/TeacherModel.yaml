@@ -1,0 +1,65 @@
+# Basic configuration
+model: "Models.TeacherModel.TeacherModel"
+dataset: "smartfallmm"
+
+# Model parameters - these are passed directly to the model
+model_args:
+  num_joints: 32
+  in_chans: 3
+  acc_coords: 4
+  hidden_dim: 256
+  num_heads: 8
+  fusion_layers: 3
+  drop_rate: 0.1
+
+# Dataset arguments must match the exact structure expected by the dataset class
+dataset_args:
+  mode: "avg_pool"
+  max_length: 128
+  task: "fd"
+  modalities: ["skeleton", "accelerometer"]
+  age_group: ["young"]
+  sensors: ["watch"]
+
+# Subject IDs as a flat list for the argument parser
+subjects: [29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
+
+# Training parameters that match main4.py arguments exactly
+batch_size: 32
+test_batch_size: 32
+val_batch_size: 32
+num_epoch: 100
+start_epoch: 0
+
+# Optimizer settings that match the argument parser
+optimizer: "adamw"
+base_lr: 0.0001
+weight_decay: 0.01
+
+# Device configuration as expected by the script
+device: [0]
+
+# Feeder settings that match main4.py's requirements
+feeder: "Feeder.Make_Dataset.UTD_mm"
+train_feeder_args:
+  batch_size: 32
+val_feeder_args:
+  batch_size: 32
+test_feeder_args:
+  batch_size: 32
+
+# Additional training settings
+num_worker: 4
+seed: 42
+include_val: true
+print_log: true
+phase: "train"
+
+# Loss function configuration
+loss: "torch.nn.BCELoss"
+loss_args: {}
+
+# Scheduler settings
+scheduler: "cosine"
+scheduler_args:
+  warmup_epochs: 5

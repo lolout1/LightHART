@@ -24,7 +24,13 @@ result_file="result.txt"
 #skelton_only experiment
 #python3 main.py --config ./config/smartfallmm/SKteacher.yaml --work-dir $work_dir --model-saved-name $teacher_weights  --device 0  --base-lr 2.5e-3 --phase 'train' --result-file $work_dir/$result_file  --include-val True
 #multimodal experiment
-python3 main4.py --config ./config/smartfallmm/t3.yaml --weights "exps/smartfall_har/student/watchgyro_divid3bw20/accel/ttfStudent.pth" --work-dir $teacher_dir --model-saved-name $teacher_weights  --device 0 --include-val True
+
+# If you want to perform LOOCV (default):
+python3 main5.py --config ./config/smartfallmm/transTeach.yaml --work-dir $teacher_dir --model-saved-name $teacher_weights --device 0
+
+# If you want to train directly with specific epochs (e.g., 25):
+# python3 main4.py --config ./config/smartfallmm/TeacherModel.yaml --work-dir $teacher_dir --model-saved-name $teacher_weights --device 0 --epoch 25
+
 #accelerometer only experiment
 #python3 main.py --config ./config/smartfallmm/tr.yaml --work-dir $student_dir --model-saved-name $student_weights --device 0 --include-val True #--base-lr 1e-3
 #python3 main.py --config ./config/smartfallmm/transformer.yaml --phase 'train' --work-dir $teacher_dir --model-saved-name $teacher_weights --device 0 --base-lr 1e-3 --include-val True
