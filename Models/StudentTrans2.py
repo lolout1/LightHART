@@ -9,14 +9,13 @@ class PositionalEncoding(nn.Module):
         for k in range(seq_len):
             for i in range(d_model // 2):
                 denominator = (n ** (2 * i / d_model))
-                angle = torch.tensor(k / denominator)
-                P[k, 2*i] = torch.sin(angle)
-                P[k, 2*i + 1] = torch.cos(angle)
+                angle = k / denominator
+                P[k, 2*i] = torch.sin(torch.tensor(angle))
+                P[k, 2*i + 1] = torch.cos(torch.tensor(angle))
         self.register_buffer('pos_embed', P.unsqueeze(0))
 
     def forward(self, x):
-        bsz, seq_len, d_model = x.shape
-        return x
+        return x  # Currently not adding positional embedding to input
 
 class TransformerBlock(nn.Module):
     def __init__(
@@ -60,7 +59,7 @@ class PyTorchTransformer(nn.Module):
     def __init__(
         self, 
         seq_len=128,
-        channels=3,
+        channels=4,
         num_layers=4, 
         embed_dim=128,
         mlp_dim=16, 
@@ -95,6 +94,12 @@ class PyTorchTransformer(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
+        # x shape: [batch_size, seq_len, channels]
+        # If input has 3 channels, compute SMV to expand to 4 channels
+        if x.size(-1) == 3:
+            smv = torch.sqrt(torch.sum(x ** 2, dim=-1, keepdim=True))
+            x = torch.cat([x, smv], dim=-1)  # Now x has shape [B, seq_len, 4]
+        
         out = self.input_linear(x)
         out = self.pos_encoder(out)
         for block in self.transformer_blocks:
@@ -103,13 +108,13 @@ class PyTorchTransformer(nn.Module):
         out = out.mean(dim=1)
         out = self.final_linear(out)
         out = self.sigmoid(out)
-        return (out,)
+        return out.squeeze(-1)  # Return shape [batch_size]
 
 if __name__ == "__main__":
-    sample_x = torch.randn(16, 128, 3)
+    sample_x = torch.randn(16, 128, 3)  # Simulate input with 3 channels
     model = PyTorchTransformer(
         seq_len=128,
-        channels=3,
+        channels=4,  # Expecting model to compute the 4th SMV channel
         num_layers=4,
         embed_dim=128,
         mlp_dim=16,
@@ -118,5 +123,5 @@ if __name__ == "__main__":
         attn_drop_rate=0.25
     )
     out = model(sample_x)
-    print("Output shape:", out[0].shape)
-    print("Sample output:", out[0][:5])
+    print("Output shape:", out.shape)
+    print("Sample output:", out[:5])

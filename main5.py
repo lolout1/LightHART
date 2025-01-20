@@ -261,55 +261,63 @@ class FallDetectionTrainer:
         except Exception as e:
             raise ValueError(f"Failed to load loss function '{self.arg.loss}' with args {self.arg.loss_args}: {e}")    
         
-    def compute_metrics(self, outputs, targets):
-        """Compute comprehensive metrics for fall detection"""
-        predictions = (outputs > 0.5).float()
+    def compute_metrics(self, probs, targets):
+        """
+        Compute comprehensive metrics for fall detection
+        Args:
+            probs: tensor of shape [B] - probabilities between 0 and 1
+            targets: tensor of shape [B] - binary labels (0 or 1)
+        """
+        with torch.no_grad():
+            # Ensure inputs have correct shape
+            probs = probs.view(-1)
+            targets = targets.view(-1)
+            
+            # Get predictions from probabilities
+            predictions = (probs > 0.5).float()
+            
+            # Move to CPU for metric calculation
+            predictions = predictions.cpu()
+            targets = targets.cpu()
+            
+            # Calculate basic metrics
+            correct = (predictions == targets).float()
+            accuracy = correct.mean().item()
+            
+            # Handle edge cases where one class might be missing
+            if not torch.any(targets == 1) or not torch.any(targets == 0):
+                return {
+                    'precision': 0.0,
+                    'recall': 0.0,
+                    'f1': 0.0,
+                    'accuracy': accuracy,
+                    'false_alarm_rate': 0.0,
+                    'miss_rate': 0.0
+                }
+            
+            # Calculate true/false positives/negatives
+            tp = torch.sum((predictions == 1) & (targets == 1)).float()
+            tn = torch.sum((predictions == 0) & (targets == 0)).float()
+            fp = torch.sum((predictions == 1) & (targets == 0)).float()
+            fn = torch.sum((predictions == 0) & (targets == 1)).float()
+            
+            # Calculate metrics with epsilon to avoid division by zero
+            epsilon = 1e-7
+            precision = tp / (tp + fp + epsilon)
+            recall = tp / (tp + fn + epsilon)
+            f1 = 2 * (precision * recall) / (precision + recall + epsilon)
+            false_alarm_rate = fp / (fp + tn + epsilon)
+            miss_rate = fn / (fn + tp + epsilon)
+            
+            return {
+                'precision': precision.item(),
+                'recall': recall.item(),
+                'f1': f1.item(),
+                'accuracy': accuracy,
+                'false_alarm_rate': false_alarm_rate.item(),
+                'miss_rate': miss_rate.item()
+            }
         
-        # Basic metrics
-        precision = precision_score(targets.cpu(), predictions.cpu())
-        recall = recall_score(targets.cpu(), predictions.cpu())
-        f1 = f1_score(targets.cpu(), predictions.cpu())
-        
-        # Calculate accuracy
-        accuracy = (predictions == targets).float().mean().item()
-        
-        # Fall detection specific metrics
-        tn = ((predictions == 0) & (targets == 0)).sum().item()
-        fp = ((predictions == 1) & (targets == 0)).sum().item()
-        fn = ((predictions == 0) & (targets == 1)).sum().item()
-        tp = ((predictions == 1) & (targets == 1)).sum().item()
-        
-        false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
-        miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
-        
-        return {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'accuracy': accuracy,
-            'false_alarm_rate': false_alarm_rate,
-            'miss_rate': miss_rate
-        }
-        
-    def print_log(self, msg, print_time=True):
-        """Print and save log messages"""
-        if print_time:
-            localtime = time.asctime(time.localtime(time.time()))
-            msg = f"[ {localtime} ] {msg}"
-        print(msg)
-        if self.arg.work_dir:
-            with open(os.path.join(self.arg.work_dir, 'log.txt'), 'a') as f:
-                print(msg, file=f)
-                
-    def save_config(self):
-        """Save configuration file"""
-        if not hasattr(self.arg, 'config') or not os.path.isfile(self.arg.config):
-            raise ValueError("Config file not found or not specified.")
-        
-        dest_path = os.path.join(self.arg.work_dir, os.path.basename(self.arg.config))
-        shutil.copy2(self.arg.config, dest_path)
-        self.print_log(f"Configuration saved to {dest_path}")
-    
     def train_epoch(self, epoch):
         """Training loop for a single epoch"""
         self.model.train()
@@ -319,12 +327,17 @@ class FallDetectionTrainer:
         for inputs, targets, idx in tqdm(self.data_loader['train'], desc=f'Training epoch {epoch}'):
             # Move data to device
             acc_data = inputs['accelerometer'].to(self.device)
-            skl_data = inputs['skeleton'].to(self.device)
-            targets = targets.to(self.device)
+            targets = targets.to(self.device).float()
             
-            # Forward pass
-            outputs = self.model(acc_data.float(), skl_data.float())
-            loss = self.criterion(outputs, targets.float())
+            # Forward pass with or without skeleton data
+            if 'skeleton' in inputs:
+                skl_data = inputs['skeleton'].to(self.device)
+                probs, _ = self.model(acc_data, skl_data)
+            else:
+                probs, _ = self.model(acc_data, None)
+            
+            # Compute loss using binary cross entropy
+            loss = F.binary_cross_entropy(probs, targets)
             
             # Backward pass
             self.optimizer.zero_grad()
@@ -332,7 +345,7 @@ class FallDetectionTrainer:
             self.optimizer.step()
             
             # Update metrics
-            batch_metrics = self.compute_metrics(outputs, targets)
+            batch_metrics = self.compute_metrics(probs, targets)
             batch_size = targets.size(0)
             total_samples += batch_size
             
@@ -345,11 +358,7 @@ class FallDetectionTrainer:
         # Average metrics
         for key in train_metrics:
             train_metrics[key] /= total_samples
-        
-        # Store training metrics
-        self.train_losses.append(train_metrics['loss'])
-        self.train_metrics.append(train_metrics)
-        
+            
         return train_metrics
 
     def validate(self, epoch):
@@ -362,15 +371,20 @@ class FallDetectionTrainer:
             for inputs, targets, idx in tqdm(self.data_loader['val'], desc=f'Validating epoch {epoch}'):
                 # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
-                skl_data = inputs['skeleton'].to(self.device)
-                targets = targets.to(self.device)
+                targets = targets.to(self.device).float()
                 
-                # Forward pass
-                outputs = self.model(acc_data.float(), skl_data.float())
-                loss = self.criterion(outputs, targets.float())
+                # Forward pass with or without skeleton data
+                if 'skeleton' in inputs:
+                    skl_data = inputs['skeleton'].to(self.device)
+                    probs, _ = self.model(acc_data, skl_data)
+                else:
+                    probs, _ = self.model(acc_data, None)
+                
+                # Compute loss
+                loss = F.binary_cross_entropy(probs, targets)
                 
                 # Update metrics
-                batch_metrics = self.compute_metrics(outputs, targets)
+                batch_metrics = self.compute_metrics(probs, targets)
                 batch_size = targets.size(0)
                 total_samples += batch_size
                 
@@ -383,20 +397,7 @@ class FallDetectionTrainer:
         # Average metrics
         for key in val_metrics:
             val_metrics[key] /= total_samples
-        
-        # Store validation metrics
-        self.val_losses.append(val_metrics['loss'])
-        self.val_metrics.append(val_metrics)
-        
-        # Update best metrics if current validation loss is better
-        if val_metrics['loss'] < self.best_val_loss:
-            self.best_val_loss = val_metrics['loss']
-            self.best_metrics = val_metrics.copy()
-            self.save_model(epoch, val_metrics, is_best=True)
-            self.patience_counter = 0
-        else:
-            self.patience_counter += 1
-        
+            
         return val_metrics
             
     def save_model(self, epoch, metrics, is_best=False):
@@ -924,19 +925,23 @@ class FallDetectionTrainer:
             for inputs, targets, idx in tqdm(self.data_loader['test'], desc='Testing'):
                 # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
-                skl_data = inputs['skeleton'].to(self.device)
-                targets = targets.to(self.device)
+                targets = targets.to(self.device).float()
                 
-                # Forward pass
-                outputs = self.model(acc_data.float(), skl_data.float())
-                predictions = (outputs > 0.5).float()
+                # Forward pass with or without skeleton data
+                if 'skeleton' in inputs:
+                    skl_data = inputs['skeleton'].to(self.device)
+                    probs, _ = self.model(acc_data, skl_data)
+                else:
+                    probs, _ = self.model(acc_data, None)
+                    
+                predictions = (probs > 0.5).float()
                 
                 # Update confusion matrix
-                for pred, target in zip(predictions, targets):
+                for pred, target in zip(predictions.cpu(), targets.cpu()):
                     confusion[int(target), int(pred)] += 1
                 
                 # Compute metrics
-                batch_metrics = self.compute_metrics(outputs, targets)
+                batch_metrics = self.compute_metrics(probs, targets)
                 metrics.append(batch_metrics)
         
         # Aggregate metrics
@@ -1121,7 +1126,7 @@ class FallDetectionTrainer(FallDetectionTrainer):
         self.print_log(f"Saved training curves plot to {os.path.join(self.arg.work_dir, 'training_curves.png')}")
     
     def test(self):
-        """Evaluate model on test set"""
+        """Test loop"""
         self.model.eval()
         metrics = []
         confusion = np.zeros((2, 2))  # Binary classification
@@ -1130,19 +1135,23 @@ class FallDetectionTrainer(FallDetectionTrainer):
             for inputs, targets, idx in tqdm(self.data_loader['test'], desc='Testing'):
                 # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
-                skl_data = inputs['skeleton'].to(self.device)
-                targets = targets.to(self.device)
+                targets = targets.to(self.device).float()
                 
-                # Forward pass
-                outputs = self.model(acc_data.float(), skl_data.float())
-                predictions = (outputs > 0.5).float()
+                # Forward pass with or without skeleton data
+                if 'skeleton' in inputs:
+                    skl_data = inputs['skeleton'].to(self.device)
+                    probs, _ = self.model(acc_data, skl_data)
+                else:
+                    probs, _ = self.model(acc_data, None)
+                    
+                predictions = (probs > 0.5).float()
                 
                 # Update confusion matrix
-                for pred, target in zip(predictions, targets):
+                for pred, target in zip(predictions.cpu(), targets.cpu()):
                     confusion[int(target), int(pred)] += 1
                 
                 # Compute metrics
-                batch_metrics = self.compute_metrics(outputs, targets)
+                batch_metrics = self.compute_metrics(probs, targets)
                 metrics.append(batch_metrics)
         
         # Aggregate metrics

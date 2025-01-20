@@ -7,7 +7,7 @@ dataset: "smartfallmm"
 model_args:
   d_model: 256
   nhead: 4
-  num_layers: 2
+  num_layers: 4
   dropout: 0.3
   skeleton_dim: 96
   watch_dim: 4  
@@ -16,7 +16,6 @@ model_args:
 dataset_args:
   mode: "avg_pool"
   max_length: 128
-  window_size: 64
 
   task: "fd"
   modalities: ["skeleton", "accelerometer"]
@@ -42,15 +41,15 @@ subjects:
   - 46
 
 # Training parameters that match main4.py arguments exactly
-batch_size: 32
-test_batch_size: 32 
-val_batch_size: 32
+batch_size: 16
+test_batch_size: 16 
+val_batch_size: 16
 num_epoch: 100
 start_epoch: 0
 
 # Optimizer settings that match the argument parser
 optimizer: "adamw"
-base_lr: 0.0001
+base_lr: 0.001
 weight_decay: 0.0004
 
 # Device configuration as expected by the script
@@ -59,11 +58,11 @@ device: [0]
 # Feeder settings that match main4.py's requirements
 feeder: "Feeder.Make_Dataset.UTD_mm"
 train_feeder_args:
-  batch_size: 32
+  batch_size: 16
 val_feeder_args:
-  batch_size: 32
+  batch_size: 16
 test_feeder_args:
-  batch_size: 32
+  batch_size: 16
 
 # Additional training settings
 num_worker: 4
@@ -73,7 +72,7 @@ print_log: true
 phase: "train"
 
 # Loss function configuration 
-loss: "torch.nn.BCELoss"  # Binary Cross-Entropy Loss
+loss: "torch.nn.BCEWithLogitsLoss"  # Binary Cross-Entropy Loss with Sigmoid
 loss_args: {}
 
 # Scheduler settings

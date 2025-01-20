@@ -14,7 +14,7 @@ import torch.optim as optim
 from tqdm import tqdm
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score, classification_report
 from sklearn.exceptions import UndefinedMetricWarning
 from utils.dataset import prepare_smartfallmm, filter_subjects
 import warnings
@@ -103,12 +103,10 @@ class FallDetectionTrainer:
         
     def setup_environment(self):
         """Initialize training environment and directories"""
-        # Ensure work_dir exists
         if not os.path.exists(self.arg.work_dir):
             os.makedirs(self.arg.work_dir)
             self.save_config()
             
-        # Setup device
         self.device = (f'cuda:{self.arg.device[0]}' if isinstance(self.arg.device, list) 
                       else f'cuda:{self.arg.device}' if torch.cuda.is_available() else 'cpu')
         
@@ -116,41 +114,33 @@ class FallDetectionTrainer:
         self.best_metrics = {'precision': 0, 'f1': 0, 'recall': 0, 'accuracy': 0}
         self.best_val_loss = float('inf')
         
-        # Early stopping parameters
-        self.patience = 16  # Number of epochs to wait before early stopping
+        self.patience = 16
         self.patience_counter = 0
-        self.min_delta = 1e-4  # Minimum change in monitored value to qualify as an improvement
+        self.min_delta = 1e-4
         
     def setup_components(self):
         """Initialize model, optimizer, and related components"""
-        # Initialize model
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.data_loader = {}
         self.model = self.load_model()
         self.model = self.model.to(self.device)
         
-        # Training components
         if self.arg.phase == 'train':
             self.criterion = self.load_loss()
             self.optimizer = self.load_optimizer()
             self.scheduler = self.load_scheduler()
             
-        # Initialize data trackers
         self.train_metrics = []
         self.val_metrics = []
         
     def load_data(self, train_subjects, test_subjects):
         """Prepare data loaders for training, validation, and testing."""
         try:
-            Feeder = self.import_class(self.arg.feeder)  # Dynamically import the Feeder class
-            
-            # Prepare dataset builder
-            builder = prepare_smartfallmm(self.arg)  # Function to build dataset (ensure it's defined)
-            
-            # Filter subjects for training and testing
+            Feeder = self.import_class(self.arg.feeder)
+            builder = prepare_smartfallmm(self.arg)
             train_data = filter_subjects(builder, train_subjects)
             test_data = filter_subjects(builder, test_subjects)
             
-            # Create DataLoader for training
-            self.data_loader = {}
             self.data_loader['train'] = torch.utils.data.DataLoader(
                 dataset=Feeder(
                     **self.arg.train_feeder_args,
@@ -162,7 +152,6 @@ class FallDetectionTrainer:
                 pin_memory=True
             )
             
-            # Create DataLoader for validation, if applicable
             if self.arg.include_val:
                 self.data_loader['val'] = torch.utils.data.DataLoader(
                     dataset=Feeder(
@@ -175,7 +164,6 @@ class FallDetectionTrainer:
                     pin_memory=True
                 )
             
-            # Create DataLoader for testing
             self.data_loader['test'] = torch.utils.data.DataLoader(
                 dataset=Feeder(
                     **self.arg.test_feeder_args,
@@ -247,11 +235,9 @@ class FallDetectionTrainer:
     def load_loss(self):
         """Load loss function dynamically"""
         try:
-            # Handle torch.nn losses directly
             if self.arg.loss.startswith('torch.nn.'):
                 loss_class = getattr(torch.nn, self.arg.loss.split('.')[-1])
             else:
-                # For custom losses, use the previous import method
                 module_name, _sep, class_str = self.arg.loss.rsplit('.', 1)
                 loss_module = __import__(module_name, fromlist=[class_str])
                 loss_class = getattr(loss_module, class_str)
@@ -261,77 +247,95 @@ class FallDetectionTrainer:
         except Exception as e:
             raise ValueError(f"Failed to load loss function '{self.arg.loss}' with args {self.arg.loss_args}: {e}")    
         
-    def compute_metrics(self, outputs, targets):
-        """Compute comprehensive metrics for fall detection"""
-        predictions = (outputs > 0.5).float()
+    def compute_metrics(self, probs, targets):
+        """Compute window-level precision, recall, F1 score."""
+        predictions = (probs > 0.5).float()
+        tp = torch.sum((predictions == 1) & (targets == 1)).float()
+        fp = torch.sum((predictions == 1) & (targets == 0)).float()
+        fn = torch.sum((predictions == 0) & (targets == 1)).float()
         
-        # Basic metrics
-        precision = precision_score(targets.cpu(), predictions.cpu())
-        recall = recall_score(targets.cpu(), predictions.cpu())
-        f1 = f1_score(targets.cpu(), predictions.cpu())
+        precision = tp / (tp + fp + 1e-10)
+        recall = tp / (tp + fn + 1e-10)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+        accuracy = torch.sum(predictions == targets).float() / targets.size(0)
         
-        # Calculate accuracy
-        accuracy = (predictions == targets).float().mean().item()
+        far = fp / (fp + tp + 1e-10)  
+        mr = fn / (fn + tp + 1e-10)   
         
-        # Fall detection specific metrics
-        tn = ((predictions == 0) & (targets == 0)).sum().item()
-        fp = ((predictions == 1) & (targets == 0)).sum().item()
-        fn = ((predictions == 0) & (targets == 1)).sum().item()
-        tp = ((predictions == 1) & (targets == 1)).sum().item()
+        return {
+            'precision': precision.item(),
+            'recall': recall.item(),
+            'f1': f1.item(),
+            'accuracy': accuracy.item(),
+            'false_alarm_rate': far.item(),
+            'miss_rate': mr.item()
+        }
+
+    def aggregate_trial_predictions(self, aggregator):
+        """
+        Aggregates window-level predictions into trial-level predictions (average pooling).
+        aggregator: Dict[int, Dict[str, Any]] -> {trial_id: {'probs': [list_of_probs], 'label': 0_or_1}}
         
-        false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
-        miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
+        Returns:
+            trial_probs: list of aggregated probabilities (average across windows)
+            trial_labels: list of single label per trial
+        """
+        trial_probs = []
+        trial_labels = []
+        for trial_id, info in aggregator.items():
+            # Average aggregator
+            avg_prob = np.mean(info['probs'])
+            trial_probs.append(avg_prob)
+            trial_labels.append(info['label'])
+        return np.array(trial_probs), np.array(trial_labels)
+
+    def compute_trial_metrics(self, trial_probs, trial_labels):
+        """
+        Compute trial-level metrics from aggregated probabilities and single trial label.
+        trial_probs: np.array of shape [Ntrials]
+        trial_labels: np.array of shape [Ntrials]
+        """
+        predictions = (trial_probs > 0.5).astype(np.float32)
+        tp = np.sum((predictions == 1) & (trial_labels == 1)).astype(float)
+        fp = np.sum((predictions == 1) & (trial_labels == 0)).astype(float)
+        fn = np.sum((predictions == 0) & (trial_labels == 1)).astype(float)
+        tn = np.sum((predictions == 0) & (trial_labels == 0)).astype(float)
+        
+        precision = tp / (tp + fp + 1e-10)
+        recall = tp / (tp + fn + 1e-10)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+        accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-10)
+        
+        far = fp / (fp + tp + 1e-10)
+        mr = fn / (fn + tp + 1e-10)
         
         return {
             'precision': precision,
             'recall': recall,
             'f1': f1,
             'accuracy': accuracy,
-            'false_alarm_rate': false_alarm_rate,
-            'miss_rate': miss_rate
+            'false_alarm_rate': far,
+            'miss_rate': mr
         }
-        
-    def print_log(self, msg, print_time=True):
-        """Print and save log messages"""
-        if print_time:
-            localtime = time.asctime(time.localtime(time.time()))
-            msg = f"[ {localtime} ] {msg}"
-        print(msg)
-        if self.arg.work_dir:
-            with open(os.path.join(self.arg.work_dir, 'log.txt'), 'a') as f:
-                print(msg, file=f)
-                
-    def save_config(self):
-        """Save configuration file"""
-        if not hasattr(self.arg, 'config') or not os.path.isfile(self.arg.config):
-            raise ValueError("Config file not found or not specified.")
-        
-        dest_path = os.path.join(self.arg.work_dir, os.path.basename(self.arg.config))
-        shutil.copy2(self.arg.config, dest_path)
-        self.print_log(f"Configuration saved to {dest_path}")
-    
+
     def train_epoch(self, epoch):
-        """Training loop for a single epoch"""
         self.model.train()
         train_metrics = {'loss': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'accuracy': 0, 'false_alarm_rate': 0, 'miss_rate': 0}
         total_samples = 0
         
         for inputs, targets, idx in tqdm(self.data_loader['train'], desc=f'Training epoch {epoch}'):
-            # Move data to device
             acc_data = inputs['accelerometer'].to(self.device)
-            targets = targets.to(self.device)
+            targets = targets.to(self.device).float()
             
-            # Forward pass - only use accelerometer data for student model
-            outputs = self.model(acc_data.float())
-            loss = self.criterion(outputs[0], targets.float())  # Use only the probability output
+            # Model returns probabilities of shape [batch_size]
+            probs = self.model(acc_data.float())
+            loss = F.binary_cross_entropy(probs, targets)
             
-            # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
             
-            # Update metrics
-            batch_metrics = self.compute_metrics(outputs[0], targets)
+            batch_metrics = self.compute_metrics(probs, targets)
             batch_size = targets.size(0)
             total_samples += batch_size
             
@@ -341,34 +345,31 @@ class FallDetectionTrainer:
                 else:
                     train_metrics[key] += batch_metrics[key] * batch_size
         
-        # Average metrics
         for key in train_metrics:
             train_metrics[key] /= total_samples
         
-        # Store training metrics
         self.train_losses.append(train_metrics['loss'])
         self.train_metrics.append(train_metrics)
         
         return train_metrics
 
     def validate(self, epoch):
-        """Validation loop"""
+        """Validation loop with window-level AND trial-level aggregation."""
         self.model.eval()
         val_metrics = {'loss': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'accuracy': 0, 'false_alarm_rate': 0, 'miss_rate': 0}
         total_samples = 0
+        trial_aggregator = defaultdict(lambda: {'probs': [], 'label': None})
         
         with torch.no_grad():
             for inputs, targets, idx in tqdm(self.data_loader['val'], desc=f'Validating epoch {epoch}'):
-                # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
-                targets = targets.to(self.device)
+                targets = targets.to(self.device).float()
                 
-                # Forward pass - only use accelerometer data for student model
-                outputs = self.model(acc_data.float())
-                loss = self.criterion(outputs[0], targets.float())  # Use only the probability output
+                # Model returns probabilities of shape [batch_size]
+                probs = self.model(acc_data.float())
+                loss = F.binary_cross_entropy(probs, targets)
                 
-                # Update metrics
-                batch_metrics = self.compute_metrics(outputs[0], targets)
+                batch_metrics = self.compute_metrics(probs, targets)
                 batch_size = targets.size(0)
                 total_samples += batch_size
                 
@@ -377,28 +378,29 @@ class FallDetectionTrainer:
                         val_metrics[key] += loss.item() * batch_size
                     else:
                         val_metrics[key] += batch_metrics[key] * batch_size
+                
+                # Store window-level predictions for later trial-level aggregation
+                for i, trial_id in enumerate(idx):
+                    trial_aggregator[trial_id.item()]['probs'].append(probs[i].item())
+                    trial_aggregator[trial_id.item()]['label'] = targets[i].item()
         
-        # Average metrics
+        # Normalize metrics by total samples
         for key in val_metrics:
             val_metrics[key] /= total_samples
         
-        # Store validation metrics
+        # Compute trial-level metrics
+        trial_probs, trial_labels = self.aggregate_trial_predictions(trial_aggregator)
+        trial_metrics = self.compute_trial_metrics(trial_probs, trial_labels)
+        
+        # Add trial-level metrics to val_metrics
+        val_metrics.update({f'trial_{k}': v for k, v in trial_metrics.items()})
+        
         self.val_losses.append(val_metrics['loss'])
         self.val_metrics.append(val_metrics)
         
-        # Update best metrics if current validation loss is better
-        if val_metrics['loss'] < self.best_val_loss:
-            self.best_val_loss = val_metrics['loss']
-            self.best_metrics = val_metrics.copy()
-            self.save_model(epoch, val_metrics, is_best=True)
-            self.patience_counter = 0
-        else:
-            self.patience_counter += 1
-        
         return val_metrics
-            
+
     def save_model(self, epoch, metrics, is_best=False):
-        """Save model checkpoint"""
         model_name = self.arg.model.split('.')[-1]
         current_fold = getattr(self, 'current_fold', None)
         
@@ -406,27 +408,18 @@ class FallDetectionTrainer:
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if hasattr(self, 'scheduler') else None,
             'metrics': metrics
         }
         
-        # Determine save directory (fold-specific if in cross-validation)
         save_dir = os.path.join(self.arg.work_dir, f'fold_{current_fold}') if current_fold is not None else self.arg.work_dir
         os.makedirs(save_dir, exist_ok=True)
         
-        # Save checkpoint with metrics
-        metrics_str = f"_f1_{metrics['f1']:.4f}_loss_{metrics['loss']:.4f}"
-        checkpoint_name = f"{model_name}_epoch_{epoch}{metrics_str}.pt"
-        torch.save(state_dict, os.path.join(save_dir, checkpoint_name))
-        
-        # Save best model separately
         if is_best:
-            # Save complete model
             best_name = f"{model_name}_best_f1_{metrics['f1']:.4f}_loss_{metrics['loss']:.4f}.pt"
             best_path = os.path.join(save_dir, best_name)
             torch.save(state_dict, best_path)
             
-            # Save weights-only version
             weights_name = f"{model_name}_best_weights_f1_{metrics['f1']:.4f}_loss_{metrics['loss']:.4f}.pt"
             weights_path = os.path.join(save_dir, weights_name)
             torch.save(self.model.state_dict(), weights_path)
@@ -436,11 +429,9 @@ class FallDetectionTrainer:
             self.print_log(f"Weights only: {weights_path}")
             self.print_log(f"Val Loss: {metrics['loss']:.4f}")
             self.print_log(f"Val F1: {metrics['f1']:.4f}")
-
+            
     def save_results(self):
-        """Save training results and metrics"""
         try:
-            # Initialize empty lists if they don't exist
             if not hasattr(self, 'train_losses'):
                 self.train_losses = []
             if not hasattr(self, 'val_losses'):
@@ -449,22 +440,19 @@ class FallDetectionTrainer:
                 self.train_metrics = []
             if not hasattr(self, 'val_metrics'):
                 self.val_metrics = []
-
-            # Get the maximum length among all lists
+            
             max_len = max(
                 len(self.train_losses),
                 len(self.val_losses),
                 len(self.train_metrics),
                 len(self.val_metrics)
             )
-
-            # Extend all lists to match the maximum length
+            
             self.train_losses.extend([None] * (max_len - len(self.train_losses)))
             self.val_losses.extend([None] * (max_len - len(self.val_losses)))
             self.train_metrics.extend([None] * (max_len - len(self.train_metrics)))
             self.val_metrics.extend([None] * (max_len - len(self.val_metrics)))
             
-            # Create DataFrame with all available metrics
             metrics_df = pd.DataFrame({
                 'epoch': range(max_len),
                 'train_loss': self.train_losses,
@@ -480,24 +468,29 @@ class FallDetectionTrainer:
                 'val_recall': [m.get('recall', None) if m else None for m in self.val_metrics],
                 'val_f1': [m.get('f1', None) if m else None for m in self.val_metrics],
                 'val_false_alarm_rate': [m.get('false_alarm_rate', None) if m else None for m in self.val_metrics],
-                'val_miss_rate': [m.get('miss_rate', None) if m else None for m in self.val_metrics]
+                'val_miss_rate': [m.get('miss_rate', None) if m else None for m in self.val_metrics],
+                
+                # Additional columns if we have trial-level aggregator metrics in val_metrics
+                'val_trial_f1': [m.get('trial_f1', None) if m else None for m in self.val_metrics],
+                'val_trial_precision': [m.get('trial_precision', None) if m else None for m in self.val_metrics],
+                'val_trial_recall': [m.get('trial_recall', None) if m else None for m in self.val_metrics],
+                'val_trial_accuracy': [m.get('trial_accuracy', None) if m else None for m in self.val_metrics],
+                'val_trial_false_alarm_rate': [m.get('trial_false_alarm_rate', None) if m else None for m in self.val_metrics],
+                'val_trial_miss_rate': [m.get('trial_miss_rate', None) if m else None for m in self.val_metrics],
             })
             
-            # Save metrics to CSV
             metrics_path = os.path.join(self.arg.work_dir, 'metrics.csv')
             metrics_df.to_csv(metrics_path, index=False)
             self.print_log(f"Saved metrics to {metrics_path}")
             
-            # Plot training curves if we have data
             if len(self.train_metrics) > 0:
                 self.plot_training_curves()
                 
         except Exception as e:
             self.print_log(f"Error saving results: {str(e)}")
-            traceback.print_exc()  # Print the full traceback for debugging
-    
+            traceback.print_exc()
+
     def plot_training_curves(self):
-        """Generate and save training visualization plots"""
         try:
             metrics_to_plot = [
                 ('loss', 'Loss'),
@@ -513,11 +506,9 @@ class FallDetectionTrainer:
                 plt.figure(figsize=(10, 6))
                 epochs = range(len(self.train_metrics))
                 
-                # Get metric values
                 train_values = [m.get(metric_key, None) if m else None for m in self.train_metrics]
                 val_values = [m.get(metric_key, None) if m else None for m in self.val_metrics]
                 
-                # Plot metric
                 if train_values and any(v is not None for v in train_values):
                     plt.plot(epochs, train_values, 'b-', label=f'Training {metric_name}')
                 if val_values and any(v is not None for v in val_values):
@@ -529,7 +520,6 @@ class FallDetectionTrainer:
                 plt.legend()
                 plt.grid(True)
                 
-                # Save plot
                 plt.tight_layout()
                 plt.savefig(os.path.join(self.arg.work_dir, f'{metric_key}_curve.png'))
                 plt.close()
@@ -537,10 +527,8 @@ class FallDetectionTrainer:
             
         except Exception as e:
             self.print_log(f"Error plotting training curves: {str(e)}")
-    
+
     def create_folds(self, subjects, val_size=3):
-        """Create folds for cross validation with fixed validation assignments"""
-        # Define fixed fold assignments with validation subjects
         fold_assignments = [
             ([43, 35, 36], "Fold 1: 38.3% falls"),
             ([44, 34, 32], "Fold 2: 39.7% falls"),
@@ -549,14 +537,11 @@ class FallDetectionTrainer:
             ([30, 39], "Fold 5: 43.3% falls")
         ]
         
-        # Create folds with fixed assignments
         folds = []
         for val_subjects, fold_desc in fold_assignments:
-            # Training subjects are all subjects not in validation
             train_subjects = [s for s in subjects if s not in val_subjects]
             folds.append((train_subjects, val_subjects))
             
-            # Log fold information
             fold_num = len(folds)
             self.print_log(f"\nCreated {fold_desc}")
             self.print_log(f"Validation subjects ({len(val_subjects)}): {val_subjects}")
@@ -564,43 +549,29 @@ class FallDetectionTrainer:
     
         return folds
 
-
     def start(self):
-        """Start training process"""
         if self.arg.phase == 'train':
             try:
-                # Set seed for reproducibility
-                init_seed(42)  # Using a fixed seed
+                init_seed(42)
                 
-                # Phase 1: Cross-validation
                 print("\nPhase 1: Leave-Three-Out Cross-validation")
                 
-                # Get all subjects
-                all_subjects = list(range(29, 47))  # Subjects from 29 to 46
-                
-                # Create folds
+                all_subjects = list(range(29, 47))
                 folds = self.create_folds(all_subjects, val_size=3)
                 epoch_metrics = []
                 best_fold_metrics = []
-                all_fold_results = []  # Store results for each fold
+                all_fold_results = []
                 
-                # Train on each fold
                 for fold, (train_subjects, val_subjects) in enumerate(folds, 1):
-                    # Reset seed for each fold to ensure reproducibility
-                    init_seed(42 + fold)  # Different seed for each fold
+                    init_seed(42 + fold)
                     
                     print(f"\nFold {fold}/5")
                     print(f"Training subjects ({len(train_subjects)}): {train_subjects}")
                     print(f"Validation subjects ({len(val_subjects)}): {val_subjects}")
                     
-                    # Set current fold for model saving
                     self.current_fold = fold
-                    
-                    # Reset model and metrics for this fold
                     self.setup_components()
                     self.setup_metrics()
-                    
-                    # Load data for this fold
                     self.load_data(train_subjects, val_subjects)
                     
                     fold_train_losses = []
@@ -609,6 +580,8 @@ class FallDetectionTrainer:
                     best_fold_f1 = 0
                     best_fold_metrics_dict = None
                     best_fold_state = None
+                    patience = 10  # Number of epochs to wait for improvement
+                    epochs_without_improvement = 0
                     
                     for epoch in range(self.arg.num_epoch):
                         with warnings.catch_warnings():
@@ -617,12 +590,10 @@ class FallDetectionTrainer:
                             train_metrics = self.train_epoch(epoch)
                             val_metrics = self.validate(epoch)
                             
-                            # Store losses and metrics
                             fold_train_losses.append(train_metrics['loss'])
                             fold_val_losses.append(val_metrics['loss'])
                             fold_metrics.append(val_metrics)
                             
-                            # Track best model for this fold
                             if val_metrics['f1'] > best_fold_f1:
                                 best_fold_f1 = val_metrics['f1']
                                 best_fold_metrics_dict = val_metrics.copy()
@@ -634,8 +605,14 @@ class FallDetectionTrainer:
                                     'metrics': val_metrics,
                                     'fold': fold
                                 }
-                            
-                            # Store metrics for optimal epoch calculation
+                                epochs_without_improvement = 0  # Reset counter
+                            else:
+                                epochs_without_improvement += 1
+                                if epochs_without_improvement >= patience:
+                                    print(f"\nEarly stopping triggered! No improvement in validation F1 for {patience} epochs.")
+                                    print(f"Best validation F1: {best_fold_f1:.4f} at epoch {best_fold_state['epoch']}")
+                                    break
+                        
                             epoch_metrics.append({
                                 'fold': fold,
                                 'epoch': epoch,
@@ -644,10 +621,8 @@ class FallDetectionTrainer:
                                 'val_f1': val_metrics['f1']
                             })
                             
-                            # Print epoch metrics
-                            self.print_epoch_metrics(epoch, train_metrics, val_metrics)
+                            self.log_epoch_metrics(epoch, train_metrics, val_metrics)
                     
-                    # Store best results for this fold
                     all_fold_results.append({
                         'fold': fold,
                         'train_subjects': train_subjects,
@@ -656,10 +631,8 @@ class FallDetectionTrainer:
                         'metrics': best_fold_metrics_dict
                     })
                     
-                    # Save fold results
                     self.save_fold_results(fold, fold_train_losses, fold_val_losses, fold_metrics)
                     
-                    # Save best model for this fold
                     if best_fold_state:
                         best_fold_metrics.append({
                             'fold': fold,
@@ -668,17 +641,14 @@ class FallDetectionTrainer:
                             'state_dict': best_fold_state['state_dict']
                         })
                 
-                # Print cross-validation summary
                 print("\n" + "="*70)
                 print("Cross-validation Results Summary")
                 print("="*70)
                 
-                # Calculate summary statistics
                 all_metrics = {
                     'accuracy': [], 'precision': [], 'recall': [], 'f1': [], 'best_epoch': []
                 }
                 
-                # Print results for each fold
                 print("\nResults for Each Fold:")
                 print("-"*70)
                 print(f"{'Fold':^6} {'Best Epoch':^12} {'Accuracy':^10} {'Precision':^10} {'Recall':^10} {'F1':^10}")
@@ -688,12 +658,10 @@ class FallDetectionTrainer:
                     fold = result['fold']
                     metrics = result['metrics']
                     
-                    # Print in table format
                     print(f"{fold:^6d} {result['best_epoch']:^12d} "
                           f"{metrics['accuracy']:^10.4f} {metrics['precision']:^10.4f} "
                           f"{metrics['recall']:^10.4f} {metrics['f1']:^10.4f}")
                     
-                    # Collect metrics for summary statistics
                     for metric in all_metrics:
                         if metric == 'best_epoch':
                             all_metrics[metric].append(result['best_epoch'])
@@ -702,7 +670,6 @@ class FallDetectionTrainer:
                 
                 print("-"*70)
                 
-                # Print average metrics
                 print("\nAverage Metrics Across All Folds:")
                 print("-"*70)
                 print(f"{'Metric':^15} {'Mean':^12} {'Std Dev':^12}")
@@ -717,29 +684,24 @@ class FallDetectionTrainer:
                 
                 print("="*70)
                 
-                # Find best performing fold
                 best_fold = max(best_fold_metrics, key=lambda x: x['f1'])
                 print(f"\nBest Fold: {best_fold['fold']} (F1: {best_fold['f1']:.4f})")
                 
-                # Phase 2: Train final model using best fold's configuration
                 print("\nPhase 2: Training final model on all data")
-                self.setup_components()  # Reset model and optimizer
+                self.setup_components()
                 
-                # Load the best fold's weights
                 self.model.load_state_dict(best_fold['state_dict'])
                 self.print_log(f"Loaded weights from best fold (Fold {best_fold['fold']})")
                 
-                # Train on full dataset for the same number of epochs as best fold
-                self.load_data(all_subjects, all_subjects)  # Use all subjects
+                self.load_data(all_subjects, all_subjects)
                 best_epoch = best_fold['epoch']
                 
                 for epoch in range(best_epoch + 1):
                     with warnings.catch_warnings():
                         warnings.filterwarnings('ignore', category=UndefinedMetricWarning)
                         train_metrics = self.train_epoch(epoch)
-                        self.print_epoch_metrics(epoch, train_metrics, None)
+                        self.log_epoch_metrics(epoch, train_metrics, None)
             
-                # Save final model
                 final_state = {
                     'epoch': best_epoch,
                     'state_dict': self.model.state_dict(),
@@ -753,102 +715,58 @@ class FallDetectionTrainer:
                 torch.save(final_state, os.path.join(self.arg.work_dir, final_name))
                 self.print_log(f"Saved final model: {final_name}")
                 
-                # Save overall results
                 self.save_results()
                 
             except Exception as e:
                 print(f"Error during training: {str(e)}")
                 traceback.print_exc()
-                self.save_results()  # Save results even if there's an error
+                self.save_results()
         else:
             self.test()
     
-    def log_progress(self, epoch, train_metrics, val_metrics=None):
-        """Log training progress"""
-        log_str = f'\nEpoch {epoch}:\n'
-        log_str += f"Training - Loss: {train_metrics['loss']:.4f}, "
-        log_str += f"Accuracy: {train_metrics['accuracy']:.4f}, "
-        log_str += f"Precision: {train_metrics['precision']:.4f}, "
-        log_str += f"Recall: {train_metrics['recall']:.4f}, "
-        log_str += f"F1: {train_metrics['f1']:.4f}\n"
-        
+    def log_epoch_metrics(self, epoch, train_metrics, val_metrics):
+        msg = f"Epoch {epoch} - Train: Loss: {train_metrics['loss']:.4f}, Acc: {train_metrics['accuracy']:.4f}, Prec: {train_metrics['precision']:.4f}, Rec: {train_metrics['recall']:.4f}, F1: {train_metrics['f1']:.4f}, FAR: {train_metrics['false_alarm_rate']:.4f}, MR: {train_metrics['miss_rate']:.4f}"
         if val_metrics:
-            log_str += f"Validation - Loss: {val_metrics['loss']:.4f}, "
-            log_str += f"Accuracy: {val_metrics['accuracy']:.4f}, "
-            log_str += f"Precision: {val_metrics['precision']:.4f}, "
-            log_str += f"Recall: {val_metrics['recall']:.4f}, "
-            log_str += f"F1: {val_metrics['f1']:.4f}\n"
-            
-        self.print_log(log_str)
+            msg += (f" | Val: Loss: {val_metrics['loss']:.4f}, "
+                    f"Acc: {val_metrics['accuracy']:.4f}, "
+                    f"Prec: {val_metrics['precision']:.4f}, "
+                    f"Rec: {val_metrics['recall']:.4f}, "
+                    f"F1: {val_metrics['f1']:.4f}, "
+                    f"FAR: {val_metrics['false_alarm_rate']:.4f}, "
+                    f"MR: {val_metrics['miss_rate']:.4f}, "
+                    f"Trial-F1: {val_metrics.get('trial_f1', None):.4f}")
+        self.print_log(msg)
+
+    def print_log(self, msg, print_time=True):
+        if print_time:
+            time_str = time.strftime('[ %Y-%m-%d %H:%M:%S ]', time.localtime())
+            msg = f'{time_str} {msg}'
+        print(msg)
 
     def calculate_optimal_epoch(self, epoch_metrics):
-        """Calculate optimal epoch based on validation metrics"""
-        # Group metrics by epoch and calculate average F1 score
         epoch_avg_metrics = {}
         for metric in epoch_metrics:
-            epoch = metric['epoch']
-            if epoch not in epoch_avg_metrics:
-                epoch_avg_metrics[epoch] = {'val_f1': [], 'val_loss': []}
-            epoch_avg_metrics[epoch]['val_f1'].append(metric['val_f1'])
-            epoch_avg_metrics[epoch]['val_loss'].append(metric['val_loss'])
+            epoch_ = metric['epoch']
+            if epoch_ not in epoch_avg_metrics:
+                epoch_avg_metrics[epoch_] = {'val_f1': [], 'val_loss': []}
+            epoch_avg_metrics[epoch_]['val_f1'].append(metric['val_f1'])
+            epoch_avg_metrics[epoch_]['val_loss'].append(metric['val_loss'])
         
-        # Calculate average metrics for each epoch
         avg_metrics = {
-            epoch: {
-                'val_f1': np.mean(metrics['val_f1']),
-                'val_loss': np.mean(metrics['val_loss'])
+            epoch_: {
+                'val_f1': np.mean(m['val_f1']),
+                'val_loss': np.mean(m['val_loss'])
             }
-            for epoch, metrics in epoch_avg_metrics.items()
+            for epoch_, m in epoch_avg_metrics.items()
         }
         
-        # Find epoch with best average F1 score
         best_epoch = max(avg_metrics.keys(), key=lambda e: avg_metrics[e]['val_f1'])
-        
         return best_epoch
 
-    def print_epoch_metrics(self, epoch, train_metrics, val_metrics):
-        """Print metrics for current epoch"""
-        # Format training metrics
-        train_msg = (f"Epoch {epoch} - Train: "
-                    f"Loss: {train_metrics['loss']:.4f}, "
-                    f"Acc: {train_metrics['accuracy']:.4f}, "
-                    f"Prec: {train_metrics['precision']:.4f}, "
-                    f"Rec: {train_metrics['recall']:.4f}, "
-                    f"F1: {train_metrics['f1']:.4f}, "
-                    f"FAR: {train_metrics['false_alarm_rate']:.4f}, "
-                    f"MR: {train_metrics['miss_rate']:.4f}")
-        
-        # Format validation metrics if available
-        if val_metrics and any(val_metrics.values()):
-            val_msg = (f"Val: "
-                      f"Loss: {val_metrics['loss']:.4f}, "
-                      f"Acc: {val_metrics['accuracy']:.4f}, "
-                      f"Prec: {val_metrics['precision']:.4f}, "
-                      f"Rec: {val_metrics['recall']:.4f}, "
-                      f"F1: {val_metrics['f1']:.4f}, "
-                      f"FAR: {val_metrics['false_alarm_rate']:.4f}, "
-                      f"MR: {val_metrics['miss_rate']:.4f}")
-            self.print_log(f"{train_msg} | {val_msg}")
-        else:
-            self.print_log(train_msg)
-
-    @staticmethod
-    def import_class(name):
-        """Dynamically import a class"""
-        mod_str, _sep, class_str = name.rpartition('.')
-        __import__(mod_str)
-        try:
-            return getattr(sys.modules[mod_str], class_str)
-        except AttributeError:
-            raise ImportError(f'Class {class_str} cannot be found')
-
     def save_fold_results(self, fold, train_losses, val_losses, metrics):
-        """Save results for each fold"""
-        # Create fold directory
         fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
         os.makedirs(fold_dir, exist_ok=True)
         
-        # Save metrics
         results = {
             'train_losses': train_losses,
             'val_losses': val_losses,
@@ -857,7 +775,6 @@ class FallDetectionTrainer:
         with open(os.path.join(fold_dir, 'metrics.json'), 'w') as f:
             json.dump(results, f, indent=4)
         
-        # Plot and save loss curves for this fold
         plt.figure(figsize=(10, 6))
         plt.plot(train_losses, label='Train Loss')
         plt.plot(val_losses, label='Validation Loss')
@@ -869,46 +786,260 @@ class FallDetectionTrainer:
         plt.savefig(os.path.join(fold_dir, 'loss_curve.png'))
         plt.close()
         
-        # Log fold results
         self.print_log(f"\nFold {fold} Results:")
         self.print_log(f"Final Train Loss: {train_losses[-1]:.4f}")
         self.print_log(f"Final Val Loss: {val_losses[-1]:.4f}")
         self.print_log(f"Best Val F1: {max(m['f1'] for m in metrics):.4f}")
         self.print_log(f"Results saved to: {fold_dir}")
 
-if __name__ == "__main__":
-    parser = get_args()
-    # Load config
-    p = parser.parse_args()
-    if p.config is not None:
-        with open(p.config, 'r', encoding='utf-8') as f:
-            default_arg = yaml.safe_load(f)
+    def test(self):
+        """Test loop with trial-level aggregation as well."""
+        self.model.eval()
+        test_metrics = {'loss': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'accuracy': 0, 'false_alarm_rate': 0, 'miss_rate': 0}
+        total_samples = 0
+        trial_aggregator = defaultdict(lambda: {'probs': [], 'label': None})
+        all_probs = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for inputs, targets, idx in tqdm(self.data_loader['test'], desc='Testing'):
+                acc_data = inputs['accelerometer'].to(self.device)
+                targets = targets.to(self.device).float()
+                
+                # Model returns probabilities of shape [batch_size]
+                probs = self.model(acc_data.float())
+                loss = F.binary_cross_entropy(probs, targets)
+                
+                batch_metrics = self.compute_metrics(probs, targets)
+                batch_size = targets.size(0)
+                total_samples += batch_size
+                
+                for key in test_metrics:
+                    if key == 'loss':
+                        test_metrics[key] += loss.item() * batch_size
+                    else:
+                        test_metrics[key] += batch_metrics[key] * batch_size
+                
+                # Store predictions for confusion matrix
+                all_probs.extend(probs.cpu().numpy())
+                all_labels.extend(targets.cpu().numpy())
+                
+                # Store window-level predictions for later trial-level aggregation
+                for i, trial_id in enumerate(idx):
+                    trial_aggregator[trial_id.item()]['probs'].append(probs[i].item())
+                    trial_aggregator[trial_id.item()]['label'] = targets[i].item()
+        
+        # Normalize metrics by total samples
+        for key in test_metrics:
+            test_metrics[key] /= total_samples
+        
+        # Compute trial-level metrics
+        trial_probs, trial_labels = self.aggregate_trial_predictions(trial_aggregator)
+        trial_metrics = self.compute_trial_metrics(trial_probs, trial_labels)
+        
+        # Add trial-level metrics to test_metrics
+        test_metrics.update({f'trial_{k}': v for k, v in trial_metrics.items()})
+        
+        # Plot confusion matrix
+        all_probs = np.array(all_probs)
+        all_labels = np.array(all_labels)
+        predictions = (all_probs > 0.5).astype(int)
+        confusion = confusion_matrix(all_labels, predictions)
+        self.plot_confusion_matrix(confusion)
+        
+        # Perform threshold sweep evaluation
+        self.print_log("\nWindow-level Threshold Sweep Analysis:")
+        window_sweep = self.evaluate_threshold_sweep(all_probs, all_labels)
+        
+        self.print_log("\nTrial-level Threshold Sweep Analysis:")
+        trial_sweep = self.evaluate_threshold_sweep(trial_probs, trial_labels)
+        
+        # Save all results
+        results = {
+            'window_metrics': test_metrics,
+            'trial_metrics': trial_metrics,
+            'window_sweep': window_sweep,
+            'trial_sweep': trial_sweep,
+            'confusion_matrix': confusion.tolist()
+        }
+        
+        save_path = os.path.join(self.arg.work_dir, 'test_results.json')
+        with open(save_path, 'w') as f:
+            json.dump(results, f, indent=4)
+        
+        return test_metrics
 
-        # Validate arguments
-        key = vars(p).keys()
-        for k in default_arg.keys():
-            if k not in key:
-                print('WRONG ARG: {}'.format(k))
-                assert (k in key)
-        parser.set_defaults(**default_arg)
+    def evaluate_threshold_sweep(self, probabilities, targets):
+        """
+        Evaluate model performance across different thresholds with enhanced metrics and visualizations.
+        Args:
+            probabilities: numpy array of shape (num_samples,) containing predicted probabilities
+            targets: numpy array of shape (num_samples,) containing ground truth labels (0/1)
+        Returns:
+            dict: Dictionary containing best metrics and their corresponding thresholds
+        """
+        import matplotlib.pyplot as plt
+        from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix
+        import seaborn as sns
+        
+        # Calculate ROC curve and AUC
+        fpr, tpr, roc_thresholds = roc_curve(targets, probabilities)
+        roc_auc = roc_auc_score(targets, probabilities)
+        
+        # Calculate Precision-Recall curve
+        precision_curve, recall_curve, pr_thresholds = precision_recall_curve(targets, probabilities)
+        
+        # Initialize best metrics tracking
+        best_metrics = {
+            'f1': {'score': 0, 'threshold': 0},
+            'precision': {'score': 0, 'threshold': 0},
+            'recall': {'score': 0, 'threshold': 0},
+            'accuracy': {'score': 0, 'threshold': 0},
+            'specificity': {'score': 0, 'threshold': 0},
+            'balanced_accuracy': {'score': 0, 'threshold': 0}
+        }
+        
+        # Create figure for ROC and PR curves
+        plt.figure(figsize=(15, 5))
+        
+        # Plot ROC curve
+        plt.subplot(1, 3, 1)
+        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC) Curve')
+        plt.legend(loc="lower right")
+        
+        # Plot Precision-Recall curve
+        plt.subplot(1, 3, 2)
+        plt.plot(recall_curve, precision_curve, color='blue', lw=2)
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curve')
+        
+        # Print header for threshold sweep results
+        self.print_log("\nThreshold Sweep Results:")
+        self.print_log("-" * 80)
+        header = f"{'Threshold':^10} | {'F1':^8} | {'Precision':^10} | {'Recall':^8} | {'Accuracy':^10} | {'Specificity':^12} | {'Bal Acc':^8}"
+        self.print_log(header)
+        self.print_log("-" * 80)
+        
+        # Perform threshold sweep
+        for threshold in np.arange(0.05, 1.0, 0.05):
+            preds_binary = (probabilities >= threshold).astype(int)
+            tn, fp, fn, tp = confusion_matrix(targets, preds_binary).ravel()
+            
+            # Calculate metrics
+            accuracy = (tp + tn) / (tp + tn + fp + fn)
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            balanced_acc = (recall + specificity) / 2
+            
+            # Update best metrics
+            metrics_dict = {
+                'f1': f1,
+                'precision': precision,
+                'recall': recall,
+                'accuracy': accuracy,
+                'specificity': specificity,
+                'balanced_accuracy': balanced_acc
+            }
+            
+            for metric, value in metrics_dict.items():
+                if value > best_metrics[metric]['score']:
+                    best_metrics[metric] = {'score': value, 'threshold': threshold}
+            
+            # Print results in table format
+            result_line = f"{threshold:^10.2f} | {f1:^8.4f} | {precision:^10.4f} | {recall:^8.4f} | "
+            result_line += f"{accuracy:^10.4f} | {specificity:^12.4f} | {balanced_acc:^8.4f}"
+            self.print_log(result_line)
+        
+        # Plot confusion matrix for best F1 threshold
+        plt.subplot(1, 3, 3)
+        best_threshold = best_metrics['f1']['threshold']
+        best_preds = (probabilities >= best_threshold).astype(int)
+        cm = confusion_matrix(targets, best_preds)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title(f'Confusion Matrix\n(threshold={best_threshold:.2f})')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        
+        # Save the plots
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.arg.work_dir, 'evaluation_metrics.png'))
+        plt.close()
+        
+        # Print best metrics summary
+        self.print_log("\nBest Metrics Summary:")
+        self.print_log("-" * 80)
+        for metric, values in best_metrics.items():
+            self.print_log(f"Best {metric:15s}: {values['score']:.4f} at threshold {values['threshold']:.2f}")
+        
+        return best_metrics
 
-    arg = parser.parse_args()
+    def plot_confusion_matrix(self, confusion):
+        plt.figure(figsize=(8, 6))
+        plt.imshow(confusion, interpolation='nearest', cmap=plt.cm.Blues)
+        plt.title('Confusion Matrix')
+        
+        classes = ['Non-Fall', 'Fall']
+        tick_marks = np.arange(len(classes))
+        plt.xticks(tick_marks, classes)
+        plt.yticks(tick_marks, classes)
+        
+        thresh = confusion.max() / 2.
+        for i, j in itertools.product(range(confusion.shape[0]), range(confusion.shape[1])):
+            plt.text(j, i, format(confusion[i, j], 'd'),
+                     horizontalalignment="center",
+                     color="white" if confusion[i, j] > thresh else "black")
+        
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.arg.work_dir, 'confusion_matrix.png'))
+        plt.close()
 
-    # Initialize training
-    init_seed(arg.seed)
-    trainer = FallDetectionTrainer(arg)
-    trainer.start()
+    def save_config(self):
+        if not hasattr(self.arg, 'config') or not os.path.isfile(self.arg.config):
+            raise ValueError("Config file not found or not specified.")
+        
+        dest_path = os.path.join(self.arg.work_dir, os.path.basename(self.arg.config))
+        shutil.copy2(self.arg.config, dest_path)
+        self.print_log(f"Configuration saved to {dest_path}")
+    
+    def count_parameters(self, model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    def import_class(self, name):
+        try:
+            components = name.split('.')
+            module = ".".join(components[:-1])
+            class_name = components[-1]
+            
+            if module:
+                m = __import__(module)
+                for comp in components[1:-1]:
+                    m = getattr(m, comp)
+                return getattr(m, class_name)
+            else:
+                return globals()[class_name]
+        except Exception as e:
+            print(f"Error importing class {name}: {str(e)}")
+            raise
+
+
 class FallDetectionTrainer(FallDetectionTrainer):
     """Additional methods for FallDetectionTrainer"""
     
     def load_data(self, train_subjects, test_subjects):
-        """Load and prepare datasets"""
+        """Load and prepare datasets with existing approach."""
         Feeder = self.import_class(self.arg.feeder)
-        
-        # Prepare datasets
         builder = prepare_smartfallmm(self.arg)
-        
-        # Training data
         train_data = filter_subjects(builder, train_subjects)
         self.data_loader['train'] = torch.utils.data.DataLoader(
             dataset=Feeder(
@@ -921,7 +1052,6 @@ class FallDetectionTrainer(FallDetectionTrainer):
             pin_memory=True
         )
         
-        # Validation data
         if self.arg.include_val:
             val_data = filter_subjects(builder, test_subjects)
             self.data_loader['val'] = torch.utils.data.DataLoader(
@@ -934,13 +1064,11 @@ class FallDetectionTrainer(FallDetectionTrainer):
                 num_workers=self.arg.num_worker,
                 pin_memory=True
             )
-    
+
     def plot_training_curves(self):
-        """Generate and save training visualization plots"""
-        # Create figure with subplots
+        """Plot and save training visualization plots with existing approach."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
         
-        # Plot losses
         epochs = range(len(self.train_metrics))
         train_loss = [m['loss'] for m in self.train_metrics]
         val_loss = [m['loss'] for m in self.val_metrics]
@@ -952,7 +1080,6 @@ class FallDetectionTrainer(FallDetectionTrainer):
         ax1.set_ylabel('Loss')
         ax1.legend()
         
-        # Plot metrics
         train_precision = [m['precision'] for m in self.train_metrics]
         train_recall = [m['recall'] for m in self.train_metrics]
         val_precision = [m['precision'] for m in self.val_metrics]
@@ -967,57 +1094,82 @@ class FallDetectionTrainer(FallDetectionTrainer):
         ax2.set_ylabel('Score')
         ax2.legend()
         
-        # Save plot
         plt.tight_layout()
         plt.savefig(os.path.join(self.arg.work_dir, 'training_curves.png'))
         plt.close()
         self.print_log(f"Saved training curves plot to {os.path.join(self.arg.work_dir, 'training_curves.png')}")
-    
+
     def test(self):
-        """Evaluate model on test set"""
+        """Test loop with window-level and trial-level aggregator."""
         self.model.eval()
-        metrics = []
-        confusion = np.zeros((2, 2))  # Binary classification
+        test_metrics = {'loss': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'accuracy': 0, 'false_alarm_rate': 0, 'miss_rate': 0}
+        total_samples = 0
+        trial_aggregator = defaultdict(lambda: {'probs': [], 'label': None})
+        all_probs = []
+        all_labels = []
         
         with torch.no_grad():
             for inputs, targets, idx in tqdm(self.data_loader['test'], desc='Testing'):
-                # Move data to device
                 acc_data = inputs['accelerometer'].to(self.device)
-                targets = targets.to(self.device)
+                targets = targets.to(self.device).float()
                 
-                # Forward pass
-                outputs = self.model(acc_data.float())
-                predictions = (outputs[0] > 0.5).float()
+                # Model returns only probabilities, no need to unpack
+                probs = self.model(acc_data.float())
+                if isinstance(probs, tuple):
+                    probs = probs[0]  # Handle case where model returns tuple
                 
-                # Update confusion matrix
-                for pred, target in zip(predictions, targets):
-                    confusion[int(target), int(pred)] += 1
+                loss = F.binary_cross_entropy(probs, targets)
                 
-                # Compute metrics
-                batch_metrics = self.compute_metrics(outputs[0], targets)
-                metrics.append(batch_metrics)
+                batch_metrics = self.compute_metrics(probs, targets)
+                batch_size = targets.size(0)
+                total_samples += batch_size
+                
+                for key in test_metrics:
+                    if key == 'loss':
+                        test_metrics[key] += loss.item() * batch_size
+                    else:
+                        test_metrics[key] += batch_metrics[key] * batch_size
+                
+                # Store predictions for confusion matrix
+                all_probs.extend(probs.cpu().numpy())
+                all_labels.extend(targets.cpu().numpy())
+                
+                # Store window-level predictions for later trial-level aggregation
+                for i, trial_id in enumerate(idx):
+                    trial_aggregator[trial_id.item()]['probs'].append(probs[i].item())
+                    trial_aggregator[trial_id.item()]['label'] = targets[i].item()
         
-        # Aggregate metrics
-        final_metrics = {
-            key: np.mean([m[key] for m in metrics]) 
-            for key in metrics[0].keys()
-        }
+        # Normalize metrics by total samples
+        for key in test_metrics:
+            test_metrics[key] /= total_samples
         
-        # Calculate confusion matrix metrics
-        tn, fp, fn, tp = confusion.ravel()
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-        npv = tn / (tn + fn) if (tn + fn) > 0 else 0
+        # Compute trial-level metrics
+        trial_probs, trial_labels = self.aggregate_trial_predictions(trial_aggregator)
+        trial_metrics = self.compute_trial_metrics(trial_probs, trial_labels)
         
-        # Add additional metrics
-        final_metrics.update({
-            'specificity': specificity,
-            'npv': npv,
-            'confusion_matrix': confusion.tolist()
-        })
+        # Add trial-level metrics to test_metrics
+        test_metrics.update({f'trial_{k}': v for k, v in trial_metrics.items()})
         
-        # Save results
+        # Plot confusion matrix
+        all_probs = np.array(all_probs)
+        all_labels = np.array(all_labels)
+        predictions = (all_probs > 0.5).astype(int)
+        confusion = confusion_matrix(all_labels, predictions)
+        self.plot_confusion_matrix(confusion)
+        
+        # Perform threshold sweep evaluation
+        self.print_log("\nWindow-level Threshold Sweep Analysis:")
+        window_sweep = self.evaluate_threshold_sweep(all_probs, all_labels)
+        
+        self.print_log("\nTrial-level Threshold Sweep Analysis:")
+        trial_sweep = self.evaluate_threshold_sweep(trial_probs, trial_labels)
+        
+        # Save all results
         results = {
-            'metrics': final_metrics,
+            'window_metrics': test_metrics,
+            'trial_metrics': trial_metrics,
+            'window_sweep': window_sweep,
+            'trial_sweep': trial_sweep,
             'confusion_matrix': confusion.tolist()
         }
         
@@ -1025,62 +1177,48 @@ class FallDetectionTrainer(FallDetectionTrainer):
         with open(save_path, 'w') as f:
             json.dump(results, f, indent=4)
         
-        # Log results
-        self.print_log('\nTest Results:')
-        self.print_log(f'Precision: {final_metrics["precision"]:.4f}')
-        self.print_log(f'Recall: {final_metrics["recall"]:.4f}')
-        self.print_log(f'F1-Score: {final_metrics["f1"]:.4f}')
-        self.print_log(f'False Alarm Rate: {final_metrics["false_alarm_rate"]:.4f}')
-        self.print_log(f'Specificity: {final_metrics["specificity"]:.4f}')
-        self.print_log(f'NPV: {final_metrics["npv"]:.4f}')
+        return test_metrics
+
+    def compute_trial_metrics(self, trial_probs, trial_labels):
+        """
+        Compute trial-level metrics from aggregated predictions.
+        """
+        predictions = (trial_probs > 0.5).astype(np.float32)
+        tp = ((predictions == 1) & (trial_labels == 1)).sum().astype(float)
+        fp = ((predictions == 1) & (trial_labels == 0)).sum().astype(float)
+        fn = ((predictions == 0) & (trial_labels == 1)).sum().astype(float)
+        tn = ((predictions == 0) & (trial_labels == 0)).sum().astype(float)
         
-        # Plot confusion matrix
-        self.plot_confusion_matrix(confusion)
-    
-    def plot_confusion_matrix(self, confusion):
-        """Plot and save confusion matrix visualization"""
-        plt.figure(figsize=(8, 6))
-        plt.imshow(confusion, interpolation='nearest', cmap=plt.cm.Blues)
-        plt.title('Confusion Matrix')
+        precision = tp / (tp + fp + 1e-10)
+        recall = tp / (tp + fn + 1e-10)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+        accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-10)
+        far = fp / (fp + tp + 1e-10)
+        mr = fn / (fn + tp + 1e-10)
         
-        # Add labels
-        classes = ['Non-Fall', 'Fall']
-        tick_marks = np.arange(len(classes))
-        plt.xticks(tick_marks, classes)
-        plt.yticks(tick_marks, classes)
-        
-        # Add text annotations
-        thresh = confusion.max() / 2.
-        for i, j in itertools.product(range(confusion.shape[0]), range(confusion.shape[1])):
-            plt.text(j, i, format(confusion[i, j], 'd'),
-                     horizontalalignment="center",
-                     color="white" if confusion[i, j] > thresh else "black")
-        
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        plt.tight_layout()
-        
-        # Save plot
-        plt.savefig(os.path.join(self.arg.work_dir, 'confusion_matrix.png'))
-        plt.close()
-    
-    def print_log(self, msg, print_time=True):
-        """Print and save log messages"""
-        if print_time:
-            localtime = time.asctime(time.localtime(time.time()))
-            msg = f"[ {localtime} ] {msg}"
-        print(msg)
-        if self.arg.print_log:
-            with open(f'{self.arg.work_dir}/log.txt', 'a') as f:
-                print(msg, file=f)
-    
-    def save_config(self):
-        """Save configuration file"""
-        shutil.copy2(
-            self.arg.config,
-            os.path.join(self.arg.work_dir, os.path.basename(self.arg.config))
-        )
-    
-    def count_parameters(self, model):
-        """Count total trainable parameters"""
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'accuracy': accuracy,
+            'false_alarm_rate': far,
+            'miss_rate': mr
+        }
+
+if __name__ == "__main__":
+    parser = get_args()
+    p = parser.parse_args()
+    if p.config is not None:
+        with open(p.config, 'r', encoding='utf-8') as f:
+            default_arg = yaml.safe_load(f)
+        key = vars(p).keys()
+        for k in default_arg.keys():
+            if k not in key:
+                print('WRONG ARG: {}'.format(k))
+                assert (k in key)
+        parser.set_defaults(**default_arg)
+
+    arg = parser.parse_args()
+    init_seed(arg.seed)
+    trainer = FallDetectionTrainer(arg)
+    trainer.start()

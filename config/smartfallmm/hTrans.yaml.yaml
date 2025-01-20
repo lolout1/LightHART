@@ -1,28 +1,32 @@
 # Basic configuration
-model: "Models.StudentTrans2.PyTorchTransformer"
+model: "Models.HierarchicalTransformer.HierarchicalTransformer"
 dataset: "smartfallmm"
 
 # Model parameters - these are passed directly to the model
 model_args:
-  seq_len: 128       # same as n_timesteps
-  channels: 4        # watch accelerometer (x, y, z)
-  num_layers: 4
+  window_seq_len: 128          # Sequence length per window
+  num_windows: 3               # Number of consecutive windows per sample
+  channels: 4                   # 3 accelerometer axes + 1 SMV
   embed_dim: 128
-  mlp_dim: 16
   num_heads: 4
+  mlp_dim: 256
+  num_layers_window: 2          # Transformer layers for window-level
+  num_layers_sequence: 2        # Transformer layers for sequence-level
   dropout_rate: 0.25
-  attn_drop_rate: 0.25
-
+  attn_dropout_rate: 0.25
+  num_classes: 1                # Binary classification
 
 ## Dataset arguments must match the exact structure expected by the dataset class
 dataset_args:
-  mode: "sliding_window"        # pooling mode
-  max_length: 128         # sequence length
-  task: "fd"              # task: fall detection
-  modalities: ["accelerometer"]  # only accelerometer data
+  mode: "sliding_window"          # Pooling mode
+  max_length: 128                 # Sequence length
+  task: "fd"                      # Task: fall detection
+  modalities: ["accelerometer"]   # Only accelerometer data
   age_group: ["young"]
   sensors: ["watch"]
-  normalize: true         # normalize input data
+  normalize: true                 # Normalize input data
+  stride: 32                      # Stride length for sliding window
+  num_context_windows: 1          # Number of surrounding windows (on each side)
 
 # Subject IDs as a flat list for the argument parser
 subjects:
@@ -42,9 +46,9 @@ subjects:
   - 46
 
 # Training parameters that match main4.py arguments exactly
-batch_size: 64
-test_batch_size: 64 
-val_batch_size: 64
+batch_size: 32
+test_batch_size: 32 
+val_batch_size: 32
 num_epoch: 150
 start_epoch: 0
 
@@ -59,11 +63,11 @@ device: [0]
 # Feeder settings that match main4.py's requirements
 feeder: "Feeder.Make_Dataset.UTD_mm"
 train_feeder_args:
-  batch_size: 64
+  batch_size: 32
 val_feeder_args:
-  batch_size: 64
+  batch_size: 32
 test_feeder_args:
-  batch_size: 64
+  batch_size: 32
 
 # Additional training settings
 num_worker: 4

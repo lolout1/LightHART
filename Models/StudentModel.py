@@ -16,7 +16,6 @@ class PrecisionBlock(nn.Module):
                                padding=kernel_size // 2)
         self.bn2 = nn.BatchNorm1d(out_channels)
 
-        # Weighted residual connection
         self.res_weight = nn.Parameter(torch.ones(1))
         self.shortcut = (
             nn.Conv1d(in_channels, out_channels, 1)
@@ -24,11 +23,12 @@ class PrecisionBlock(nn.Module):
         )
 
     def forward(self, x):
+        """
+        x shape: [batch_size, in_channels, length]
+        """
         identity = self.shortcut(x)
-
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-
         out = out + self.res_weight * identity
         return F.relu(out)
 
@@ -49,43 +49,44 @@ class TemporalAttention(nn.Module):
         )
 
     def forward(self, x):
+        """
+        x shape: [batch_size, channels, length]
+        """
         b, c, t = x.size()
         avg_pooled = self.avg_pool(x).view(b, c)
         max_pooled = self.max_pool(x).view(b, c)
-
-        # Combine avg + max
         combined = torch.cat([avg_pooled, max_pooled], dim=1)
         scale = self.fc(combined).view(b, c, 1)
         return x * scale.expand_as(x)
 
 class StudentModel(nn.Module):
     """
-    Student model: Single-modality (watch accelerometer).
-    Incorporates magnitude computation similar to TeacherModel.
-    Uses a stack of PrecisionBlocks + TemporalAttention to capture fall patterns.
+    Student model for watch accelerometer data
+    expecting input of shape [batch_size, window_size, channels].
     """
     def __init__(self,
-                 input_channels=4,  # x, y, z, magnitude
-                 hidden_dim=128,
+                 input_channels=3,
+                 hidden_dim=48,
                  num_blocks=4,
-                 dropout_rate=0.3):
+                 dropout_rate=0.2):
         super().__init__()
-        self.input_proj = nn.Sequential(    
+        self.input_channels = input_channels
+        self.hidden_dim = hidden_dim
+        self.num_blocks = num_blocks
+        self.dropout_rate = dropout_rate
+
+        self.input_proj = nn.Sequential(
             nn.Linear(input_channels, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout_rate * 0.5)  # mild dropout in projection
+            nn.Dropout(dropout_rate * 0.5)
         )
 
-        # Stacked temporal blocks
         self.temporal_blocks = nn.ModuleList([
-            PrecisionBlock(hidden_dim, hidden_dim, kernel_size=(2*i + 3))
+            PrecisionBlock(hidden_dim, hidden_dim, kernel_size=(2 * i + 3))
             for i in range(num_blocks)
         ])
-
         self.attention = TemporalAttention(channels=hidden_dim)
-
-        # Classification head
         self.fall_confidence = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
@@ -93,32 +94,31 @@ class StudentModel(nn.Module):
             nn.Linear(hidden_dim // 2, 1)
         )
 
-        self.sigmoid = nn.Sigmoid()
-
     def forward(self, x):
         """
-        x: [B, T, 3] => raw watch accelerometer data (x, y, z)
-        Returns:
-            student_prob: [B], predicted fall probability
-            student_feat: [B, hidden_dim], final feature
+        Expects x with shape: [batch_size, window_size, channels]
         """
-        # Compute magnitude and append to input channels
-        magnitude = torch.sqrt(torch.sum(x ** 2, dim=-1, keepdim=True))  # [B, T, 1]
-        x = torch.cat([x, magnitude], dim=-1)  # Now [B, T, 4]
+        # Transpose to [batch_size, channels, window_size] for Conv1d
+        x = x.permute(0, 2, 1)  # => [B, channels, length]
 
-        # Project inputs => [B, T, hidden_dim]
-        x = self.input_proj(x)
-        # => [B, hidden_dim, T]
-        x = x.transpose(1, 2)
+        # (1) Project each time step from input_channels -> hidden_dim
+        # We flatten [B, channels, length] => reshape for linear => revert
+        b, c, length = x.shape
+        x = x.reshape(b * length, c)  # => [B*length, channels]
+        x = self.input_proj(x)        # => [B*length, hidden_dim]
+        x = x.reshape(b, length, self.hidden_dim)
+        # Transpose to [B, hidden_dim, length] for conv
+        x = x.permute(0, 2, 1)  # => [B, hidden_dim, length]
 
-        # Pass through multiple blocks + attention
+        # (2) Pass through multiple temporal blocks + attention
         for block in self.temporal_blocks:
             x = block(x)
             x = self.attention(x)
 
-        # Global average pool => [B, hidden_dim]
+        # (3) Global average pool => [B, hidden_dim]
+        # shape => [B, hidden_dim, length]
         student_feat = F.adaptive_avg_pool1d(x, 1).squeeze(-1)
-
-        student_prob = self.fall_confidence(student_feat).squeeze(-1)
-        # = self.sigmoid(logit)
+        # (4) Classification
+        logits = self.fall_confidence(student_feat).squeeze(-1)
+        student_prob = torch.sigmoid(logits)  # range [0,1]
         return student_prob, student_feat

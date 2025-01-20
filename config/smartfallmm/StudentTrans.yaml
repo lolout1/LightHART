@@ -4,7 +4,7 @@ dataset: "smartfallmm"
 
 # Model parameters - these are passed directly to the model
 model_args:
-  input_channels: 3      # watch accelerometer input (x, y, z)
+  input_channels: 3     # watch accelerometer input (x, y, z)
   d_model: 128           # embedding dimension
   nhead: 4               # number of attention heads
   num_layers: 2          # number of transformer encoder layers
@@ -13,8 +13,8 @@ model_args:
 
 # Dataset arguments must match the exact structure expected by the dataset class
 dataset_args:
-  mode: "avg_pool"        # pooling mode
-  max_length: 64         # sequence length
+  mode: "sliding_window"        # pooling mode
+  max_length: 128         # sequence length
   task: "fd"              # task: fall detection
   modalities: ["accelerometer"]  # only accelerometer data
   age_group: ["young"]

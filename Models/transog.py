@@ -1,116 +1,87 @@
-import torch
+import torch 
 from torch import nn
-from torch.nn import Linear, LayerNorm, TransformerEncoder, TransformerEncoderLayer
+from typing import Dict, Tuple
+from torch.nn import Linear, LayerNorm, TransformerEncoder, TransformerEncoderLayer, ModuleList
 import torch.nn.functional as F
 from einops import rearrange
-
+import itertools
+import numpy as np
+#from util.graph import Graph
+import math
 
 class TransformerEncoderWAttention(nn.TransformerEncoder):
-    """
-    Custom Transformer Encoder that captures attention weights during the forward pass.
-    """
-    def forward(self, src, mask=None, src_key_padding_mask=None):
+    def forward(self, src, mask = None, src_key_padding_mask = None):
         output = src
         self.attention_weights = []
-        for layer in self.layers:
-            output, attn = layer.self_attn(
-                output, output, output,
-                attn_mask=mask,
-                key_padding_mask=src_key_padding_mask,
-                need_weights=True
-            )
+        for layer in self.layers :
+            output, attn = layer.self_attn(output, output, output, attn_mask = mask,
+                                            key_padding_mask = src_key_padding_mask, need_weights = True)
             self.attention_weights.append(attn)
-            output = layer(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+            output = layer(output, src_mask = mask, src_key_padding_mask = src_key_padding_mask)
         return output
 
 
 class TransModel(nn.Module):
-    """
-    Transformer-based model for fall detection using accelerometer data.
-    """
-    def __init__(
-        self,
-        acc_frames=128,
-        acc_coords=4,
-        num_classes: int = 2,
-        num_heads=2,
-        num_layers=2,
-        embed_dim=32,
-        activation='relu',
-        **kwargs
-    ):
+    def __init__(self,
+                mocap_frames = 128,
+                num_joints = 32,
+                acc_frames = 128,
+                num_classes:int = 8, 
+                num_heads = 2, 
+                acc_coords = 4, 
+                av = False,
+                num_layer = 2, norm_first = True, 
+                embed_dim= 8, activation = 'relu',
+                **kwargs) :
         super().__init__()
-        # Input projection using Conv1D layers
-        self.input_proj = nn.Sequential(
-            nn.Conv1d(acc_coords, embed_dim, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv1d(embed_dim, embed_dim * 2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv1d(embed_dim * 2, embed_dim, kernel_size=3, stride=1, padding=1),
-            nn.ReLU()
-        )
+        self.data_shape = (acc_frames, acc_coords)
+        self.length = self.data_shape[0]
+        size = self.data_shape[1]
+        #self.channel_embed_dim = embed_dim // 2
+        self.input_proj = nn.Sequential(nn.Conv1d(size, embed_dim, kernel_size=3, stride=1, padding='same'),
+                                         nn.Conv1d(embed_dim, embed_dim*2, kernel_size = 3, stride=1, padding='same'),
+                                         nn.Conv1d(embed_dim*2, embed_dim, kernel_size=3, stride=1, padding='same'))
 
-        # Transformer Encoder configuration
-        self.encoder_layer = TransformerEncoderLayer(
-            d_model=embed_dim,  # Embed_dim consistency
-            nhead=num_heads,
-            dim_feedforward=128,
-            activation=activation,
-            dropout=0.5
-        )
-        self.encoder = TransformerEncoderWAttention(
-            encoder_layer=self.encoder_layer,
-            num_layers=num_layers,
-            norm=nn.LayerNorm(embed_dim)
-        )
 
-        # Fully connected layers for classification
-        self.ln1 = nn.Linear(embed_dim, 64)
-        self.ln2 = nn.Linear(64, 32)
-        self.dropout = nn.Dropout(p=0.5)
-        self.output = nn.Linear(32, num_classes)
+        self.encoder_layer = TransformerEncoderLayer(d_model = self.length,  activation = activation, 
+                                                     dim_feedforward = 32, nhead = num_heads,dropout=0.5)
+        
+        self.encoder = TransformerEncoderWAttention(encoder_layer = self.encoder_layer, num_layers = num_layer, 
+                                          norm=nn.LayerNorm(embed_dim))
 
-        # Initialize weights
-        nn.init.normal_(self.output.weight, 0, 0.02)
+        self.ln1 = nn.Linear(self.length, 32)
+        # self.drop1 = nn.Dropout(p = 0.5)
+        self.ln2 = nn.Linear(32, 16)
+        self.drop2 = nn.Dropout(p = 0.5)
+        self.output = Linear(16, 1)  # Single output with sigmoid activation
+        nn.init.zeros_(self.output.weight)  # Initialize weights to zero
+    
+    def forward(self, acc_data, skl_data):
 
-    def forward(self, acc_data, skl_data=None):
-        """
-        Forward pass for the TransModel.
+        # Compute Signal Magnitude Vector (SMV)
+        smv = torch.sqrt(torch.sum(acc_data ** 2, dim=-1, keepdim=True))
+        acc_data = torch.cat((acc_data, smv), dim=-1)  # Append SMV as an additional coordinate
 
-        Args:
-            acc_data: Tensor of shape [batch_size, acc_frames, acc_coords].
-            skl_data: Optional; Placeholder for future use.
-
-        Returns:
-            logits: Tensor of shape [batch_size, num_classes].
-        """
         b, l, c = acc_data.shape
-
-        # Input projection using Conv1D
         x = rearrange(acc_data, 'b l c -> b c l')
-        x = self.input_proj(x)  # [batch_size, embed_dim, acc_frames]
-        x = rearrange(x, 'b c l -> l b c')  # [acc_frames, batch_size, embed_dim ]
+        x = self.input_proj(x) # [ 8, 64, 3]
+        x = rearrange(x,'b c l ->  c b l') #[8, 64, 3]
+        x = self.encoder(x)
+        x = rearrange(x, 'c b l -> b l c')
 
-        # Transformer encoding
-        x = self.encoder(x)  # [acc_frames, batch_size, embed_dim]
-        x = rearrange(x, 'l b c -> b l c')  # [batch_size, acc_frames, embed_dim]
 
-        # Global pooling (mean over frames)
-        x = x.mean(dim=1)  # [batch_size, embed_dim]
-
-        # Fully connected layers
+        x = F.avg_pool1d(x, kernel_size = x.shape[-1], stride = 1)
+        x = rearrange(x, 'b c f -> b (c f)')
+        # x= self.drop1(x)
         x = F.relu(self.ln1(x))
-        x = self.dropout(x)
+        # x = self.drop2(x)
         x = F.relu(self.ln2(x))
-        x = self.output(x)
-
+        x1 = self.output(x)
+        x = torch.sigmoid(x1)  # Apply sigmoid activation
         return x
 
-
 if __name__ == "__main__":
-    # Test the model with dummy data
-    acc_data = torch.randn(size=(16, 128, 4))  # [batch_size, acc_frames, acc_coords]
-    model = TransModel(embed_dim=32)
-    output = model(acc_data)
-    print(output.shape)  # Should output [16, num_classes]
-
+        data = torch.randn(size = (16,128,3))  # 3 coordinates per input
+        skl_data = torch.randn(size = (16,128,32,3))
+        model = TransModel()
+        output = model(data, skl_data)

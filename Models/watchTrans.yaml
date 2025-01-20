@@ -1,42 +1,44 @@
 # Basic configuration
-model: "Models.StudentModel.StudentModel"
+model: "Models.watchTrans.TransWatchModel"
 dataset: "smartfallmm"
 
-# Model parameters - these are passed directly to the model
+# Model parameters
 model_args:
-  input_channels: 3  # Watch accelerometer input (x, y, z)
-  hidden_dim: 48
-  num_blocks: 4
-  dropout_rate: 0.2
+  input_channels: 4     # x, y, z, smv
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  dropout: 0.3
 
-# Dataset arguments must match the exact structure expected by the dataset class
+# Dataset arguments
 dataset_args:
   mode: "sliding_window"
-  max_length: 64
+  max_length: 128
   task: "fd"
   modalities: ["accelerometer"]
   age_group: ["young"]
   sensors: ["watch"]
 
-# Subject IDs as a flat list for the argument parser  
+# Subject IDs as a flat list
 subjects: [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
 
-# Training parameters that match main4.py arguments exactly
+# Training parameters
 batch_size: 64
 test_batch_size: 64
 val_batch_size: 64
 num_epoch: 150
 start_epoch: 0
 
-# Optimizer settings that match the argument parser
+# Optimizer settings
 optimizer: "adamw"
 base_lr: 0.001
 weight_decay: 0.0004
 
-# Device configuration as expected by the script
+# Device config
 device: [0]
 
-# Feeder settings that match main4.py's requirements
+# Feeder settings
 feeder: "Feeder.Make_Dataset.UTD_mm"
 train_feeder_args:
   batch_size: 64
@@ -45,14 +47,14 @@ val_feeder_args:
 test_feeder_args:
   batch_size: 64
 
-# Additional training settings
+# Additional training
 num_worker: 4
 seed: 42
 include_val: true
 print_log: true
 phase: "train"
 
-# Loss function configuration 
+# Loss function configuration
 loss: "torch.nn.BCELoss"
 loss_args: {}
 

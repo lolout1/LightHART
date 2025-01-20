@@ -39,10 +39,10 @@ class LightTransformerStudent(nn.Module):
     """
     def __init__(
         self,
-        input_channels=3,   # watch accelerometer (x,y,z)
+        input_channels=4,   # watch accelerometer (x,y,z)
         d_model=64,
         nhead=4,
-        num_layers=2,       # number of transformer layers
+        num_layers=4,       # number of transformer layers
         dim_feedforward=128,
         dropout=0.3
     ):
@@ -88,9 +88,7 @@ class LightTransformerStudent(nn.Module):
         B, T, _ = x.shape
 
         # 1) Compute magnitude => shape [B, T, 1]
-        magnitude = torch.sqrt(torch.sum(x**2, dim=-1, keepdim=True))
-        # => [B, T, 4] by concatenating magnitude with x
-        x = torch.cat([x, magnitude], dim=-1)
+
 
         # 2) Input projection => [B, T, d_model]
         x = self.input_proj(x)
@@ -107,7 +105,7 @@ class LightTransformerStudent(nn.Module):
         logit = self.classifier(final_feat).squeeze(-1)
         fall_prob = self.sigmoid(logit)
 
-        return fall_prob, final_feat
+        return fall_prob
 
 # Example usage:
 if __name__ == "__main__":

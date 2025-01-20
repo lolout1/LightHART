@@ -93,18 +93,10 @@ class Bmhad_mm(torch.utils.data.Dataset):
 
 class UTD_mm(torch.utils.data.Dataset):
     def __init__(self, dataset, batch_size):
-        # Verify dataset has required fields
-        if not isinstance(dataset, dict):
-            raise ValueError("Dataset must be a dictionary")
-        if 'labels' not in dataset:
-            raise ValueError("Dataset missing 'labels' field")
-            
-        self.modalities = [key for key in dataset.keys() if key != 'labels']
         self.data = dataset
-        self.labels = dataset['labels']
-        self.num_samples = len(self.labels)
+        self.num_samples = len(dataset['accelerometer'])
         self.batch_size = batch_size
-        
+        self.modalities = [k for k in dataset.keys() if k != 'labels']
         print(f"Initialized dataset with {self.num_samples} samples")
         print(f"Available modalities: {self.modalities}")
 
@@ -119,9 +111,14 @@ class UTD_mm(torch.utils.data.Dataset):
         data = {}
         for modality in self.modalities:
             data[modality] = torch.tensor(self.data[modality][index], dtype=torch.float32)
+            
+            # Calculate and concatenate SMV for accelerometer data
+            if modality == 'accelerometer':
+                smv = self.cal_smv(data[modality])  # Calculate SMV using cal_smv method
+                data[modality] = torch.cat([data[modality], smv], dim=-1)  # Shape: [128, 4]
         
         # Convert label to float and ensure it's 0 or 1
-        label = torch.tensor(float(bool(self.labels[index])), dtype=torch.float32)
+        label = torch.tensor(float(bool(self.data['labels'][index])), dtype=torch.float32)
         return data, label, index
 
     def random_crop(self,data : torch.Tensor) -> torch.Tensor:
@@ -145,18 +142,6 @@ class UTD_mm(torch.utils.data.Dataset):
         sum_squared =  torch.sum(torch.square(zero_mean), dim=-1, keepdim=True) 
         smv= torch.sqrt(sum_squared)
         return smv
-    
-    def calculate_weight(self, data):
-        """
-        Calculate the magnitude (weight) of accelerometer data.
-
-        Parameters:
-        - data: A PyTorch tensor of shape (128, 3) where each row is [ax, ay, az].
-
-        Returns:
-        - A 1D PyTorch tensor of shape (128,) containing the magnitude for each row.
-        """
-        return torch.sqrt(torch.sum(data**2, dim=-1, keepdim=True))
     
     def calculate_pitch(self,data):
         """
@@ -198,6 +183,6 @@ class UTD_mm(torch.utils.data.Dataset):
 
 if __name__ == "__main__":
     # Option 1: Create an instance
-    dataset = UTD_mm(dataset={}, batch_size=1)  # Minimal initialization
-    data = torch.randn((8, 128, 3))
+    dataset = UTD_mm(dataset={}, batch_size=64)  # Minimal initialization
+    data = torch.randn((64, 128, 4))
     smv = dataset.cal_smv(data)
