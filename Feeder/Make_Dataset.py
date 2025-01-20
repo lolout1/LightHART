@@ -119,11 +119,15 @@ class UTD_mm(torch.utils.data.Dataset):
         data = {}
         for modality in self.modalities:
             data[modality] = torch.tensor(self.data[modality][index], dtype=torch.float32)
+            
+            # Calculate and concatenate SMV for accelerometer data
+            if modality == 'accelerometer':
+                smv = self.cal_smv(data[modality])  # Calculate SMV using cal_smv method
+                data[modality] = torch.cat([data[modality], smv], dim=-1)  # Shape: [128, 4]
         
         # Convert label to float and ensure it's 0 or 1
-        label = torch.tensor(float(bool(self.labels[index])), dtype=torch.float32)
+        label = torch.tensor(float(bool(self.data['labels'][index])), dtype=torch.float32)
         return data, label, index
-
     def random_crop(self,data : torch.Tensor) -> torch.Tensor:
         '''
         Function to add random cropping to the data

@@ -66,9 +66,9 @@ class StudentModel(nn.Module):
     """
     def __init__(self,
                  input_channels=4,  # x, y, z, magnitude
-                 hidden_dim=128,
+                 hidden_dim=48,
                  num_blocks=4,
-                 dropout_rate=0.3):
+                 dropout_rate=0.2):
         super().__init__()
         self.input_proj = nn.Sequential(    
             nn.Linear(input_channels, hidden_dim),
@@ -103,8 +103,7 @@ class StudentModel(nn.Module):
             student_feat: [B, hidden_dim], final feature
         """
         # Compute magnitude and append to input channels
-        magnitude = torch.sqrt(torch.sum(x ** 2, dim=-1, keepdim=True))  # [B, T, 1]
-        x = torch.cat([x, magnitude], dim=-1)  # Now [B, T, 4]
+
 
         # Project inputs => [B, T, hidden_dim]
         x = self.input_proj(x)

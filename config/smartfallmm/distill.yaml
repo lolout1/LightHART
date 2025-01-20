@@ -1,9 +1,9 @@
 # Basic Configuration
-student_model: "Models.StudentTrans.StudentModel"
+student_model: "Models.StudentModel.StudentModel"
 dataset: "smartfallmm"
 
 # Teacher Model Configuration
-teacher_model: "Models.TeacherModel.TransModel"
+teacher_model: "Models.TeacherModel.TeacherModel"
 teacher_args:
   num_joints: 32
   in_chans: 3
@@ -17,12 +17,10 @@ teacher_weight: "exps/smartfall_har/kd/student/fold_1/TeacherModel_best_weights_
 
 # Student Model Configuration
 student_args:
-  input_channels: 3      # watch accelerometer input (x, y, z)
-  d_model: 128           # embedding dimension
-  nhead: 4               # number of attention heads
-  num_layers: 2          # number of transformer encoder layers
-  dim_feedforward: 256   # feedforward dimension in transformer
-  dropout: 0.2           # dropout rate
+  input_channels: 4
+  hidden_dim: 48
+  num_blocks: 4
+  dropout_rate: 0.2
 
 # Dataset Configuration
 dataset_args:

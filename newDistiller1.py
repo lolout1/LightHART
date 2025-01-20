@@ -178,10 +178,10 @@ class FallDetectionDistiller:
                 self.teacher.load_state_dict(teacher_ckpt, strict=False)
         else:
             self.teacher.load_state_dict(teacher_ckpt, strict=False)
-        self.teacher.eval()
-
+        self.teacher.eval()  # Always keep teacher in eval mode for knowledge distillation
+        
         # Student
-        self.student = LightTransformerStudent(**self.arg.student_args).to(self.device)
+        self.student = StudentModel(**self.arg.student_args).to(self.device)
 
         # Optionally load pre-trained student
         if hasattr(self.arg, 'weights') and self.arg.weights:
@@ -268,11 +268,11 @@ class FallDetectionDistiller:
             skl_data = inputs['skeleton'].to(self.device).float()
             targets = targets.to(self.device).float()
 
-            # Teacher
-            with torch.no_grad():
-                teacher_logits, _ = self.teacher(acc_data, skl_data)  # [B], [B,256]
+            # Teacher - only use first 3 values (x,y,z)
+            tacc_data = acc_data[:, :, :3]  # Only use x,y,z for teacher
+            teacher_logits, _ = self.teacher(tacc_data, skl_data)  # [B], [B,256]
 
-            # Student
+            # Student - use all 4 values (x,y,z,smv)
             student_logits, _ = self.student(acc_data)  # [B], [B,64]
 
             # Distillation loss => final output + features
@@ -313,10 +313,11 @@ class FallDetectionDistiller:
                 skl_data = inputs['skeleton'].to(self.device).float()
                 targets = targets.to(self.device).float()
 
-                # Teacher
-                teacher_logits, _ = self.teacher(acc_data, skl_data)
+                # Teacher - only use first 3 values (x,y,z)
+                tacc_data = acc_data[:, :, :3]  # Only use x,y,z for teacher
+                teacher_logits, _ = self.teacher(tacc_data, skl_data)
 
-                # Student
+                # Student - use all 4 values (x,y,z,smv)
                 student_logits, _ = self.student(acc_data)
 
                 # Distillation loss (same as train)
@@ -675,10 +676,14 @@ class FallDetectionDistiller:
                             }
                             best_fold_train_metrics = train_metrics
                             
-                            # Save best F1 model weights
+                            # Save best F1 model weights and optionally full state
                             best_f1_path = os.path.join(self.run_dir, f'fold_{fold}', f'best_f1_model_fold{fold}.pt')
                             os.makedirs(os.path.dirname(best_f1_path), exist_ok=True)
                             torch.save(best_fold_state['state_dict'], best_f1_path)
+                            
+                            if not self.arg.weights_only:
+                                best_f1_state_path = os.path.join(self.run_dir, f'fold_{fold}', f'best_f1_state_fold{fold}.pt')
+                                torch.save(best_fold_state, best_f1_state_path)
                             self.print_log(f"\nNew best F1 model saved! F1: {best_fold_f1:.4f}")
                         
                         # Track best loss model for this fold
@@ -692,10 +697,14 @@ class FallDetectionDistiller:
                                 'fold': fold
                             }
                             
-                            # Save best loss model weights
+                            # Save best loss model weights and optionally full state
                             best_loss_path = os.path.join(self.run_dir, f'fold_{fold}', f'best_loss_model_fold{fold}.pt')
                             os.makedirs(os.path.dirname(best_loss_path), exist_ok=True)
                             torch.save(best_loss_state['state_dict'], best_loss_path)
+                            
+                            if not self.arg.weights_only:
+                                best_loss_state_path = os.path.join(self.run_dir, f'fold_{fold}', f'best_loss_state_fold{fold}.pt')
+                                torch.save(best_loss_state, best_loss_state_path)
                             self.print_log(f"\nNew best loss model saved! Loss: {best_fold_loss:.4f}")
                         
                         # Print metrics
@@ -912,6 +921,7 @@ def get_args():
     parser.add_argument('--num_worker', type=int, default=4)
     parser.add_argument('--model_saved_name', type=str, default='student_model')
     parser.add_argument('--weights', type=str, default=None)
+    parser.add_argument('--weights_only', type=str2bool, default=False)
     return parser
 
 if __name__ == "__main__":
