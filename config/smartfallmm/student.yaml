@@ -30,7 +30,7 @@ dataset_args:
  modalities: ['skeleton', 'accelerometer']
  age_group: ['young']
  # change the sensor to phone , meta_wrist , meta_hip for experiments
- sensors: ['meta_wrist']
+ sensors: ['watch']
 
 batch_size: 16
 test_batch_size: 16

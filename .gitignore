@@ -8,3 +8,4 @@ exps/
 .DS_Store
 .venv
 .vscode
+/utils/visualizations
