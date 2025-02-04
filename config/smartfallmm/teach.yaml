@@ -1,0 +1,55 @@
+model: Models.teach.TeacherModel
+student_model: Models.s.StudentModel
+dataset: smartfallmm
+
+subjects: [29,30,31,32,33,44,45,46,34,35,36,37,38,39,43]
+
+model_args:
+  num_joints: 32
+  joint_dim: 3
+  accel_dim: 3
+  hidden_skel: 128
+  hidden_accel: 64
+  num_heads: 4
+  num_layers: 2
+  time2vec_dim: 8
+  fusion_hidden: 128
+  num_classes: 2
+  dropout: 0.2
+  dim_feedforward: 128
+
+student_model_args:
+  accel_dim: 3
+  time2vec_dim: 8
+  hidden_accel: 32
+  num_heads: 2
+  num_layers: 1
+  num_classes: 2
+  dropout: 0.2
+  dim_feedforward: 64
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  max_length: 64
+  modalities: ['accelerometer', 'skeleton']
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  time2vec_dim: 8
+
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 70
+optimizer: adam
+base_lr: 0.001
+weight_decay: 0.0004
+seed: 42
+device: [0]
+kd_temperature: 4.0
+kd_alpha: 0.5
+phase: 'train'
+work_dir: 'exps/teacher_time2vec_fall'
+

@@ -1,0 +1,55 @@
+# config/smartfallmm/teach_transformer.yaml
+
+model: Models.t3.TransformerTeacher
+dataset: smartfallmm
+
+# Subjects for cross-validation
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+model_args:
+  num_joints: 32
+  joint_dim: 3
+  accel_dim: 3
+  hidden_skel: 128
+  hidden_accel: 128
+  accel_heads: 4
+  accel_layers: 3
+  skeleton_heads: 4
+  skeleton_layers: 2
+  time2vec_dim: 16
+  fusion_hidden: 256
+  num_classes: 2
+  dropout: 0.3
+  dim_feedforward: 256
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  max_length: 64           # not used for variable_time mode but required
+  modalities: ['accelerometer', 'skeleton']
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  validation_split: 'subject'
+
+training:
+  batch_size: 32
+  test_batch_size: 32
+  val_batch_size: 32
+  num_epoch: 100
+  optimizer: adamw
+  base_lr: 0.0002
+  weight_decay: 0.05
+  #class_weights: [0.33, 0.67]
+  label_smoothing: 0.1
+  scheduler: cosine
+  grad_clip: 5.0
+  phase: 'train'
+  work_dir: 'exps/teacher_transformer_v2'
+
+data_handling:
+  skel_error_strategy: 'drop_trial'
+  max_retries: 3
+  cache_processed: True
+

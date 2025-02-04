@@ -1,218 +1,206 @@
 # utils/loader.py
 
 import os
-from typing import List, Dict, Tuple
 import numpy as np
-from numpy.linalg import norm
+from typing import List, Dict
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import traceback
 from dtaidistance import dtw
-import matplotlib.pyplot as plt
+from numpy.linalg import norm
 
-from scipy.signal import butter, filtfilt
-from sklearn.preprocessing import StandardScaler
+from utils.processor.base import Processor
 
-from utils.processor.base import (
-    Processor,
-    parse_watch_csv,
-    sliding_windows_by_time,
-    Time2Vec,
-)
+def filter_repeated_ids(path):
+    sk_list = []
+    in_list = []
+    for (s, i) in path:
+        if s not in sk_list and i not in in_list:
+            sk_list.append(s)
+            in_list.append(i)
+    return sk_list, in_list
 
-###########################################################
-#  Overlap function for multiple inertial modalities
-###########################################################
-def overlap_inertial(data1: np.ndarray, data2: np.ndarray):
-    """
-    Only keep the overlapping time range for two inertial arrays,
-    each shaped (N, 4): [time, x, y, z], sorted by time.
-    If there's no overlap, returns empty arrays.
-    """
-    if data1.shape[0] == 0 or data2.shape[0] == 0:
-        return data1, data2
-    
-    start_t = max(data1[0, 0], data2[0, 0])
-    end_t   = min(data1[-1, 0], data2[-1, 0])
+def dtw_align_skeleton(sk_array, in_array):
+    if sk_array.size == 0 or in_array.size == 0:
+        return sk_array
+    joint_id = 9
+    start_col = 1 + (joint_id-1)*3
+    end_col   = 1 + joint_id*3
+    sk_slice  = sk_array[:, start_col:end_col]
+    in_slice  = in_array[:,1:]
+    sk_norm   = norm(sk_slice, axis=1)
+    in_norm   = norm(in_slice, axis=1)
 
-    if end_t < start_t:
-        # No overlap
-        return np.zeros((0, 4), dtype=data1.dtype), np.zeros((0, 4), dtype=data2.dtype)
-
-    mask1 = (data1[:, 0] >= start_t) & (data1[:, 0] <= end_t)
-    mask2 = (data2[:, 0] >= start_t) & (data2[:, 0] <= end_t)
-    return data1[mask1], data2[mask2]
-
-def filter_data_by_ids(data: np.ndarray, ids: List[int]):
-    return data[ids]
-
-def filter_repeated_ids(path: List[Tuple[int, int]]):
-    seen_first = set()
-    seen_second = set()
-    for (f, s) in path:
-        if f not in seen_first and s not in seen_second:
-            seen_first.add(f)
-            seen_second.add(s)
-    return seen_first, seen_second
-
-def align_sequence(data: Dict[str, np.ndarray], idx):
-    """
-    Existing alignment:
-      - If skeleton + 1 inertial modality => use DTW to align skeleton vs. that inertial.
-      - If multiple inertial modalities => overlap them by time.
-      - Skeleton has no timestamps (30 FPS). We do DTW to match length with inertial.
-    """
-    if len(data) == 0:
-        return data
-
-    # List all modalities except skeleton
-    dynamic_keys = [k for k in data.keys() if k != "skeleton"]
-
-    # 1) If we have skeleton + exactly one inertial => run DTW alignment
-    if 'skeleton' in data and len(dynamic_keys) == 1:
-        inertial_name = dynamic_keys[0]
-        skeleton_joint_data = data['skeleton'][idx]
-        inertial_data       = data[inertial_name][idx]
-        if skeleton_joint_data.size == 0 or inertial_data.size == 0:
-            return data
-        joint_id = 9  # example joint
-        skel_slice = skeleton_joint_data[:, (joint_id - 1) * 3: joint_id * 3]
-        iner_slice = inertial_data[:, 1:]  # skip time column => (x,y,z)
-        skel_norm = norm(skel_slice, axis=1)
-        iner_norm = norm(iner_slice, axis=1)
-        path = dtw.warping_path(skel_norm, iner_norm)
-        s_idx, i_idx = filter_repeated_ids(path)
-        s_idx = sorted(list(s_idx))
-        i_idx = sorted(list(i_idx))
-        data['skeleton'][idx] = skeleton_joint_data[s_idx]
-        data[inertial_name][idx] = inertial_data[i_idx]
-
-    # 2) If we have multiple inertial streams => keep only overlapping time
-    elif len(dynamic_keys) > 1:
-        # Overlap them pairwise (can be extended if you have 2+ inertial streams)
-        base_key = dynamic_keys[0]
-        for k in dynamic_keys[1:]:
-            base_data = data[base_key][idx]
-            other_data = data[k][idx]
-            overlapped_base, overlapped_other = overlap_inertial(base_data, other_data)
-            data[base_key][idx] = overlapped_base
-            data[k][idx]        = overlapped_other
-
-    # 3) If skeleton + multiple inertial => you can do time overlap first, then DTW with skeleton
-    #     This would be more advanced. For minimal changes, we just do the above rules.
-    return data
-
-
-def butterworth_filter(data, cutoff, fs, order=4, filter_type='low'):
-    nyquist = 0.5 * fs
-    normal_cutoff = cutoff / nyquist
-    b, a = butter(order, normal_cutoff, btype=filter_type, analog=False)
-    return filtfilt(b, a, data, axis=0)
+    path = dtw.warping_path(sk_norm, in_norm)
+    sk_idx, _ = filter_repeated_ids(path)
+    if len(sk_idx) == 0:
+        return np.zeros_like(sk_array[:0])
+    return sk_array[sk_idx]
 
 class DatasetBuilder:
     """
-    Extended to handle variable-time windows from watch/phone accelerometer/gyroscope
-    if mode='variable_time'. Skeleton is 30 FPS and uses DTW-based alignment.
+    A multi-threaded approach for building skeleton + accelerometer windows.
+    For 'variable_time': we do time-based windowing, then keep min(#windows) across modalities.
+    If any modality or file is empty => skip entire trial => ensures labels match.
     """
-    def __init__(self, dataset: object, mode: str, max_length: int, task='fd', **kwargs) -> None:
+    def __init__(self, dataset, mode, max_length, task='fd',
+                 window_size_sec=4.0, stride_sec=1.0, time2vec_dim=8, **kwargs):
         self.dataset = dataset
-        self.data: Dict[str, List[np.ndarray]] = {}
-        self.processed_data: Dict[str, List[np.ndarray]] = {'labels': []}
-        self.kwargs = kwargs
         self.mode = mode
         self.max_length = max_length
         self.task = task
+        self.window_size_sec = window_size_sec
+        self.stride_sec = stride_sec
+        self.time2vec_dim = time2vec_dim
+        self.kwargs = kwargs
 
-        # For variable_time
-        self.window_size_sec = kwargs.get('window_size_sec', 4.0)  ### CHANGED default to 4.0
-        self.stride_sec = kwargs.get('stride_sec', 1.0)
-        self.time2vec_dim = kwargs.get('time2vec_dim', 8)
-
-    def make_dataset(self, subjects: List[int]):
         self.data = {}
         self.processed_data = {'labels': []}
-        count = 0
 
-        for trial in self.dataset.matched_trials:
-            # Filter for desired subjects
-            if trial.subject_id not in subjects:
-                continue
+    def _trial_label(self, trial):
+        if self.task == 'fd':
+            return int(trial.action_id > 9)
+        elif self.task == 'age':
+            return int(trial.subject_id < 29 or trial.subject_id > 46)
+        else:
+            return trial.action_id - 1
 
-            # Label logic for fall detection (fd) or age
-            if self.task == 'fd':
-                label = int(trial.action_id > 9)
-            elif self.task == 'age':
-                label = int(trial.subject_id < 29 or trial.subject_id > 46)
-            else:
-                label = trial.action_id - 1
+    def process_trial(self, trial, subjects):
+        if trial.subject_id not in subjects:
+            return None
+        label = self._trial_label(trial)
 
-            # 1) Load raw data for each modality into self.data
-            for modality, file_path in trial.files.items():
-                proc = Processor(file_path, self.mode, self.max_length,
-                                 time2vec_dim=self.time2vec_dim,
-                                 window_size_sec=self.window_size_sec,
-                                 stride_sec=self.stride_sec,
-                                 **self.kwargs)
-                try:
-                    raw_data = proc.load_file()
-                    self.data[modality] = self.data.get(modality, [])
-                    self.data[modality].append(raw_data)
-                except Exception as e:
-                    print("Error loading file:", file_path, e)
-                    continue
-
-            # 2) Align the newly loaded data across modalities (skeleton ↔ inertial or inertial ↔ inertial)
+        # 1) Load raw data for each modality
+        trial_raw = {}
+        for mod, fp in trial.files.items():
+            is_skel = (mod=='skeleton')
             try:
-                self.data = align_sequence(self.data, count)
-            except Exception as e:
-                print("[WARN] Alignment failed:", e)
-
-            # 3) Convert each modality's raw data into windows or keep shape
-            for modality, file_path in trial.files.items():
-                if modality not in self.data or len(self.data[modality]) <= count:
-                    continue
-
-                proc = Processor(file_path, self.mode, self.max_length,
+                proc = Processor(file_path=fp,
+                                 mode=self.mode,
+                                 max_length=self.max_length,
                                  time2vec_dim=self.time2vec_dim,
                                  window_size_sec=self.window_size_sec,
-                                 stride_sec=self.stride_sec,
-                                 **self.kwargs)
-                aligned_data = self.data[modality][count]
-                proc.set_input_shape(aligned_data)
-                out = proc.process(aligned_data)
+                                 stride_sec=self.stride_sec)
+                raw_data = proc.load_file(is_skeleton=is_skel)
+                # If empty => skip entire trial
+                if raw_data.size == 0:
+                    print(f"[INFO] Skipping entire trial => file={fp} returned empty or error.")
+                    return None
 
-                if self.mode == 'variable_time':
-                    if len(out) > 0:
-                        self.processed_data[modality] = self.processed_data.get(modality, [])
-                        self.processed_data[modality].extend(out)
-                        self.processed_data['labels'].extend([label] * len(out))
+                trial_raw.setdefault(mod, []).append(raw_data)
+            except Exception as e:
+                print(f"[ERROR] load {fp} => {e}")
+                traceback.print_exc()
+                return None
+
+        # 2) If skeleton + 1 inertial => do DTW => reindex skeleton
+        if 'skeleton' in trial_raw and len(trial_raw.keys()) == 2:
+            inertial_key = [m for m in trial_raw if m != 'skeleton'][0]
+            sk_data = trial_raw['skeleton'][0]
+            in_data = trial_raw[inertial_key][0]
+            if sk_data.size > 0 and in_data.size > 0:
+                new_skel = dtw_align_skeleton(sk_data, in_data)
+                trial_raw['skeleton'][0] = new_skel
+
+        # 3) Window each modality
+        trial_processed = {}
+        for mod, fp in trial.files.items():
+            if mod not in trial_raw or len(trial_raw[mod]) == 0:
+                # missing => skip entire trial
+                return None
+
+            arr = trial_raw[mod][0]
+            if arr.size == 0:
+                return None
+
+            try:
+                proc = Processor(fp, self.mode, self.max_length,
+                                 time2vec_dim=self.time2vec_dim,
+                                 window_size_sec=self.window_size_sec,
+                                 stride_sec=self.stride_sec)
+                proc.set_input_shape(arr)
+                out_wins = proc.process(arr)
+                # If no windows => skip entire trial
+                if len(out_wins) == 0:
+                    return None
+
+                # unify => always a list
+                if isinstance(out_wins, list):
+                    windows = out_wins
                 else:
-                    # For 'avg_pool' or 'sliding_window'
-                    if out.shape[0] != 0:
-                        self.processed_data[modality] = self.processed_data.get(modality, [])
-                        self.processed_data[modality].append(out)
-                        if out.ndim > 1:
-                            n_windows = out.shape[0]
-                        else:
-                            n_windows = 1
-                        self.processed_data['labels'].extend([label] * n_windows)
+                    # older modes => shape?
+                    if out_wins.ndim == 3:
+                        windows = [out_wins[i] for i in range(out_wins.shape[0])]
+                    else:
+                        windows = [out_wins]
 
-            count += 1
+                trial_processed[mod] = windows
+            except Exception as e:
+                print(f"[ERROR] Windowing {mod} => {e}")
+                traceback.print_exc()
+                return None
 
-        # 4) For non-variable_time, unify arrays (concatenate) after processing
-        if self.mode != 'variable_time':
-            for key in self.processed_data:
-                if key == 'labels':
-                    self.processed_data[key] = np.array(self.processed_data[key])
-                else:
-                    self.processed_data[key] = np.concatenate(self.processed_data[key], axis=0)
+        if len(trial_processed) == 0:
+            return None
+
+        # 4) "Minimum windows approach"
+        # find global min
+        min_len = min(len(v) for v in trial_processed.values())
+        if min_len == 0:
+            print("[INFO] min_len=0 => skipping entire trial.")
+            return None
+
+        for m in trial_processed:
+            trial_processed[m] = trial_processed[m][:min_len]
+
+        # produce label list => same min_len
+        label_list = [label] * min_len
+
+        return (trial_processed, label_list)
+
+    def make_dataset(self, subjects, max_workers=12):
+        self.data.clear()
+        self.processed_data.clear()
+        self.processed_data['labels'] = []
+        tasks = [(trial, subjects) for trial in self.dataset.matched_trials]
+
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(self.process_trial, t, s) for (t,s) in tasks]
+            for fut in as_completed(futures):
+                res = fut.result()
+                if res is None:
+                    # skip trial
+                    continue
+                trial_proc, lab_list = res
+                # merge
+                for m in trial_proc:
+                    if m not in self.processed_data:
+                        self.processed_data[m] = []
+                    self.processed_data[m].extend(trial_proc[m])
+                self.processed_data['labels'].extend(lab_list)
+
+        # debug
+        for k in self.processed_data:
+            print(f"[DEBUG] make_dataset => key={k}, #items={len(self.processed_data[k])}")
 
     def normalization(self):
-        # Skip normalization for variable_time to avoid messing with variable window sizes.
         if self.mode == 'variable_time':
             return self.processed_data
-
+        from sklearn.preprocessing import StandardScaler
         for k, v in self.processed_data.items():
             if k == 'labels':
                 continue
-            num_samples, length = v.shape[:2]
-            norm_data = StandardScaler().fit_transform(v.reshape(num_samples * length, -1))
-            self.processed_data[k] = norm_data.reshape(num_samples, length, -1)
+            big = np.concatenate(v, axis=0)
+            shape_ = big.shape
+            feat_dim = shape_[-1]
+            flat = big.reshape(-1, feat_dim)
+            scaler = StandardScaler().fit(flat)
+            new_list = []
+            for arr in v:
+                s = arr.shape
+                f = arr.reshape(-1, feat_dim)
+                f_ = scaler.transform(f)
+                new_list.append(f_.reshape(s))
+            self.processed_data[k] = new_list
         return self.processed_data
+

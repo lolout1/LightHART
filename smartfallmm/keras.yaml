@@ -1,0 +1,43 @@
+model: Models.tfTransformer.KerasTransformerModel
+dataset: smartfallmm
+
+subjects: [29,30,31,32,33,44,45,46,34,35,36,37,38,39,43]
+
+model_args:
+  num_layers: 4
+  norm_first: True
+  embed_dim: 32
+  activation: relu
+  acc_coords: 3
+  num_classes: 2
+  acc_frames: 64
+  mocap_frames: 64
+  num_heads: 4
+  mlp_dim: 64
+  dropout_rate: 0.5
+  attention_dropout_rate: 0.1
+
+dataset_args:
+  mode: 'sliding_window'
+  max_length: 64
+  task: 'fd'
+  modalities: ['skeleton', 'accelerometer']
+  age_group: ['young']
+  sensors: ['watch']
+
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 60
+
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+val_feeder_args:
+  batch_size: 16
+test_feeder_args:
+  batch_size: 16
+
+seed: 2
+optimizer: sgd
+

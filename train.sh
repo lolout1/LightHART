@@ -2,7 +2,7 @@
 teacher_weights="spTransformer"
 student_dir="exps/smartfall_har/student/sliding_window_phone_accelerometer"
 work_dir="exps/smartfall_har/kd/student/watchgyro_divid3bw20"
-student_weights="ttfstudent"
+student_weights="ttfstudent2"
 teacher_dir="$HOME/LightHART/exps/smartfall_fall/teacher/with_new1"
 result_file="result.txt"
 
@@ -38,9 +38,9 @@ result_file="result.txt"
 #python3 main.py --config ./config/smartfallmm/teacher.yaml --work-dir $teacher_dir --model-saved-name $teacher_weights  --device 2 --base-lr 2.5e-3 --include-val True
 
 #accelerometer only experiment
-python m2.py --config ./config/smartfallmm/time2vec_fall.yaml --work-dir $student_dir --model-saved-name $student_weights --device 0 --base-lr 1e-3 --include-val True
+python tt.py --config ./config/smartfallmm/teach.yaml --work-dir $student_dir --model-saved-name $student_weights --device 0 --base-lr 1e-3 --include-val True
 #python main.py --config ./config/smartfallmm/teacher.yaml --work-dir $teacher_dir --model-saved-name $teacher_weights --device 1 --base-lr 1e-3 --include-val True
 
-
+#python m6.py --config ./config/smartfallmm/time2vec_fall.yaml --work-dir $student_dir --model-saved-name $student_weights --device 0 --base-lr 1e-3 --include-val True
 #distillation 
 #python3 distiller.py --config ./config/smartfallmm/distill.yaml --work-dir $work_dir  --teacher-weight "$teacher_dir/$teacher_weights" --model-saved-name "$student_weights" --device 1 --base-lr 2.5e-3 --include-val True

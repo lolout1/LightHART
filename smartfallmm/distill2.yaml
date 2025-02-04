@@ -1,0 +1,72 @@
+# config/smartfallmm/distill_student.yaml
+
+# High-level config specifying how to distill from teacher to student
+dataset: smartfallmm
+
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  modalities: ['skeleton', 'accelerometer']  # teacher sees both
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+
+# Teacher model references
+teacher_model: Models.t3.TransformerTeacher
+teacher_args:
+  num_joints: 32
+  joint_dim: 3
+  hidden_skel: 128
+  hidden_accel: 128
+  accel_heads: 4
+  accel_layers: 3
+  skeleton_heads: 4
+  skeleton_layers: 2
+  time2vec_dim: 16
+  fusion_hidden: 256
+  num_classes: 2
+  dropout: 0.3
+  dim_feedforward: 256
+
+  #teacher_weight: 'exps/teacher_transformer_v2/best_teacher.pth'  # or whichever teacher checkpoint
+  #teacher_weight_dir: "exps/teacher_transformer_v2"
+# Student model references
+student_model: Models.s.CNNTransformerStudent
+student_args:
+  accel_dim: 3
+  cnn_filters: [32, 64]
+  cnn_kernels: [5, 5]
+  cnn_strides: [1, 1]
+  time2vec_dim: 8
+  transformer_d_model: 48
+  transformer_nhead: 4
+  transformer_num_layers: 2
+  transformer_ff: 128
+  dropout: 0.4
+  num_classes: 2
+
+# Distillation training
+phase: 'train'
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 50
+optimizer: adam
+base_lr: 0.0005
+weight_decay: 0.0004
+model_saved_name: 'student_distilled'
+work_dir: 'exps/distilled_student'
+print_log: true
+include_val: true
+
+# Additional distillation-loss hyperparams
+distill-loss: loss.BCE            # if you have a custom KD approach or standard CE
+distill-args: {}
+student-loss: loss.BCE
+loss-args: {}
+
+# Possibly the distiller script might parse 'distillation' block
+# but here we keep it consistent with your script's usage
