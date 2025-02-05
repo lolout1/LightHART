@@ -17,6 +17,7 @@ from tqdm import tqdm
 import warnings
 import json
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
 # local
 from utils.dataset import prepare_smartfallmm
@@ -96,7 +97,11 @@ class Distiller(Trainer):
       3) Creates DataLoaders using TeacherVarLenFeeder and teacher_varlen_collate_fn.
       4) Runs multi-fold training by loading teacher from Fold{i}_teacher_best_full.pth.
       5) Passes the correct inputs to the teacher (skel, accel, time, mask) and student (accel, mask, time).
-      6) Logs detailed metrics (loss, accuracy, F1, precision, recall) for both teacher and student.
+      6) Logs detailed metrics (loss, acc, F1, precision, recall) for both teacher and student.
+      7) Saves the best student model weights for each fold in a fold-specific directory.
+         The filename includes the best validation loss, accuracy, and F1.
+      8) At the end, prints a cross-validation summary with the best epoch metrics for each fold
+         along with learning rate, batch size, and model arguments for both teacher and student.
     """
     def __init__(self, arg):
         # fallback for parent's Trainer
@@ -110,8 +115,15 @@ class Distiller(Trainer):
         self.data_loader = {}
         self.model = {}
 
-        # Add fold_results attribute for storing per-fold metrics
+        # For recording per-fold best metrics and per-epoch histories
         self.fold_results = []
+        self.train_loss_history = []
+        self.val_loss_history = []
+        self.distill_loss_history = []
+        self.fold_best_metrics = {}  # will be updated in eval()
+
+        # fold index (will be set in start())
+        self.fold_idx = None
 
         # parse dataset_args
         if isinstance(self.arg.dataset_args, str):
@@ -154,11 +166,7 @@ class Distiller(Trainer):
 
     def load_data(self, fold_idx=1, train_subjects=None, val_subjects=None):
         """
-        Build the dataset using prepare_smartfallmm() and your feeder.
-        This function:
-          1) Calls builder.make_dataset() with train_subjects and then with val_subjects.
-          2) Wraps the processed data in TeacherVarLenFeeder.
-          3) Creates DataLoaders using teacher_varlen_collate_fn.
+        Build the dataset using prepare_smartfallmm() and wrap it in TeacherVarLenFeeder.
         """
         builder = prepare_smartfallmm(self.arg)
 
@@ -225,13 +233,12 @@ class Distiller(Trainer):
 
         self.record_time()
         timer = dict(dataloader=0.001, model=0.001, stats=0.001)
-        train_loss = 0
+        epoch_distill_loss = 0
         correct_student = 0
         correct_teacher = 0
         cnt = 0
 
-        process = tqdm(loader, ncols=80)
-        for batch_idx, (skel_pad, accel_pad, time_pad, skel_mask, accel_mask, labels) in enumerate(process):
+        for batch_idx, (skel_pad, accel_pad, time_pad, skel_mask, accel_mask, labels) in enumerate(tqdm(loader, ncols=80)):
             skel_pad   = skel_pad.to(self.output_device)
             accel_pad  = accel_pad.to(self.output_device)
             time_pad   = time_pad.to(self.output_device)
@@ -268,7 +275,7 @@ class Distiller(Trainer):
             timer['model'] += self.split_time()
 
             with torch.no_grad():
-                train_loss += loss.item()
+                epoch_distill_loss += loss.item()
                 stu_preds = torch.argmax(F.log_softmax(student_logits, dim=1), dim=1)
                 correct_student += (stu_preds == labels).sum().item()
                 tea_preds = torch.argmax(F.log_softmax(teacher_logits, dim=1), dim=1)
@@ -277,34 +284,38 @@ class Distiller(Trainer):
             cnt += len(labels)
             timer['stats'] += self.split_time()
 
-        train_loss /= cnt
+        epoch_distill_loss /= cnt
         stu_acc = 100.0 * correct_student / cnt
         tea_acc = 100.0 * correct_teacher / cnt
 
-        proportion = {
-            k: '{:02d}%'.format(int(round(v * 100 / sum(timer.values()))))
-            for k, v in timer.items()
-        }
         self.print_log(
-            f"\tEpoch {epoch+1} Distill Loss: {train_loss:.4f}. Stu Acc: {stu_acc:.2f}%, Tea Acc: {tea_acc:.2f}%"
+            f"\tEpoch {epoch+1} Distill Loss: {epoch_distill_loss:.4f}. Stu Acc: {stu_acc:.2f}%, Tea Acc: {tea_acc:.2f}%"
         )
-        self.print_log("\tTime usage: [Data]{dataloader}, [Network]{model}".format(**proportion))
+        self.print_log("\tTime usage: [Data]{dataloader}, [Network]{model}".format(**timer))
 
-        if not self.include_val:
-            if stu_acc > getattr(self, 'best_accuracy', float('-inf')):
-                self.best_accuracy = stu_acc
-                torch.save(
-                    self.model['student'].state_dict(),
-                    os.path.join(self.arg.work_dir, f"{self.arg.model_saved_name}_{epoch}.pth")
-                )
-                self.print_log("Weights saved (no validation).")
-        else:
-            self.eval(epoch, loader_name='val')
+        self.distill_loss_history.append(epoch_distill_loss)
+        # Here we (for simplicity) record training loss as the distillation loss
+        self.train_loss_history.append(epoch_distill_loss)
+
+        # Run evaluation at the end of the epoch
+        val_metrics = self.eval(epoch, loader_name='val')
+        # Update fold best metrics if improvement is observed
+        if val_metrics is not None:
+            avg_loss_student, stu_acc_val, stu_f1, stu_prec, stu_rec = val_metrics
+            if stu_acc_val > self.fold_best_metrics.get('val_acc', 0):
+                self.fold_best_metrics = {
+                    'val_loss': avg_loss_student,
+                    'val_acc': stu_acc_val,
+                    'val_f1': stu_f1,
+                    'val_prec': stu_prec,
+                    'val_rec': stu_rec,
+                    'epoch': epoch + 1
+                }
 
     def eval(self, epoch, loader_name='val', result_file=None):
         if loader_name not in self.data_loader:
             self.print_log(f"[WARN] No loader named {loader_name}.")
-            return
+            return None
         loader = self.data_loader[loader_name]
         self.model['student'].eval()
         self.model['teacher'].eval()
@@ -314,16 +325,13 @@ class Distiller(Trainer):
 
         self.print_log(f"Eval epoch: {epoch+1} on {loader_name}")
 
-        # Initialize accumulators for student metrics
         total_loss_student = 0
         correct_student = 0
+        total_loss_teacher = 0
+        correct_teacher = 0
         cnt = 0
         student_labels = []
         student_preds = []
-
-        # Initialize accumulators for teacher metrics
-        total_loss_teacher = 0
-        correct_teacher = 0
         teacher_preds = []
 
         for batch_idx, (skel_pad, accel_pad, time_pad, skel_mask, accel_mask, labels) in enumerate(tqdm(loader, ncols=80)):
@@ -334,7 +342,6 @@ class Distiller(Trainer):
             accel_mask = accel_mask.to(self.output_device)
             labels     = labels.to(self.output_device)
 
-            # Student forward
             student_logits = self.model['student'](
                 accel_pad.float(),
                 accel_mask,
@@ -348,7 +355,6 @@ class Distiller(Trainer):
             student_labels.extend(labels.cpu().tolist())
             student_preds.extend(stu_batch_preds.cpu().tolist())
 
-            # Teacher forward
             teacher_logits = self.model['teacher'](
                 skel_pad.float(),
                 accel_pad.float(),
@@ -383,31 +389,53 @@ class Distiller(Trainer):
         self.print_log(f"[Val - Student] Loss={avg_loss_student:.4f}, Acc={stu_acc:.2f}%, F1={stu_f1:.2f}%, Prec={stu_prec:.2f}%, Rec={stu_rec:.2f}%")
         self.print_log(f"[Val - Teacher] Loss={avg_loss_teacher:.4f}, Acc={tea_acc:.2f}%, F1={tea_f1:.2f}%, Prec={tea_prec:.2f}%, Rec={tea_rec:.2f}%")
 
-        if self.arg.phase == 'train':
-            if stu_acc > getattr(self, 'best_accuracy', float('-inf')):
-                self.best_accuracy = stu_acc
-                self.best_f1 = stu_f1
-                save_path = os.path.join(self.arg.work_dir, f"{self.arg.model_saved-name}_best.pth")
-                torch.save(self.model['student'], save_path)
-                self.print_log(f"Improved {loader_name} => saved to {save_path}")
+        self.val_loss_history.append(avg_loss_student)
+
+        return avg_loss_student, stu_acc, stu_f1, stu_prec, stu_rec
+
+    def generate_graph(self, fold_dir, best_metrics):
+        """
+        Generate a graph for the current fold showing:
+         - Training (distillation) loss vs. Validation loss vs. Distillation loss (same as train loss here)
+        Save the graph in fold_dir with a filename containing best metrics.
+        """
+        epochs = range(1, len(self.distill_loss_history) + 1)
+        plt.figure()
+        plt.plot(epochs, self.train_loss_history, label='Train (Distill) Loss', marker='o')
+        plt.plot(epochs, self.val_loss_history, label='Validation Loss', marker='x')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Loss vs. Epoch')
+        plt.legend()
+        filename = f"{self.arg.model_saved_name}_loss_{best_metrics['val_loss']:.4f}_acc_{best_metrics['val_acc']:.2f}_f1_{best_metrics['val_f1']:.2f}.png"
+        save_path = os.path.join(fold_dir, filename)
+        plt.savefig(save_path)
+        plt.close()
+        self.print_log(f"Graph saved to {save_path}")
 
     def start(self):
         self.print_log("Parameters:\n{}".format(vars(self.arg)))
 
         if self.arg.phase == 'train':
-            self.best_accuracy = float('-inf')
-            self.best_f1 = float('-inf')
-
             folds = [
-                ([43,35,36], "Fold1"),
-                ([44,34,32], "Fold2"),
-                ([45,37,38], "Fold3"),
-                ([46,29,31], "Fold4"),
-                ([30,33,39], "Fold5")
+                ([43, 35, 36], "Fold1"),
+                ([44, 34, 32], "Fold2"),
+                ([45, 37, 38], "Fold3"),
+                ([46, 29, 31], "Fold4"),
+                ([30, 33, 39], "Fold5")
             ]
             results = self.create_df()
 
             for i, (val_subs, foldname) in enumerate(folds, start=1):
+                self.fold_idx = i
+                # Reset per-fold histories and best metrics
+                self.train_loss_history = []
+                self.val_loss_history = []
+                self.distill_loss_history = []
+                self.fold_best_metrics = {}
+                self.best_accuracy = float('-inf')
+                self.best_f1 = float('-inf')
+
                 self.print_log(f"\n--- Distillation {foldname}, val_subs={val_subs} ---")
 
                 # Load teacher from Fold{i}_teacher_best_full.pth
@@ -442,43 +470,49 @@ class Distiller(Trainer):
                 self.load_data(fold_idx=i, train_subjects=train_subs, val_subjects=val_subs)
                 self.load_optimizer('student')
 
-                self.best_accuracy = float('-inf')
-                self.best_f1 = float('-inf')
-
+                # Training loop over epochs
                 for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
                     self.train(epoch)
 
+                # After training for this fold, generate a graph using the best metrics recorded
+                fold_dir = os.path.join(self.arg.work_dir, f"Fold{i}")
+                os.makedirs(fold_dir, exist_ok=True)
+                # Use the recorded best metrics (if none were recorded, default to the last epoch)
+                if not self.fold_best_metrics:
+                    self.fold_best_metrics = {
+                        'val_loss': self.val_loss_history[-1] if self.val_loss_history else -1,
+                        'val_acc': self.best_accuracy,
+                        'val_f1': self.best_f1
+                    }
+                self.generate_graph(fold_dir, self.fold_best_metrics)
+
                 # Record final best metrics for this fold
-                best_metrics = {
-                    'epoch': self.best_accuracy,  # Adjust if you want to store epoch number
-                    'val_acc': self.best_accuracy,
-                    'val_f1': self.best_f1
-                }
                 subject_result = pd.Series({
                     'fold': foldname,
                     'val_subjects': str(val_subs),
                     'train_subjects': str(train_subs),
-                    'accuracy': round(self.best_accuracy, 2),
-                    'f1_score': round(self.best_f1, 2),
-                    'teacher_loaded': f"Fold{i}_teacher_best_full.pth"
+                    'best_epoch': self.fold_best_metrics.get('epoch', -1),
+                    'val_loss': round(self.fold_best_metrics.get('val_loss', -1), 4),
+                    'val_acc': round(self.fold_best_metrics.get('val_acc', -1), 2),
+                    'val_f1': round(self.fold_best_metrics.get('val_f1', -1), 2),
+                    'teacher_loaded': f"Fold{i}_teacher_best_full.pth",
+                    'lr': self.arg.base_lr,
+                    'batch_size': self.arg.batch_size,
+                    'teacher_args': str(self.arg.teacher_args),
+                    'student_args': str(self.arg.student_args)
                 })
                 results.loc[len(results)] = subject_result
-                self.fold_results.append(best_metrics)
+                self.fold_results.append(subject_result)
 
             # Final Cross-Validation Summary
             self.print_log("\n===== Cross-Validation Summary =====")
-            avg_acc = np.mean([m['val_acc'] for m in self.fold_results if m is not None])
-            avg_f1 = np.mean([m['val_f1'] for m in self.fold_results if m is not None])
+            avg_acc = np.mean([float(m['val_acc']) for m in self.fold_results])
+            avg_f1 = np.mean([float(m['val_f1']) for m in self.fold_results])
             self.print_log(f"Average Val Accuracy: {avg_acc:.4f}")
             self.print_log(f"Average Val F1: {avg_f1:.4f}")
             self.print_log("----- Best Metrics per Fold -----")
             for i, metrics in enumerate(self.fold_results, start=1):
-                if metrics is not None:
-                    self.print_log(
-                        f"Fold{i}: Best Acc={metrics['val_acc']:.4f}, Best F1={metrics['val_f1']:.4f}"
-                    )
-                else:
-                    self.print_log(f"Fold{i}: No metrics recorded.")
+                self.print_log(f"Fold{i}: {metrics.to_dict()}")
             results.to_csv(os.path.join(self.arg.work_dir, "scores.csv"), index=False)
 
         elif self.arg.phase == 'test':
