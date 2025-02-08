@@ -1,5 +1,6 @@
-# config/smartfallmm/t3.yaml
-model: Models.t3.TransformerTeacher
+# config/smartfallmm/teach_transformer.yaml
+
+model: Models.master_t3.TransformerTeacher
 dataset: smartfallmm
 
 # Subjects for cross-validation
@@ -10,16 +11,16 @@ model_args:
   joint_dim: 3
   accel_dim: 3
   hidden_skel: 128
-  hidden_accel: 64
+  hidden_accel: 128
   accel_heads: 4
   accel_layers: 3
   skeleton_heads: 4
   skeleton_layers: 2
-  time2vec_dim: 8
-  fusion_hidden: 128
+  time2vec_dim: 16
+  fusion_hidden: 256
   num_classes: 2
   dropout: 0.2
-  dim_feedforward: 128
+  dim_feedforward: 256
 
 dataset_args:
   mode: 'variable_time'
@@ -37,9 +38,10 @@ training:
   test_batch_size: 32
   val_batch_size: 32
   num_epoch: 100
-  optimizer: adamw
-  base_lr: 0.0002
+  optimizer: adam
+  base_lr: 0.00025
   weight_decay: 0.05
+  #class_weights: [0.33, 0.67]
   label_smoothing: 0.1
   scheduler: cosine
   grad_clip: 5.0

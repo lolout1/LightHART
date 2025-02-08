@@ -1,0 +1,61 @@
+# config/smartfallmm/distill.yaml
+
+dataset: smartfallmm
+
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  modalities: ['skeleton', 'accelerometer']
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+
+teacher_model: Models.t3.TransformerTeacher
+teacher_args:
+  num_joints: 32
+  joint_dim: 3
+  hidden_skel: 128
+  hidden_accel: 128
+  accel_heads: 4
+  accel_layers: 3
+  skeleton_heads: 4
+  skeleton_layers: 2
+  time2vec_dim: 16
+  fusion_hidden: 256
+  num_classes: 2
+  dropout: 0.3
+  dim_feedforward: 256
+
+student_model: Models.optimized_fall_model.OptimizedFallModel
+student_args:
+  accel_dim: 3
+  time2vec_dim: 8          # Increased temporal encoding capacity
+  cnn_filters: 32          # Single CNN layer for local features
+  cnn_kernel: 7            # Larger receptive field
+  cnn_stride: 2            # Strategic downsampling
+  transformer_d_model: 48  # Reduced from original 64
+  transformer_nhead: 4
+  transformer_num_layers: 2
+  transformer_ff: 96       # Scaled with d_model
+  dropout: 0.4             # Increased regularization
+  num_classes: 2
+
+phase: 'train'
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 50
+optimizer: adam
+base_lr: 0.0005            # Slightly higher for distillation
+weight_decay: 0.0004
+model_saved_name: 'optimized_student_distilled'
+print_log: true
+include_val: true
+
+distill_loss: loss.BCE
+distill_args: {}
+student_loss: loss.BCE
+loss_args: {}

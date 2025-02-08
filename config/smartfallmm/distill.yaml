@@ -1,64 +1,63 @@
-# config/smartfallmm/distill_student.yaml
+# File: config/smartfallmm/distill.yaml
+# Renamed keys to match the argument parser in distiller.py (uses teacher_model, teacher_args, etc.)
 
 dataset: smartfallmm
 
-subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+subjects: [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 43, 44, 45, 46]
 
 dataset_args:
   mode: 'variable_time'
   task: 'fd'
-  modalities: ['skeleton', 'accelerometer']
+  modalities: ['accelerometer', 'skeleton']
   age_group: ['young']
   sensors: ['watch']
   window_size_sec: 4.0
   stride_sec: 1.0
 
-# Teacher model references (unchanged)
-teacher_model: Models.t3.TransformerTeacher
+# Use underscores here so distiller.py won't raise "WRONG ARG"
+teacher_model: Models.t4.TransformerTeacher
 teacher_args:
   num_joints: 32
   joint_dim: 3
-  hidden_skel: 128
-  hidden_accel: 128
-  accel_heads: 4
-  accel_layers: 3
-  skeleton_heads: 4
-  skeleton_layers: 2
+  hidden_dim: 96
+  accel_dim: 3
   time2vec_dim: 16
-  fusion_hidden: 256
-  num_classes: 2
-  dropout: 0.3
+  nhead: 4
+  num_layers: 3
   dim_feedforward: 256
+  dropout: 0.3
+  num_classes: 2
 
-# Student model references (replaced with FallTime2VecTransformer)
-student_model: Models.fall_time2vec_transformer.FallTime2VecTransformer
+student_model: Models.fall2.FallTime2VecTransformer
 student_args:
-  feat_dim: 11
-  d_model: 64
+  feat_dim: 11       # 3 accel + 8 time2vec
+  d_model: 48
   nhead: 4
   num_layers: 2
   num_classes: 2
   time2vec_dim: 8
-  dropout: 0.1
+  dropout: 0.4
   dim_feedforward: 128
 
-# Distillation training hyperparameters
 phase: 'train'
 batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
-num_epoch: 50
+num_epoch: 75
 optimizer: adam
 base_lr: 0.001
 weight_decay: 0.0004
 model_saved_name: 'student_distilled'
-work_dir: 'exps/distilled_student'
 print_log: true
 include_val: true
 
-# Additional distillation-loss hyperparameters (if any)
-distill-loss: loss.BCE
-distill-args: {}
-student-loss: loss.BCE
-loss-args: {}
+distill-loss: 'loss.CE'
+distill-args:
+  temperature: 3.0
+  alpha: .7
+  beta: .5
+  teacher_feat_dim: 192  # if teacher's final "cross" has dim=hidden_dim*2=96*2OD
+  student_feat_dim: 48   # student's final embed dimension
+
+# You may adjust these if you still see any instability or want better performance
 

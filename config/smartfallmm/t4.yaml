@@ -1,0 +1,52 @@
+# config/smartfallmm/t4.yaml
+model: Models.t4.TransformerTeacher
+dataset: smartfallmm
+
+# Subjects for cross-validation
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+model_args:
+  num_joints: 32
+  joint_dim: 3
+  hidden_dim: 96         # Lowered hidden dimension (was 256) for more stable training
+  accel_dim: 3
+  time2vec_dim: 16        # Keeping time2vec at 16 for richer temporal representation
+  nhead: 4
+  num_layers: 3
+  dim_feedforward: 256    # Reduced feedforward dimension (was 512)
+  dropout: 0.3
+  num_classes: 2
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  max_length: 64          # Not used for variable_time mode but required by pipeline
+  modalities: ['accelerometer', 'skeleton']
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  validation_split: 'subject'
+
+training:
+  batch_size: 16
+  test_batch_size: 16
+  val_batch_size: 16
+  num_epoch: 100
+  optimizer: adam
+  base_lr: 0.0002         # Increased learning rate from 0.0001 to 0.0002 to help network update
+  weight_decay: 0.0005
+  label_smoothing: 0.1
+  scheduler: cosine
+  grad_clip: 5.0          # Use gradient clipping to avoid exploding gradients
+  phase: 'train'
+  work_dir: 'exps/teacher_t4_stable'
+
+data_handling:
+  skel_error_strategy: 'drop_trial'
+  max_retries: 3
+  cache_processed: True
+
+print_log: true
+include_val: false
+
