@@ -130,7 +130,7 @@ def prepare_smartfallmm(arg):
         max_length=arg.dataset_args.get('max_length',64),
         task=arg.dataset_args.get('task','fd'),
         window_size_sec=arg.dataset_args.get('window_size_sec',4.0),
-        stride_sec=arg.dataset_args.get('stride_sec',1.0),
+        stride_sec=arg.dataset_args.get('stride_sec',0.5),
         time2vec_dim=arg.dataset_args.get('time2vec_dim',8)
     )
     return builder

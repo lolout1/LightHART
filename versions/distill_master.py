@@ -132,8 +132,8 @@ class Distiller(Trainer):
         # Build distillation loss
         # ExtendedDistillationLoss(temperature=3.0, alpha=0.5, beta=1.0, teacher_feat_dim=128, student_feat_dim=48)
         T = self.arg.distill_args.get("temperature", 3.0)
-        alpha = self.arg.distill_args.get("alpha", 0.5)
-        beta = self.arg.distill_args.get("beta", 1.0)
+        alpha = self.arg.distill_args.get("alpha", 0.7)
+        beta = self.arg.distill_args.get("beta", 0.3)
         t_dim = self.arg.distill_args.get("teacher_feat_dim", 128)
         s_dim = self.arg.distill_args.get("student_feat_dim", 48)
 

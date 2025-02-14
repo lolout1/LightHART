@@ -43,7 +43,7 @@ class DatasetBuilder:
     If any modality or file is empty => skip entire trial => ensures labels match.
     """
     def __init__(self, dataset, mode, max_length, task='fd',
-                 window_size_sec=4.0, stride_sec=1.0, time2vec_dim=8, **kwargs):
+                 window_size_sec=4.0, stride_sec=0.5, time2vec_dim=8, **kwargs):
         self.dataset = dataset
         self.mode = mode
         self.max_length = max_length

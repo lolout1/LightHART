@@ -1,8 +1,8 @@
 #!/bin/bash
 
-python tt2.py \
+python tt4.py \
   --config ./config/smartfallmm/master_t3.yaml \
-  --work-dir ./exps/teacher_var_time2 \
+  --work-dir ./exps/teacher_var_time3 \
   --model-saved-name teacher_best \
   --device 0 \
   --base-lr 1e-4 \
