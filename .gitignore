@@ -10,3 +10,8 @@ exps/
 .vscode
 /utils/visualizations
 /Models/Models
+*.sh
+*.ipynb
+notebook /processing.ipynb
+notebook /results_analysis.ipynb
+*.ipynb

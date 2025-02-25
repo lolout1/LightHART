@@ -1,0 +1,46 @@
+# File: config/smartfallmm/single_input.yaml
+
+dataset: smartfallmm
+
+# If you use the same subject set for cross-validation:
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+dataset_args:
+  # The 'mode' or 'modalities' won't be used here if you're only reading CSVs with (x,y,z,time).
+  mode: 'single_input'
+  task: 'fd'
+  # 'age_group' not used now, but keep if needed:
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  # or any other relevant keys
+
+model: Models.fall_time2vec_transformer_single.FallTime2VecTransformerSingle
+model_args:
+  time2vec_dim: 8
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  num_classes: 2
+  dropout: 0.1
+  dim_feedforward: 128
+
+training:
+  batch_size: 16
+  num_epoch: 50
+  optimizer: adam
+  base_lr: 0.0005
+  weight_decay: 0.0004
+  # Additional hyperparams if needed
+  # e.g. scheduler: None
+
+phase: 'train'
+work_dir: 'exps/single_input'
+model_saved_name: 'student_single_input'
+
+print_log: true
+include_val: true
+device: [0]
+seed: 2
+
