@@ -1,0 +1,43 @@
+# teacher_tt4.yaml
+# Teacher training config: watch + phone + skeleton (masking for variable-len).
+model: Models.multi_sensor_teacher.MultiSensorTeacher
+
+model_args:
+  skeleton_hidden: 128
+  watch_inertial_hidden: 128
+  skeleton_heads: 4
+  skeleton_layers: 2
+  watch_inert_heads: 4
+  watch_inert_layers: 2
+  fusion_dim: 256
+  dropout: 0.3
+  orientation_rep: "quat"
+  num_classes: 2
+
+subjects: [29,30,31,32,33,34,35,36,37,38,39,43,44,45,46]
+
+dataset_args:
+  mode: "variable_time"
+  task: "fd"
+  modalities: ["accelerometer","gyroscope","skeleton"]
+  sensors: ["watch","phone"]
+  age_group: ["young"]
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  max_length: 128
+  filter_type: "ekf"      # can be "none","kf","ekf","ukf"
+  orientation_rep: "quat"
+  align_skeleton: true
+  skeleton_fps: 30.0
+  # no fixed_count => teacher can be variable-len
+
+training:
+  batch_size: 16
+  val_batch_size: 16
+  num_epoch: 30
+  optimizer: "adam"
+  base_lr: 0.0005
+  weight_decay: 0.0004
+  model_saved_name: "teacher_tt4"
+  work_dir: "exps/teacher_tt4"
+

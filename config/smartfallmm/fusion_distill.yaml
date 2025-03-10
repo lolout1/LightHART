@@ -1,0 +1,69 @@
+# config/smartfallmm/fusion_distill.yaml
+
+dataset: smartfallmm
+
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  modalities: ['accelerometer', 'gyroscope', 'skeleton']
+  age_group: ['young']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  imu_fusion: 'ekf'  # Options: 'standard', 'ekf', 'ukf'
+  align_method: 'dtw'  # Options: 'dtw', 'interpolation', 'crop'
+  cache_processed: True
+  skel_error_strategy: 'drop_trial'
+  use_cache: True
+
+# Teacher model references
+teacher_model: Models.transformer_fusion.TransformerTeacherFusion
+teacher_args:
+  num_joints: 32
+  joint_dim: 3
+  accel_dim: 15  # Full fusion features
+  hidden_skel: 128
+  hidden_accel: 128
+  accel_heads: 4
+  accel_layers: 3
+  skeleton_heads: 4
+  skeleton_layers: 2
+  fusion_hidden: 256
+  num_classes: 2
+  dropout: 0.3
+  dim_feedforward: 256
+
+# Student model references
+student_model: Models.transformer_fusion.FallTransformerFusion
+student_args:
+  feat_dim: 15  # Full fusion features
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  num_classes: 2
+  dropout: 0.1
+  dim_feedforward: 128
+
+# Distillation training hyperparameters
+phase: 'train'
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 100
+optimizer: adam
+base_lr: 0.0003
+weight_decay: 0.0004
+model_saved_name: 'student_distilled_fusion'
+work_dir: 'exps/distilled_student_fusion'
+print_log: true
+include_val: true
+
+# Distillation loss parameters
+distill_args:
+  temperature: 3.0
+  alpha: 0.5
+  beta: 1.0
+  teacher_feat_dim: 128
+  student_feat_dim: 64

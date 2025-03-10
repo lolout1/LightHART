@@ -1,10 +1,12 @@
-# File: utils/processor/base.py
+# utils/processor/base.py
 
 import re
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import time
+from utils.imu_fusion import StandardKalmanIMU, ExtendedKalmanIMU, UnscentedKalmanIMU, robust_align_modalities
 
 ###############################################################################
 # Utility Functions
@@ -46,6 +48,14 @@ def parse_watch_csv(file_path: str):
     return np.column_stack([times, sensor_data])  # shape (N,4)
 
 
+def parse_gyro_csv(file_path: str):
+    """
+    Parse gyroscope CSV file, similar to accelerometer
+    Returns array with shape (N,4): [time_elapsed, gx, gy, gz]
+    """
+    return parse_watch_csv(file_path)  # Same format as accelerometer
+
+
 def create_skeleton_timestamps(skel_array: np.ndarray, fps=30.0):
     """
     For skeleton arrays => shape (num_frames, feats).
@@ -55,6 +65,47 @@ def create_skeleton_timestamps(skel_array: np.ndarray, fps=30.0):
     tvals = np.arange(n) / fps
     tvals = tvals.reshape(-1, 1)
     return np.hstack([tvals, skel_array])
+
+
+def fuse_accel_gyro(accel_data, gyro_data, filter_type='ekf', timestamps=None):
+    """
+    Fuse accelerometer and gyroscope data using selected Kalman filter
+    
+    Args:
+        accel_data: Accelerometer data, shape (N, 3) or (N, 4) with time
+        gyro_data: Gyroscope data, shape (N, 3) or (N, 4) with time
+        filter_type: Type of filter ('standard', 'ekf', 'ukf')
+        timestamps: Optional array of timestamps, shape (N,)
+        
+    Returns:
+        Fused IMU data with orientation, shape (N, features)
+    """
+    # Extract accelerometer and gyroscope values
+    if accel_data.shape[1] == 4:
+        timestamps = accel_data[:, 0]
+        accel_xyz = accel_data[:, 1:4]
+    else:
+        accel_xyz = accel_data
+        
+    if gyro_data.shape[1] == 4:
+        gyro_xyz = gyro_data[:, 1:4]
+    else:
+        gyro_xyz = gyro_data
+    
+    # Select and initialize the appropriate filter
+    if filter_type.lower() == 'standard':
+        filter = StandardKalmanIMU()
+    elif filter_type.lower() == 'ekf':
+        filter = ExtendedKalmanIMU()
+    elif filter_type.lower() == 'ukf':
+        filter = UnscentedKalmanIMU()
+    else:
+        raise ValueError(f"Unknown filter type: {filter_type}. Must be 'standard', 'ekf', or 'ukf'.")
+    
+    # Process the data
+    fused_data = filter.process_sequence(accel_xyz, gyro_xyz, timestamps)
+    
+    return fused_data
 
 
 def sliding_windows_by_time(arr, window_size_sec=4.0, stride_sec=1.0):
@@ -79,7 +130,7 @@ def sliding_windows_by_time(arr, window_size_sec=4.0, stride_sec=1.0):
 
 
 def sliding_windows_by_time_fixed(arr, window_size_sec=4.0, stride_sec=1.0,
-                                  fixed_count=128, file_path=""):
+                                 fixed_count=128, file_path=""):
     """
     For accelerometer => shape(N,4): [time, x, y, z].
     Slide 4s => uniform-subsample to exactly 'fixed_count' points if possible;
@@ -116,8 +167,7 @@ def sliding_windows_by_time_fixed(arr, window_size_sec=4.0, stride_sec=1.0,
 
 class Processor(nn.Module):
     """
-    For each file => parse -> produce a list of sub-windows (each shape(128,4) if watch,
-    or variable-length if skeleton).
+    Enhanced processor with IMU fusion capabilities
     """
     def __init__(self, file_path: str, mode: str, max_length: int, **kwargs):
         super().__init__()
@@ -126,10 +176,18 @@ class Processor(nn.Module):
         self.max_length = max_length
         self.window_size_sec = kwargs.pop('window_size_sec', 4.0)
         self.stride_sec = kwargs.pop('stride_sec', 1.0)
+        self.imu_fusion = kwargs.pop('imu_fusion', None)
+        self.align_method = kwargs.pop('align_method', 'dtw')
+        self.input_shape = None
+        
+    def set_input_shape(self, data):
+        """Set input shape based on data"""
+        self.input_shape = data.shape
 
-    def load_file(self, is_skeleton=False):
+    def load_file(self, is_skeleton=False, is_gyroscope=False):
         """
         If is_skeleton => load CSV => shape(N, feats), add time col => shape(N, 1+feats).
+        If is_gyroscope => parse gyro CSV => shape(N, 4) => [time, gx, gy, gz].
         Else => parse watch CSV => shape(N, 4) => [time, x, y, z].
         """
         try:
@@ -138,6 +196,8 @@ class Processor(nn.Module):
                     df = pd.read_csv(self.file_path, header=None).dropna(how='all').fillna(0)
                     raw = df.values.astype(np.float32)
                     data = create_skeleton_timestamps(raw, fps=30.0)
+                elif is_gyroscope:
+                    data = parse_gyro_csv(self.file_path)
                 else:
                     data = parse_watch_csv(self.file_path)
             else:
@@ -150,14 +210,72 @@ class Processor(nn.Module):
             print(f"[WARN] Could not load {self.file_path}, error={e}")
             return np.zeros((0, 0), dtype=np.float32)
 
-    def process(self, data: np.ndarray):
+    def load_and_fuse_imu(self, accel_path, gyro_path, filter_type='ekf'):
+        """
+        Load accelerometer and gyroscope data and apply IMU fusion
+        
+        Args:
+            accel_path: Path to accelerometer data file
+            gyro_path: Path to gyroscope data file
+            filter_type: Type of Kalman filter to use ('standard', 'ekf', 'ukf')
+            
+        Returns:
+            Fused IMU data with orientation features
+        """
+        # Load accelerometer and gyroscope data
+        accel_data = parse_watch_csv(accel_path)
+        gyro_data = parse_gyro_csv(gyro_path)
+        
+        # Check if data is valid
+        if accel_data.shape[0] == 0 or gyro_data.shape[0] == 0:
+            print(f"[WARN] Empty accelerometer or gyroscope data for {accel_path} and {gyro_path}")
+            return np.zeros((0, 0), dtype=np.float32)
+        
+        # Extract timestamps from accelerometer data
+        timestamps = accel_data[:, 0]
+        
+        # Ensure gyroscope data is aligned with accelerometer data
+        # Interpolate gyroscope data to match accelerometer timestamps
+        from scipy.interpolate import interp1d
+        
+        # Create interpolator only if timestamps differ
+        if not np.array_equal(timestamps, gyro_data[:, 0]):
+            gyro_interp = interp1d(
+                gyro_data[:, 0],
+                gyro_data[:, 1:],
+                axis=0,
+                bounds_error=False,
+                fill_value="extrapolate"
+            )
+            
+            # Interpolate gyroscope data at accelerometer timestamps
+            gyro_aligned = gyro_interp(timestamps)
+        else:
+            gyro_aligned = gyro_data[:, 1:]
+        
+        # Apply IMU fusion
+        fused_data = fuse_accel_gyro(
+            accel_data[:, 1:],  # Skip time column
+            gyro_aligned,
+            filter_type=filter_type,
+            timestamps=timestamps
+        )
+        
+        # Add timestamps column back to fused data
+        fused_with_time = np.column_stack([timestamps, fused_data])
+        
+        return fused_with_time
+
+    def process(self, data: np.ndarray, is_fused=False):
         """
         If watch => sliding_windows_by_time_fixed => 4s->128 samples.
         If skeleton => sliding_windows_by_time => variable length.
+        
+        For fused data, use the same approach as watch data.
         """
         if self.mode == 'variable_time':
-            if data.shape[1] == 4:
-                # watch => shape(N,4)
+            if data.shape[1] == 4 or is_fused:
+                # watch or fused data
                 windows = sliding_windows_by_time_fixed(
                     data,
                     window_size_sec=self.window_size_sec,
@@ -176,3 +294,33 @@ class Processor(nn.Module):
         else:
             return [data]  # fallback => single window
 
+    def align_modalities(self, accel_data, skel_data):
+        """
+        Align accelerometer data with skeleton data
+        
+        Args:
+            accel_data: Accelerometer data with timestamps
+            skel_data: Skeleton data with timestamps
+            
+        Returns:
+            Aligned accelerometer and skeleton data
+        """
+        if accel_data.shape[0] == 0 or skel_data.shape[0] == 0:
+            return [], []
+            
+        # Extract timestamps from accelerometer
+        accel_timestamps = accel_data[:, 0]
+        
+        # Align using robust method
+        aligned_accel, aligned_skel, aligned_timestamps = robust_align_modalities(
+            accel_data[:, 1:],  # skip time column
+            skel_data[:, 1:],    # skip time column
+            accel_timestamps,
+            method=self.align_method
+        )
+        
+        # Add timestamps back
+        aligned_accel_with_time = np.column_stack([aligned_timestamps, aligned_accel])
+        aligned_skel_with_time = np.column_stack([aligned_timestamps, aligned_skel])
+        
+        return aligned_accel_with_time, aligned_skel_with_time
