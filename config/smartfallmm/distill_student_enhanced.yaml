@@ -1,0 +1,72 @@
+# config/smartfallmm/distill_student_enhanced.yaml
+# Enhanced cross-modal distillation config
+
+teacher_model: Models.transformer_quat_enhanced.QuatTeacherEnhanced
+teacher_args:
+  feat_dim: 16
+  d_model: 64
+  nhead: 4
+  num_layers: 3
+  num_classes: 2
+  dropout: 0.2
+  dim_feedforward: 128
+
+student_model: Models.transformer_quat_enhanced.QuatStudentEnhanced
+student_args:
+  feat_dim: 16
+  d_model: 48
+  nhead: 4
+  num_layers: 2
+  num_classes: 2
+  dropout: 0.1
+  dim_feedforward: 96
+
+subjects: [29, 30, 31, 32, 33, 44, 45, 46, 34, 35, 36, 37, 38, 39, 43]
+
+dataset_args:
+  mode: 'variable_time'
+  task: 'fd'
+  age_group: ['young']
+  modalities: ['accelerometer', 'gyroscope', 'skeleton']
+  sensors: ['watch']
+  window_size_sec: 4.0
+  stride_sec: 1.0
+  imu_fusion: 'ekf'  # Options: 'standard', 'ekf', 'ukf'
+  align_method: 'dtw'
+  wrist_idx: 9  # Index of wrist joint to align with watch
+  calibrate_filter: true
+  calibration_samples: 5
+  use_cache: true
+  cache_dir: './.cache_quat_enhanced'
+  skel_error_strategy: 'drop_trial'
+
+phase: 'train'
+batch_size: 16
+val_batch_size: 16
+num_epoch: 50
+optimizer: 'adam'
+base_lr: 0.0005
+weight_decay: 0.0004
+scheduler: 'cosine'
+grad_clip: 5.0
+model_saved_name: 'student_enhanced_best'
+work_dir: 'exps/student_enhanced'
+print_log: true
+include_val: true
+early_stop_patience: 15
+teacher_weight_dir: 'exps/teacher_quat'
+num_workers: 4
+
+distill_args:
+  temperature: 3.0
+  alpha: 0.5  # Weight between KL (alpha) and CE (1-alpha)
+  beta: 1.0   # Weight for feature alignment
+  gamma: 0.3  # Weight for attention alignment
+  delta: 0.2  # Weight for intermediate layer alignment
+  teacher_feat_dim: 64
+  student_feat_dim: 48
+  teacher_layers: 3
+  student_layers: 2
+  use_contrastive: true
+  contrastive_temp: 0.1
+  contrastive_weight: 0.5
