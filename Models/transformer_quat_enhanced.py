@@ -1,5 +1,10 @@
 """
-Enhanced transformer models with attention map extraction for cross-modal distillation.
+Enhanced transformer models with quaternion support for fall detection.
+
+Provides:
+1. QuatTeacherEnhanced - Teacher model using both skeleton and IMU data
+2. QuatStudentEnhanced - Student model using only IMU data
+3. Both models support quaternion features and attention map extraction
 """
 
 import torch
@@ -46,6 +51,98 @@ class PositionalEncoding(nn.Module):
         """
         return x + self.pe[:, :x.size(1), :]
 
+class QuaternionAttention(nn.Module):
+    """
+    Quaternion-aware attention mechanism that preserves orientation properties.
+    """
+    
+    def __init__(self, embed_dim, num_heads, dropout=0.0):
+        """
+        Initialize quaternion attention.
+        
+        Args:
+            embed_dim: Embedding dimension
+            num_heads: Number of attention heads
+            dropout: Dropout probability
+        """
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        assert self.head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
+        
+        # Quaternion components get special treatment
+        self.quat_dim = min(4, self.head_dim)  # At most 4 dimensions for quaternion
+        
+        # Linear projections
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
+        
+        # Store attention maps
+        self.attention_maps = None
+    
+    def forward(self, query, key, value, key_padding_mask=None, need_weights=False, attn_mask=None):
+        """
+        Forward pass with quaternion-aware attention.
+        
+        Args:
+            query: Query tensor of shape (batch_size, seq_len, embed_dim)
+            key: Key tensor of shape (batch_size, seq_len, embed_dim)
+            value: Value tensor of shape (batch_size, seq_len, embed_dim)
+            key_padding_mask: Mask for padding tokens
+            need_weights: Whether to return attention weights
+            attn_mask: Attention mask
+            
+        Returns:
+            Tuple of (output, attention_weights)
+        """
+        batch_size, tgt_len, _ = query.size()
+        src_len = key.size(1)
+        
+        # Project query, key, value
+        q = self.q_proj(query)
+        k = self.k_proj(key)
+        v = self.v_proj(value)
+        
+        # Reshape for multi-head attention
+        q = q.view(batch_size, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, src_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, src_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Calculate attention scores
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        
+        # Apply masks
+        if attn_mask is not None:
+            scores = scores + attn_mask
+        
+        if key_padding_mask is not None:
+            scores = scores.masked_fill(
+                key_padding_mask.unsqueeze(1).unsqueeze(2),
+                float('-inf')
+            )
+        
+        # Calculate attention weights
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        
+        # Store attention maps for later use
+        self.attention_maps = attn_weights
+        
+        # Apply attention weights to values
+        output = torch.matmul(attn_weights, v)
+        
+        # Reshape and project output
+        output = output.transpose(1, 2).contiguous().view(batch_size, tgt_len, self.embed_dim)
+        output = self.out_proj(output)
+        
+        return output, attn_weights
+
 class MultiHeadAttentionWithMap(nn.MultiheadAttention):
     """Extended MultiheadAttention that stores attention maps."""
     
@@ -75,10 +172,15 @@ class TransformerEncoderLayerWithMap(nn.TransformerEncoderLayer):
     """Extended TransformerEncoderLayer that uses MultiHeadAttentionWithMap."""
     
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, 
-                 activation="relu", batch_first=True):
+                 activation="relu", batch_first=True, use_quat_attention=False):
         # Initialize without parent's self-attention
         nn.Module.__init__(self)
-        self.self_attn = MultiHeadAttentionWithMap(d_model, nhead, dropout=dropout)
+        
+        # Use quaternion attention if requested
+        if use_quat_attention:
+            self.self_attn = QuaternionAttention(d_model, nhead, dropout=dropout)
+        else:
+            self.self_attn = MultiHeadAttentionWithMap(d_model, nhead, dropout=dropout)
         
         # Initialize the rest of the layer
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -90,18 +192,37 @@ class TransformerEncoderLayerWithMap(nn.TransformerEncoderLayer):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         
-        self.activation = getattr(F, activation)
+        self.activation = F.relu if activation == "relu" else F.gelu
         self.batch_first = batch_first
+    
+    def forward(self, src, src_mask=None, src_key_padding_mask=None):
+        """Forward pass for the enhanced transformer encoder layer"""
+        src2, weights = self.self_attn(
+            self.norm1(src),
+            self.norm1(src),
+            self.norm1(src),
+            key_padding_mask=src_key_padding_mask,
+            attn_mask=src_mask
+        )
+        
+        src = src + self.dropout1(src2)
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(self.norm2(src)))))
+        src = src + self.dropout2(src2)
+        
+        return src
     
     def get_attention_maps(self):
         """Return attention maps from self-attention layer."""
         return self.self_attn.attention_maps
 
-class TransformerEncoderWithMap(nn.TransformerEncoder):
+class TransformerEncoderWithMap(nn.Module):
     """Extended TransformerEncoder that collects intermediate layer outputs and attention maps."""
     
     def __init__(self, encoder_layer, num_layers, norm=None):
-        super().__init__(encoder_layer, num_layers, norm)
+        super().__init__()
+        self.layers = nn.ModuleList([encoder_layer for _ in range(num_layers)])
+        self.num_layers = num_layers
+        self.norm = norm
     
     def forward(self, src, mask=None, src_key_padding_mask=None):
         """
@@ -134,6 +255,7 @@ class QuatTeacherEnhanced(nn.Module):
     """
     Enhanced teacher model with dual-branch Transformer for skeleton and IMU data.
     Collects intermediate outputs and attention maps for distillation.
+    Uses quaternion features for better orientation representation.
     """
     
     def __init__(
@@ -144,7 +266,8 @@ class QuatTeacherEnhanced(nn.Module):
         num_layers=3,     # Number of transformer layers
         num_classes=2,    # Number of output classes
         dropout=0.2,      # Dropout rate
-        dim_feedforward=128  # Feedforward network dimension
+        dim_feedforward=128,  # Feedforward network dimension
+        use_quat_attention=True  # Whether to use quaternion-aware attention
     ):
         """
         Initialize enhanced teacher model.
@@ -157,6 +280,7 @@ class QuatTeacherEnhanced(nn.Module):
             num_classes: Number of output classes
             dropout: Dropout rate
             dim_feedforward: Dimension of feedforward network
+            use_quat_attention: Whether to use quaternion-aware attention
         """
         super().__init__()
         
@@ -177,7 +301,8 @@ class QuatTeacherEnhanced(nn.Module):
             nhead=4,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            use_quat_attention=False  # No need for quaternion attention in skeleton branch
         )
         self.skel_enc = TransformerEncoderWithMap(skel_layer, num_layers=2)
         
@@ -194,7 +319,8 @@ class QuatTeacherEnhanced(nn.Module):
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            use_quat_attention=use_quat_attention  # Use quaternion attention for IMU branch
         )
         self.imu_enc = TransformerEncoderWithMap(imu_layer, num_layers=num_layers)
         
@@ -307,6 +433,7 @@ class QuatStudentEnhanced(nn.Module):
     """
     Enhanced student model using only IMU data.
     Collects intermediate outputs and attention maps for distillation.
+    Uses quaternion features for better orientation representation.
     """
     
     def __init__(
@@ -317,7 +444,8 @@ class QuatStudentEnhanced(nn.Module):
         num_layers=2,     # Number of transformer layers (less than teacher)
         num_classes=2,    # Number of output classes
         dropout=0.1,      # Dropout rate (less than teacher)
-        dim_feedforward=96  # Feedforward network dimension (smaller than teacher)
+        dim_feedforward=96,  # Feedforward network dimension (smaller than teacher)
+        use_quat_attention=True  # Whether to use quaternion-aware attention
     ):
         """
         Initialize enhanced student model.
@@ -330,6 +458,7 @@ class QuatStudentEnhanced(nn.Module):
             num_classes: Number of output classes
             dropout: Dropout rate
             dim_feedforward: Dimension of feedforward network
+            use_quat_attention: Whether to use quaternion-aware attention
         """
         super().__init__()
         
@@ -345,7 +474,8 @@ class QuatStudentEnhanced(nn.Module):
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            use_quat_attention=use_quat_attention
         )
         self.encoder = TransformerEncoderWithMap(encoder_layer, num_layers=num_layers)
         

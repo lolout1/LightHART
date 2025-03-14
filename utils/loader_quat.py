@@ -92,6 +92,11 @@ class DatasetBuilderQuat:
         # Error handling strategy
         self.skel_error_strategy = kwargs.get('skel_error_strategy', 'drop_trial')
         
+        # Feature configurations
+        self.use_quat_features = kwargs.get('use_quat_features', True)
+        self.use_euler_features = kwargs.get('use_euler_features', True)
+        self.use_derived_features = kwargs.get('use_derived_features', True)
+        
         # Init data containers
         self.data = {}
         self.processed_data = {'labels': []}
@@ -552,3 +557,234 @@ class DatasetBuilderQuat:
                 print(f"Error saving cache: {e}")
         
         return (trial_dict, labs)
+    
+    def extract_features(self, windows, feature_cols=None):
+        """
+        Extract statistical features from windows for traditional ML approaches.
+        
+        Args:
+            windows: List of window arrays
+            feature_cols: Optional list of feature column indices to use
+            
+        Returns:
+            Array of features for each window
+        """
+        if not windows:
+            return np.zeros((0, 0))
+        
+        # Get all data columns except time (first column)
+        if feature_cols is None:
+            feature_cols = list(range(1, windows[0].shape[1]))
+        
+        n_windows = len(windows)
+        n_features = len(feature_cols) * 8  # 8 statistical features per data column
+        
+        features = np.zeros((n_windows, n_features))
+        
+        for i, window in enumerate(windows):
+            data = window[:, feature_cols]
+            feat_idx = 0
+            
+            for col in range(data.shape[1]):
+                series = data[:, col]
+                
+                # Calculate statistical features
+                features[i, feat_idx] = np.mean(series)
+                feat_idx += 1
+                
+                features[i, feat_idx] = np.std(series)
+                feat_idx += 1
+                
+                features[i, feat_idx] = np.min(series)
+                feat_idx += 1
+                
+                features[i, feat_idx] = np.max(series)
+                feat_idx += 1
+                
+                features[i, feat_idx] = np.median(series)
+                feat_idx += 1
+                
+                features[i, feat_idx] = np.sum(np.abs(np.diff(series)))  # Total variation
+                feat_idx += 1
+                
+                # Spectral features
+                if len(series) >= 8:
+                    fft = np.abs(np.fft.rfft(series))
+                    features[i, feat_idx] = np.sum(fft) / len(fft)  # Average power
+                    feat_idx += 1
+                    
+                    dominant_freq = np.argmax(fft) if len(fft) > 0 else 0
+                    features[i, feat_idx] = dominant_freq
+                    feat_idx += 1
+                else:
+                    features[i, feat_idx:feat_idx+2] = 0
+                    feat_idx += 2
+        
+        return features
+
+class MultimodalQuatFeeder:
+    """
+    Dataset for multimodal data with quaternion-enhanced IMU features.
+    
+    Handles both fused IMU and skeleton data for teacher model,
+    or just IMU data for student model.
+    """
+    
+    def __init__(self, data_dict):
+        """
+        Initialize dataset with processed data dictionary.
+        
+        Args:
+            data_dict: Dictionary with keys:
+                - 'fused_imu' or 'accelerometer': List of IMU windows
+                - 'skeleton' (optional): List of skeleton windows
+                - 'labels': List of labels
+        """
+        self.labels = data_dict['labels']
+        
+        # Determine which IMU key to use
+        if 'fused_imu' in data_dict:
+            self.imu_key = 'fused_imu'
+        else:
+            self.imu_key = 'accelerometer'
+            
+        self.imu_data = data_dict.get(self.imu_key, [])
+        self.skel_data = data_dict.get('skeleton', [])
+        
+        # Validate data
+        assert len(self.imu_data) == len(self.labels), \
+            f"IMU data length mismatch: {len(self.imu_data)} vs labels {len(self.labels)}"
+            
+        if len(self.skel_data) > 0:
+            assert len(self.skel_data) == len(self.labels), \
+                f"Skeleton data length mismatch: {len(self.skel_data)} vs labels {len(self.labels)}"
+    
+    def __len__(self):
+        """Get dataset length."""
+        return len(self.labels)
+    
+    def __getitem__(self, idx):
+        """
+        Get data item.
+        
+        Args:
+            idx: Index
+            
+        Returns:
+            Tuple of (imu_data, skeleton_data, label)
+        """
+        imu_arr = self.imu_data[idx]
+        lab = self.labels[idx]
+        
+        # Return skeleton data if available, otherwise empty array
+        if len(self.skel_data) > 0:
+            sk_arr = self.skel_data[idx]
+        else:
+            sk_arr = np.zeros((0, 0), dtype=np.float32)
+            
+        return imu_arr.astype(np.float32), sk_arr.astype(np.float32), lab
+
+def multimodal_quat_collate_fn(batch):
+    """
+    Collate function for variable-length sequences.
+    
+    Args:
+        batch: List of (imu, skeleton, label) tuples
+        
+    Returns:
+        Tuple of (imu_list, skeleton_list, labels_tensor)
+    """
+    # Separate components
+    imu_list, sk_list, lab_list = [], [], []
+    
+    for (imu, sk, lab) in batch:
+        imu_list.append(imu)
+        sk_list.append(sk)
+        lab_list.append(lab)
+    
+    # Convert labels to tensor
+    labels = np.array(lab_list)
+    
+    return imu_list, sk_list, labels
+
+def pad_collate_fn(batch, fixed_imu_len=128, fixed_skel_len=None):
+    """
+    Alternative collate function that pads sequences to fixed length.
+    
+    Args:
+        batch: List of (imu, skeleton, label) tuples
+        fixed_imu_len: Fixed length for IMU sequences
+        fixed_skel_len: Fixed length for skeleton sequences (or None for variable)
+        
+    Returns:
+        Tuple of (imu_tensor, imu_mask, skeleton_tensor, skeleton_mask, labels_tensor)
+    """
+    # Separate components
+    imu_list, sk_list, lab_list = [], [], []
+    
+    for (imu, sk, lab) in batch:
+        imu_list.append(imu)
+        sk_list.append(sk)
+        lab_list.append(lab)
+    
+    # Get batch size
+    batch_size = len(imu_list)
+    
+    # Determine feature dimensions
+    if batch_size > 0:
+        # Skip time column
+        imu_feat_dim = imu_list[0].shape[1] - 1
+        
+        # Check if skeleton data exists
+        has_skeleton = (len(sk_list[0]) > 0)
+        if has_skeleton:
+            skel_feat_dim = sk_list[0].shape[1] - 1  # Skip time column
+        else:
+            skel_feat_dim = 96  # Default
+    else:
+        imu_feat_dim = 16  # Default
+        skel_feat_dim = 96  # Default
+        has_skeleton = False
+    
+    # Create padded tensors for IMU
+    imu_tensor = np.zeros((batch_size, fixed_imu_len, imu_feat_dim))
+    imu_mask = np.ones((batch_size, fixed_imu_len), dtype=bool)
+    
+    # Fill IMU tensor and create mask
+    for i in range(batch_size):
+        imu = imu_list[i]
+        seq_len = min(imu.shape[0], fixed_imu_len)
+        
+        # Copy data without time column
+        imu_tensor[i, :seq_len, :] = imu[:seq_len, 1:]
+        
+        # Set mask (False = valid data, True = padding)
+        imu_mask[i, :seq_len] = False
+    
+    # Handle skeleton if present
+    if has_skeleton:
+        if fixed_skel_len is None:
+            # Use maximum length in batch
+            max_skel_len = max(sk.shape[0] for sk in sk_list)
+            fixed_skel_len = max_skel_len
+        
+        skel_tensor = np.zeros((batch_size, fixed_skel_len, skel_feat_dim))
+        skel_mask = np.ones((batch_size, fixed_skel_len), dtype=bool)
+        
+        # Fill skeleton tensor and create mask
+        for i in range(batch_size):
+            sk = sk_list[i]
+            if sk.shape[0] > 0:
+                seq_len = min(sk.shape[0], fixed_skel_len)
+                
+                # Copy data without time column
+                skel_tensor[i, :seq_len, :] = sk[:seq_len, 1:1+skel_feat_dim]
+                
+                # Set mask
+                skel_mask[i, :seq_len] = False
+    else:
+        # Empty tensors if no skeleton data
+        skel_tensor = np.zeros((batch_size, 1, skel_feat_dim))
+        skel_mask = np.ones((batch_size, 1), dtype=bool)
+    
+    return imu_tensor, imu_mask, skel_tensor, skel_mask, np.array(lab_list)
