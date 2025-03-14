@@ -11,8 +11,9 @@ This script:
 4) Generates detailed diagnostic reports for comparing filter performance
 
 Features:
-- Robust handling of missing or corrupted sensor data
-- Proper alignment of variably sampled data
+- Robust handling of variable sampling rates
+- Timestamp-based alignment of accelerometer and gyroscope
+- Resampling to fixed 30Hz to match skeleton data
 - Comprehensive error handling with graceful degradation
 - Visualization of orientation estimates across different filters
 - Analytical comparison of filter accuracy using skeleton as ground truth
@@ -38,7 +39,26 @@ from collections import defaultdict
 import glob
 import logging
 import re
-from typing import Dict, List, Tuple, Optional, Union, Any
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# Import our robust alignment and filtering modules
+# Import from the robust implementations directly
+from utils.robust_alignment import (
+    process_all_modalities as align_modalities,
+    align_imu_sensors,
+    resample_to_fixed_rate,
+    align_imu_with_skeleton,
+    extract_orientation_from_skeleton
+)
+from utils.processor.base import (
+        parse_watch_csv
+        )
+from utils.imu_fusion_robust import (
+    RobustStandardKalmanIMU,
+    RobustExtendedKalmanIMU,
+    RobustUnscentedKalmanIMU,
+    calibrate_filter
+)
 
 # Configure logging
 logging.basicConfig(
@@ -50,15 +70,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("IMUFusionDebug")
-
-# Import custom modules
-from utils.processor.base import parse_watch_csv
-from utils.robust_alignment import align_all_modalities, extract_wrist_trajectory
-from utils.robust_kalman import (
-    RobustStandardKalmanIMU, 
-    RobustExtendedKalmanIMU, 
-    RobustUnscentedKalmanIMU
-)
 
 def str2bool(v):
     """Convert string to boolean."""
@@ -90,14 +101,14 @@ def parse_args():
     # Processing parameters
     parser.add_argument("--max_trials", type=int, default=5,
                         help="Maximum number of trials to debug")
+    parser.add_argument("--target_fps", type=float, default=30.0,
+                        help="Target sampling rate for resampling (Hz)")
     parser.add_argument("--window_size", type=float, default=4.0,
                         help="Window size in seconds for sliding windows")
     parser.add_argument("--wrist_idx", type=int, default=9,
                         help="Index of wrist joint in skeleton data")
     parser.add_argument("--align_method", type=str, default="dtw",
-                        help="Method for aligning modalities: dtw, xcorr, direct")
-    parser.add_argument("--target_fps", type=float, default=30.0,
-                        help="Target sampling rate for resampling")
+                        help="Method for aligning IMU and skeleton (dtw, interpolation, crop)")
     
     # Output options
     parser.add_argument("--output_dir", type=str, default="debug_output",
@@ -110,6 +121,10 @@ def parse_args():
     # Advanced options
     parser.add_argument("--calibrate_filters", action='store_true',
                         help="Calibrate filters before testing")
+    parser.add_argument("--robust_cov", action='store_true',
+                        help="Use robust covariance estimation")
+    parser.add_argument("--apply_antialiasing", action='store_true', default=True,
+                        help="Apply anti-aliasing when resampling")
     parser.add_argument("--num_workers", type=int, default=1,
                         help="Number of parallel workers for processing")
     parser.add_argument("--seed", type=int, default=42,
@@ -264,8 +279,8 @@ def get_trial_list(file_dict, max_trials=5, seed=42):
                     adl_trials.append(trial)
     
     # Shuffle trials
-    np.random.shuffle(adl_trials)
     np.random.shuffle(fall_trials)
+    np.random.shuffle(adl_trials)
     
     # Select balanced set of trials
     num_fall = min(max_trials // 2, len(fall_trials))
@@ -350,13 +365,136 @@ def load_sensor_data(file_paths):
     
     return result
 
-def apply_imu_fusion(aligned_data, filter_types=None):
+def align_and_resample_data(accel_data, gyro_data, skel_data=None, target_fps=30.0, 
+                           apply_antialiasing=True):
+    """
+    Align and resample sensor data to a consistent time grid.
+    
+    Args:
+        accel_data: Accelerometer data with time in first column
+        gyro_data: Gyroscope data with time in first column
+        skel_data: Optional skeleton data
+        target_fps: Target sampling rate in Hz
+        apply_antialiasing: Whether to apply anti-aliasing filter
+        
+    Returns:
+        Dictionary with aligned and resampled data
+    """
+    logger.info(f"Aligning and resampling sensor data to {target_fps} Hz")
+    
+    try:
+        # First, align IMU sensors (accel and gyro)
+        imu_aligned = align_imu_sensors(accel_data, gyro_data)
+        
+        if not imu_aligned.get('success', False):
+            logger.warning("Failed to align accelerometer and gyroscope data")
+            return None
+            
+        # Extract aligned IMU data
+        timestamps = imu_aligned['timestamps']
+        accel_values = imu_aligned['accel']
+        gyro_values = imu_aligned['gyro']
+        
+        # Resample to target frequency
+        # Create a common time grid for resampling both sensors
+        t_start = timestamps[0]
+        t_end = timestamps[-1]
+        duration = t_end - t_start
+        num_samples = int(duration * target_fps) + 1
+        common_time_grid = np.linspace(t_start, t_end, num_samples)
+        
+        logger.info(f"Resampling accelerometer data to {target_fps} Hz")
+        accel_resampled = resample_to_fixed_rate(
+            timestamps, 
+            accel_values, 
+            target_fps=target_fps,
+            apply_antialiasing=apply_antialiasing
+        )
+        
+        logger.info(f"Resampling gyroscope data to {target_fps} Hz")
+        gyro_resampled = resample_to_fixed_rate(
+            timestamps, 
+            gyro_values, 
+            target_fps=target_fps,
+            apply_antialiasing=apply_antialiasing
+        )
+        
+        if not accel_resampled.get('success', False) or not gyro_resampled.get('success', False):
+            logger.warning("Failed to resample IMU data")
+            return None
+            
+        # Create result dictionary with common time grid
+        result = {
+            'timestamps': common_time_grid,
+            'accel': accel_resampled['values'],
+            'gyro': gyro_resampled['values'],
+        }
+        
+        # If skeleton data is provided, align it with resampled IMU data
+        if skel_data is not None and skel_data.shape[0] > 0:
+            # Create skeleton timestamps at 30 Hz if needed
+            if skel_data.shape[1] == 96:  # No time column
+                skel_timestamps = np.arange(skel_data.shape[0]) / target_fps
+                skeleton_values = skel_data
+            else:
+                skel_timestamps = skel_data[:, 0]
+                skeleton_values = skel_data[:, 1:]
+                
+            # Find common time range
+            common_start = max(t_start, skel_timestamps[0])
+            common_end = min(t_end, skel_timestamps[-1])
+            
+            # Check if we have enough overlap
+            if common_end > common_start:
+                # Filter common time grid
+                imu_common_mask = (common_time_grid >= common_start) & (common_time_grid <= common_end)
+                common_times = common_time_grid[imu_common_mask]
+                
+                if len(common_times) > 10:  # Ensure we have enough points
+                    # Apply same mask to resampled data
+                    common_accel = result['accel'][imu_common_mask]
+                    common_gyro = result['gyro'][imu_common_mask]
+                    
+                    # Create interpolator for skeleton data
+                    from scipy.interpolate import interp1d
+                    skel_interp = interp1d(
+                        skel_timestamps,
+                        skeleton_values,
+                        axis=0,
+                        bounds_error=False,
+                        fill_value="extrapolate"
+                    )
+                    
+                    # Resample skeleton to common timestamps
+                    resampled_skel = skel_interp(common_times)
+                    
+                    # Update result with aligned data
+                    result['timestamps'] = common_times
+                    result['accel'] = common_accel
+                    result['gyro'] = common_gyro
+                    result['skeleton'] = resampled_skel
+                    
+                    logger.info(f"Successfully aligned all modalities: {len(common_times)} samples")
+                else:
+                    logger.warning("Insufficient overlap between IMU and skeleton")
+            else:
+                logger.warning("No time overlap between IMU and skeleton")
+                
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error during alignment and resampling: {e}")
+        logger.error(traceback.format_exc())
+        return None
+
+def apply_imu_fusion(aligned_data, filter_types=None, wrist_idx=9):
     """
     Apply different IMU fusion filters to the aligned data.
     
     Args:
         aligned_data: Dictionary with aligned sensor data
         filter_types: List of filter types to apply
+        wrist_idx: Index of wrist joint
     
     Returns:
         Dictionary with filter results
@@ -378,10 +516,11 @@ def apply_imu_fusion(aligned_data, filter_types=None):
     reference_orientations = None
     if 'skeleton' in aligned_data:
         try:
-            from utils.imu_fusion import extract_orientation_from_skeleton
             reference_orientations = extract_orientation_from_skeleton(
-                aligned_data['skeleton']
+                aligned_data['skeleton'],
+                wrist_idx=wrist_idx
             )
+            logger.info(f"Extracted reference orientations from skeleton: {reference_orientations.shape}")
         except Exception as e:
             logger.warning(f"Error extracting reference orientations: {e}")
     
@@ -420,7 +559,7 @@ def apply_imu_fusion(aligned_data, filter_types=None):
             
         except Exception as e:
             logger.error(f"Error applying {filter_type} filter: {e}")
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
     
     return results
 
@@ -451,7 +590,7 @@ def calculate_metrics(filter_results, reference_orientations=None):
         output = result['output']
         proc_time = result['processing_time']
         
-        # Extract Euler angles (last 3 columns of output)
+        # Extract Euler angles (columns 10-12 of output)
         euler = output[:, 10:13]
         
         # Ensure same length for comparison
@@ -831,7 +970,6 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
                 
                 # Extract reference orientations for reporting
                 try:
-                    from utils.imu_fusion import extract_orientation_from_skeleton
                     ref_orient = extract_orientation_from_skeleton(aligned_data['skeleton'])
                     
                     # Orientation statistics
@@ -1009,49 +1147,40 @@ def process_trial(args, trial_info, file_paths, output_dir, filter_types=None, w
         logger.warning(f"No valid data for trial {trial_info}")
         return None
     
-    # Align sensor data
-    try:
-        logger.info(f"Aligning sensor data using method: {args.align_method}")
-        
-        # Check if we have all modalities
-        if 'accel_data' in data_dict and 'gyro_data' in data_dict and 'skel_data' in data_dict:
-            # All modalities available - align everything
-            aligned_data = align_all_modalities(
-                data_dict['accel_data'],
-                data_dict['gyro_data'],
-                data_dict['skel_data'],
-                target_fps=args.target_fps,
-                wrist_idx=wrist_idx,
-                method=args.align_method
-            )
-        elif 'accel_data' in data_dict and 'gyro_data' in data_dict:
-            # Only IMU data available
-            from utils.robust_alignment import align_imu_data
-            aligned_data = align_imu_data(
-                data_dict['accel_data'],
-                data_dict['gyro_data'],
-                target_fps=args.target_fps
-            )
-        else:
-            # Can't align with just accelerometer
-            logger.warning(f"Insufficient data for alignment: need at least accelerometer and gyroscope")
-            aligned_data = None
-        
-        # Store aligned data in the data dictionary
-        data_dict['aligned_data'] = aligned_data
-        
-    except Exception as e:
-        logger.error(f"Error during alignment: {e}")
-        traceback.print_exc()
-        aligned_data = None
-        data_dict['aligned_data'] = None
+    # Skip if no accelerometer or gyroscope data
+    if 'accel_data' not in data_dict:
+        logger.warning(f"No accelerometer data for trial {trial_info}")
+        return None
     
-    # Apply IMU fusion if alignment succeeded
-    if aligned_data is not None:
-        filter_results = apply_imu_fusion(aligned_data, filter_types)
-    else:
-        logger.warning(f"Skipping IMU fusion due to failed alignment")
-        filter_results = {}
+    if 'gyro_data' not in data_dict:
+        logger.warning(f"No gyroscope data for trial {trial_info}")
+        return None
+    
+    # Align and resample data
+    logger.info(f"Resampling accelerometer data to {args.target_fps} Hz")
+    logger.info(f"Resampling gyroscope data to {args.target_fps} Hz")
+    
+    aligned_data = align_and_resample_data(
+        data_dict['accel_data'],
+        data_dict['gyro_data'],
+        data_dict.get('skel_data'),
+        target_fps=args.target_fps,
+        apply_antialiasing=args.apply_antialiasing
+    )
+    
+    # Store aligned data
+    data_dict['aligned_data'] = aligned_data
+    
+    if aligned_data is None:
+        logger.warning(f"Failed to align data for trial {trial_info}")
+        return None
+    
+    # Apply IMU fusion
+    filter_results = apply_imu_fusion(
+        aligned_data, 
+        filter_types, 
+        wrist_idx=wrist_idx
+    )
     
     if not filter_results:
         logger.warning(f"No filter results for trial {trial_info}")
@@ -1059,11 +1188,11 @@ def process_trial(args, trial_info, file_paths, output_dir, filter_types=None, w
     
     # Calculate metrics
     reference_orientations = None
-    if aligned_data is not None and 'skeleton' in aligned_data:
+    if 'skeleton' in aligned_data:
         try:
-            from utils.imu_fusion import extract_orientation_from_skeleton
             reference_orientations = extract_orientation_from_skeleton(
-                aligned_data['skeleton']
+                aligned_data['skeleton'],
+                wrist_idx=wrist_idx
             )
         except Exception as e:
             logger.warning(f"Error extracting reference orientations: {e}")
@@ -1166,7 +1295,7 @@ def process_trial(args, trial_info, file_paths, output_dir, filter_types=None, w
             
         except Exception as e:
             logger.warning(f"Error generating plots: {e}")
-            traceback.print_exc()
+            logger.warning(traceback.format_exc())
     
     # Generate report
     report_path = generate_report(trial_info, data_dict, filter_results, metrics, trial_dir)
@@ -1183,9 +1312,6 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Set up output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
     # Log all arguments
     logger.info("Starting IMU fusion debugging with parameters:")
     for arg, value in vars(args).items():
@@ -1200,6 +1326,9 @@ def main():
     action_list = None
     if args.actions:
         action_list = [int(a.strip()) for a in args.actions.split(',')]
+    
+    # Set up output directory
+    os.makedirs(args.output_dir, exist_ok=True)
     
     # Find sensor files
     file_dict, counts = find_sensor_files(args.data_dir, subject_list, action_list)

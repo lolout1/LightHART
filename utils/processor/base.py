@@ -1,108 +1,151 @@
-import re
+# utils/processor/base.py
+
+import os
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import os
 import logging
+import re
+from typing import Tuple, List, Dict, Optional, Union
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("IMUProcessor")
 
-###############################################################################
-# CSV Parsing Utilities with Robust Error Handling
-###############################################################################
-
-def parse_watch_csv(file_path: str):
+def parse_watch_csv(file_path: str) -> np.ndarray:
     """
-    Parse CSV file with timestamps and sensor data.
+    Parse watch CSV file into array with time and IMU data.
+    Handles various timestamp formats and ensures consistent output.
     
     Args:
         file_path: Path to CSV file with format [time, x, y, z]
         
     Returns:
-        Array of shape (n, 4) with [time_elapsed, x, y, z] or empty array if file is invalid
+        Array of shape (n, 4) with [time_elapsed, x, y, z] or empty array if invalid
     """
     try:
         # Check if file exists
         if not os.path.exists(file_path):
             logger.warning(f"File not found: {file_path}")
             return np.zeros((0, 4), dtype=np.float32)
-            
-        # Read CSV file
-        df = pd.read_csv(file_path, header=None, sep=None, engine='python')
-        df = df.dropna(how='all').reset_index(drop=True)
         
-        # Check if empty
-        if df.empty:
+        # Read CSV file without using pandas.read_csv's date parsing
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+        
+        # Filter out empty lines
+        lines = [line.strip() for line in lines if line.strip()]
+        
+        if not lines:
             logger.warning(f"Empty file: {file_path}")
             return np.zeros((0, 4), dtype=np.float32)
         
-        # Check if first row contains headers
-        if len(df) > 0:
-            first_val = str(df.iloc[0, 0]).lower()
-            if re.search("time", first_val) or re.search("stamp", first_val):
-                df = df.iloc[1:].reset_index(drop=True)
+        # Check if first line might be a header
+        first_line = lines[0].lower()
+        if 'time' in first_line or 'stamp' in first_line:
+            lines = lines[1:]
         
-        # Ensure minimum columns
-        if df.shape[1] < 4:
-            logger.warning(f"Insufficient columns in {file_path}: found {df.shape[1]}, need at least 4")
+        if not lines:
+            logger.warning(f"No data after removing header: {file_path}")
             return np.zeros((0, 4), dtype=np.float32)
         
-        # Extract time column
-        time_strings = df.iloc[:, 0].values
+        # Parse each line manually
+        data = []
+        timestamps = []
         
-        # Try to convert to datetime first
-        try:
-            # Convert to datetime and calculate seconds elapsed
-            times = pd.to_datetime(time_strings)
-            base_time = times[0]
-            elapsed_times = [(t - base_time).total_seconds() for t in times]
-            times_array = np.array(elapsed_times, dtype=np.float32)
-        except Exception:
-            # If datetime fails, try numeric parsing
+        for line in lines:
+            # Split by common delimiters
+            parts = re.split(r'[,;\t]', line)
+            parts = [p.strip() for p in parts if p.strip()]
+            
+            if len(parts) < 4:
+                continue  # Skip lines with insufficient columns
+            
+            # Parse timestamp
+            time_str = parts[0]
+            
+            # Parse sensor values
             try:
-                times_array = df.iloc[:, 0].astype(float).values
-                # Check if large values (likely milliseconds epoch time)
-                if times_array[0] > 1e10:
-                    times_array = times_array / 1000.0
-                # Make time relative to first sample
-                times_array = times_array - times_array[0]
-            except Exception as e:
-                logger.warning(f"Failed to parse timestamps in {file_path}: {e}")
-                return np.zeros((0, 4), dtype=np.float32)
+                x, y, z = map(float, parts[1:4])
+                
+                # Add to data
+                timestamps.append(time_str)
+                data.append([x, y, z])
+            except (ValueError, IndexError):
+                continue  # Skip invalid lines
         
-        # Extract x, y, z columns
-        try:
-            sensor_values = df.iloc[:, 1:4].astype(float).values
-        except Exception as e:
-            logger.warning(f"Failed to parse sensor values in {file_path}: {e}")
+        if not data:
+            logger.warning(f"No valid data lines found: {file_path}")
             return np.zeros((0, 4), dtype=np.float32)
         
-        # Combine time and xyz data
-        result = np.column_stack([times_array, sensor_values]).astype(np.float32)
-        logger.info(f"Successfully parsed {file_path}: {result.shape[0]} samples")
+        # Convert timestamps to seconds elapsed
+        elapsed_times = []
+        
+        # Try datetime parsing first
+        try:
+            datetime_objs = pd.to_datetime(timestamps)
+            start_time = datetime_objs[0]
+            
+            for dt in datetime_objs:
+                elapsed_times.append((dt - start_time).total_seconds())
+        except:
+            # Try numeric conversion
+            try:
+                numeric_times = [float(ts) for ts in timestamps]
+                
+                # Check if likely milliseconds (epoch time)
+                if np.mean(numeric_times) > 1e10:
+                    numeric_times = [t / 1000.0 for t in numeric_times]
+                
+                # Make relative to first timestamp
+                start_time = numeric_times[0]
+                elapsed_times = [t - start_time for t in numeric_times]
+            except:
+                # Fall back to sequence numbers
+                logger.warning(f"Could not parse timestamps in {file_path}, using sequence numbers")
+                elapsed_times = list(range(len(data)))
+        
+        # Combine into final array
+        result = np.zeros((len(data), 4), dtype=np.float32)
+        result[:, 0] = elapsed_times
+        result[:, 1:4] = data
+        
+        logger.info(f"Successfully parsed {file_path}: {len(data)} samples")
         return result
         
     except Exception as e:
         logger.warning(f"Error parsing {file_path}: {e}")
         return np.zeros((0, 4), dtype=np.float32)
 
+def create_skeleton_timestamps(skel_array: np.ndarray, fps: float = 30.0) -> np.ndarray:
+    """
+    Add time column to skeleton array based on fixed frame rate.
+    
+    Args:
+        skel_array: Array of shape (n_frames, n_features) with skeleton data
+        fps: Frame rate in frames per second (default: 30.0)
+        
+    Returns:
+        Array of shape (n_frames, 1+n_features) with added time column
+    """
+    n_frames = skel_array.shape[0]
+    time_column = (np.arange(n_frames, dtype=np.float32) / fps).reshape(-1, 1)
+    return np.hstack([time_column, skel_array])
 
-def create_skeleton_timestamps(skel_array: np.ndarray, fps=30.0):
-    """Add time column to skeleton array based on assumed frame rate."""
-    num_frames = skel_array.shape[0]
-    tvals = np.arange(num_frames, dtype=np.float32) / fps
-    return np.hstack([tvals.reshape(-1, 1), skel_array])
-
-
-###############################################################################
-# Sliding Window Utilities
-###############################################################################
-
-def sliding_windows_by_time(arr, window_size_sec=4.0, stride_sec=1.0, min_samples=5):
-    """Create variable-length sliding windows based on timestamps in first column."""
+def sliding_windows_by_time(arr: np.ndarray, window_size_sec: float = 4.0, 
+                          stride_sec: float = 1.0, min_samples: int = 5) -> List[np.ndarray]:
+    """
+    Create variable-length sliding windows based on timestamps in first column.
+    
+    Args:
+        arr: Array with time in first column
+        window_size_sec: Window size in seconds
+        stride_sec: Stride in seconds
+        min_samples: Minimum number of samples required for a valid window
+        
+    Returns:
+        List of window arrays
+    """
     if arr.shape[0] < min_samples:
         return []
         
@@ -119,9 +162,22 @@ def sliding_windows_by_time(arr, window_size_sec=4.0, stride_sec=1.0, min_sample
         t_start += stride_sec
     return windows
 
-
-def sliding_windows_by_time_fixed(arr, window_size_sec=4.0, stride_sec=1.0, fixed_count=128, min_samples=64):
-    """Create fixed-length sliding windows with uniform temporal sampling."""
+def sliding_windows_by_time_fixed(arr: np.ndarray, window_size_sec: float = 4.0, 
+                                stride_sec: float = 1.0, fixed_count: int = 128, 
+                                min_samples: int = 64) -> List[np.ndarray]:
+    """
+    Create fixed-length sliding windows with uniform temporal sampling.
+    
+    Args:
+        arr: Array with time in first column
+        window_size_sec: Window size in seconds
+        stride_sec: Stride in seconds
+        fixed_count: Target number of samples per window
+        min_samples: Minimum number of samples required for a valid window
+        
+    Returns:
+        List of window arrays with fixed sample count
+    """
     if arr.shape[0] < min_samples:
         return []
 
@@ -133,104 +189,168 @@ def sliding_windows_by_time_fixed(arr, window_size_sec=4.0, stride_sec=1.0, fixe
         sub = arr[mask]
         if len(sub) >= min_samples:
             # Uniformly sample points to get exactly fixed_count samples
-            idx = np.linspace(0, len(sub)-1, fixed_count).astype(int)
-            windows.append(sub[idx])
+            if len(sub) != fixed_count:
+                idx = np.linspace(0, len(sub)-1, fixed_count).astype(int)
+                windows.append(sub[idx])
+            else:
+                windows.append(sub)
         t_start += stride_sec
     return windows
 
-
-###############################################################################
-# Robust Alignment Utilities
-###############################################################################
-
-def extract_wrist_trajectory(skeleton_data, wrist_idx=9, joint_dim=3):
+def resample_to_fixed_rate(arr: np.ndarray, target_fps: float = 30.0) -> np.ndarray:
     """
-    Extract wrist joint trajectory from skeleton data.
+    Resample time series to a fixed frame rate using linear interpolation.
     
     Args:
-        skeleton_data: Skeleton data of shape (n_frames, n_features)
-        wrist_idx: Index of wrist joint
-        joint_dim: Number of dimensions per joint (default: 3 for x,y,z)
+        arr: Array with time in first column
+        target_fps: Target frame rate in Hz
         
     Returns:
-        Wrist trajectory of shape (n_frames, joint_dim)
+        Resampled array with uniform time steps
     """
-    if skeleton_data.shape[1] < (wrist_idx + 1) * joint_dim:
-        logger.warning(f"Skeleton data has insufficient dimensions for wrist_idx={wrist_idx}")
-        return np.zeros((skeleton_data.shape[0], joint_dim))
+    if arr.shape[0] < 2:
+        return arr
+        
+    # Extract time column and values
+    times = arr[:, 0]
+    values = arr[:, 1:]
     
-    start_idx = wrist_idx * joint_dim
-    end_idx = start_idx + joint_dim
-    return skeleton_data[:, start_idx:end_idx]
+    # Calculate start and end times
+    start_time = times[0]
+    end_time = times[-1]
+    duration = end_time - start_time
+    
+    # Create new uniform time points
+    n_frames = int(np.ceil(duration * target_fps))
+    if n_frames < 2:
+        return arr  # Can't resample with less than 2 frames
+        
+    new_times = np.linspace(start_time, end_time, n_frames)
+    
+    # Interpolate each feature column
+    new_values = np.zeros((n_frames, values.shape[1]), dtype=values.dtype)
+    
+    for i in range(values.shape[1]):
+        # Use linear interpolation for each column
+        from scipy.interpolate import interp1d
+        interp_func = interp1d(times, values[:, i], 
+                              bounds_error=False, 
+                              fill_value=(values[0, i], values[-1, i]))
+        new_values[:, i] = interp_func(new_times)
+    
+    # Combine into new array
+    resampled = np.zeros((n_frames, arr.shape[1]), dtype=arr.dtype)
+    resampled[:, 0] = new_times
+    resampled[:, 1:] = new_values
+    
+    return resampled
 
-
-def robust_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps=30.0, 
-                           method='dtw', wrist_idx=9, min_points=5):
+def robust_align_modalities(imu_data: np.ndarray, skel_data: np.ndarray, 
+                          imu_timestamps: Optional[np.ndarray] = None,
+                          wrist_idx: int = 9, method: str = 'dtw') -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Align IMU and skeleton modalities with robust fallback options.
+    Robust alignment of IMU and skeleton data with multiple fallback methods.
     
     Args:
-        imu_data: IMU data (accelerometer or gyroscope values)
-        skel_data: Skeleton data
+        imu_data: IMU data (accelerometer/gyroscope values) shape (n, 3)
+        skel_data: Skeleton data shape (m, 96)
         imu_timestamps: IMU timestamps (optional)
-        skel_fps: Skeleton frames per second
-        method: Alignment method ('dtw', 'interpolation', 'crop')
-        wrist_idx: Index of wrist joint in skeleton data
-        min_points: Minimum number of points required for alignment
-    
+        wrist_idx: Index of wrist joint in skeleton
+        method: Alignment method ('dtw', 'interpolation', 'resample', 'crop')
+        
     Returns:
         Tuple of (aligned_imu, aligned_skel, aligned_timestamps)
     """
     # Handle empty inputs
     if imu_data.size == 0 or skel_data.size == 0:
         logger.warning("Empty data provided for alignment")
-        return (np.zeros((0, max(3, imu_data.shape[1]) if imu_data.size > 0 else 3)), 
-                np.zeros((0, skel_data.shape[1]) if skel_data.size > 0 else 96), 
-                np.zeros(0))
-
-    # Generate timestamps if not provided
+        empty_shape = (0, imu_data.shape[1] if imu_data.size > 0 else 3)
+        return np.zeros(empty_shape), np.zeros((0, skel_data.shape[1] if skel_data.size > 0 else 96)), np.zeros(0)
+    
+    # Generate IMU timestamps if not provided (assume 50Hz)
     if imu_timestamps is None:
-        imu_timestamps = np.arange(len(imu_data), dtype=np.float32) / 50.0  # default IMU fps=50Hz
-
-    # Extract time from skeleton if present (column 0) or generate
-    if skel_data.shape[1] == 97:  # time included
-        skel_times, skel_data = skel_data[:, 0], skel_data[:, 1:]
-    else:
-        skel_times = np.arange(len(skel_data), dtype=np.float32) / skel_fps
-
-    if method == 'dtw':
+        imu_timestamps = np.arange(len(imu_data)) / 50.0
+    
+    # Generate skeleton timestamps at 30fps
+    skel_timestamps = np.arange(len(skel_data)) / 30.0
+    
+    # If chosen method is 'resample', resample both to 30fps
+    if method == 'resample':
+        logger.info("Resampling IMU and skeleton data to fixed 30fps")
+        try:
+            # Create temporary arrays with timestamps
+            imu_with_time = np.column_stack([imu_timestamps, imu_data])
+            skel_with_time = np.column_stack([skel_timestamps, skel_data])
+            
+            # Resample IMU to 30fps
+            resampled_imu = resample_to_fixed_rate(imu_with_time, target_fps=30.0)
+            
+            # Skeleton is already 30fps, just verify time steps
+            if np.std(np.diff(skel_timestamps)) < 0.01:  # Already uniform
+                resampled_skel = skel_with_time
+            else:
+                resampled_skel = resample_to_fixed_rate(skel_with_time, target_fps=30.0)
+            
+            # Find common time range
+            min_time = max(resampled_imu[0, 0], resampled_skel[0, 0])
+            max_time = min(resampled_imu[-1, 0], resampled_skel[-1, 0])
+            
+            # Extract common parts
+            imu_mask = (resampled_imu[:, 0] >= min_time) & (resampled_imu[:, 0] <= max_time)
+            skel_mask = (resampled_skel[:, 0] >= min_time) & (resampled_skel[:, 0] <= max_time)
+            
+            aligned_imu = resampled_imu[imu_mask, 1:]
+            aligned_timestamps = resampled_imu[imu_mask, 0]
+            aligned_skel = resampled_skel[skel_mask, 1:]
+            
+            # If lengths differ slightly due to floating point, adjust
+            min_len = min(len(aligned_imu), len(aligned_skel))
+            if min_len > 10:  # Ensure sufficient samples
+                return aligned_imu[:min_len], aligned_skel[:min_len], aligned_timestamps[:min_len]
+            else:
+                logger.warning(f"Insufficient aligned samples after resampling: {min_len}")
+                # Fall through to other methods
+        except Exception as e:
+            logger.warning(f"Resampling failed: {e}, trying other methods")
+            # Fall through to other methods
+    
+    # Try DTW if requested
+    if method in ['dtw', 'auto']:
         try:
             from dtaidistance import dtw
             
-            # Extract features for alignment
-            # For IMU: use acceleration magnitude
-            imu_mag = np.linalg.norm(imu_data[:, :min(3, imu_data.shape[1])], axis=1)
+            # Extract wrist coordinates for alignment
+            joint_dim = 3  # x, y, z per joint
+            wrist_start = wrist_idx * joint_dim
+            wrist_end = wrist_start + joint_dim
             
-            # For skeleton: extract wrist trajectory if possible
-            wrist_traj = extract_wrist_trajectory(skel_data, wrist_idx)
-            
-            # Calculate wrist velocity
-            wrist_vel = np.zeros(len(wrist_traj))
-            if len(wrist_traj) > 1:
-                dt = 1.0/skel_fps
-                for i in range(1, len(wrist_traj)):
-                    wrist_vel[i] = np.linalg.norm(wrist_traj[i] - wrist_traj[i-1]) / dt
-            
-            # If wrist extraction failed, use overall skeleton magnitude
-            if np.all(wrist_vel == 0):
-                skel_mag = np.linalg.norm(skel_data, axis=1)
-                feature_skel = skel_mag
+            if skel_data.shape[1] >= wrist_end:
+                # Extract wrist movement
+                wrist_pos = skel_data[:, wrist_start:wrist_end]
+                
+                # Compute wrist velocity
+                wrist_vel = np.zeros(skel_data.shape[0])
+                for i in range(1, len(wrist_vel)):
+                    wrist_vel[i] = np.linalg.norm(wrist_pos[i] - wrist_pos[i-1]) / (1/30.0)  # 30fps
             else:
-                feature_skel = wrist_vel
+                # Fallback: use first 3 columns or overall movement
+                logger.warning(f"Skeleton dimension {skel_data.shape[1]} too small for wrist extraction at index {wrist_idx}")
+                if skel_data.shape[1] >= 3:
+                    wrist_vel = np.linalg.norm(skel_data[:, :3], axis=1)
+                else:
+                    wrist_vel = np.linalg.norm(skel_data, axis=1)
             
-            # Normalize sequences for DTW
-            imu_norm = (imu_mag - np.mean(imu_mag)) / (np.std(imu_mag) + 1e-9)
-            skel_norm = (feature_skel - np.mean(feature_skel)) / (np.std(feature_skel) + 1e-9)
-
-            # Calculate DTW path
-            path = dtw.warping_path(imu_norm, skel_norm)
+            # IMU magnitude
+            imu_mag = np.linalg.norm(imu_data, axis=1)
+            
+            # Normalize for DTW
+            norm_imu = (imu_mag - np.mean(imu_mag)) / (np.std(imu_mag) + 1e-9)
+            norm_wrist = (wrist_vel - np.mean(wrist_vel)) / (np.std(wrist_vel) + 1e-9)
+            
+            # DTW alignment
+            path = dtw.warping_path(norm_imu, norm_wrist)
             imu_idx, skel_idx = zip(*path)
-
+            
             # Remove duplicates while preserving order
             imu_unique, skel_unique = [], []
             seen_imu, seen_skel = set(), set()
@@ -243,212 +363,177 @@ def robust_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps=3
                     skel_unique.append(s)
                     seen_skel.add(s)
             
-            # Get aligned data
+            # Create aligned arrays
             aligned_imu = imu_data[imu_unique]
             aligned_skel = skel_data[skel_unique]
-            aligned_ts = imu_timestamps[imu_unique]
-
-            if len(aligned_imu) < min_points:
-                logger.warning(f"DTW alignment produced insufficient points: {len(aligned_imu)} < {min_points}")
-                method = 'interpolation'  # Fall back to interpolation
-            else:
-                logger.info(f"DTW alignment successful: {len(aligned_imu)} points")
-                return aligned_imu, aligned_skel, aligned_ts
-
-        except Exception as e:
-            logger.warning(f"DTW alignment failed: {e}, falling back to interpolation")
-            method = 'interpolation'
-
-    if method == 'interpolation':
-        try:
-            # Find common time range
-            t_start = max(imu_timestamps[0], skel_times[0])
-            t_end = min(imu_timestamps[-1], skel_times[-1])
+            aligned_timestamps = imu_timestamps[imu_unique]
             
-            if t_end <= t_start:
-                logger.warning("No overlapping time range between modalities")
-                return (np.zeros((0, imu_data.shape[1])), 
-                        np.zeros((0, skel_data.shape[1])), 
-                        np.zeros(0))
-
-            # Filter IMU data to common range
-            mask = (imu_timestamps >= t_start) & (imu_timestamps <= t_end)
-            if np.sum(mask) < min_points:
-                logger.warning(f"Insufficient IMU points in common time range: {np.sum(mask)} < {min_points}")
-                method = 'crop'  # Fall back to cropping
+            if len(aligned_imu) >= 10:  # Ensure sufficient samples
+                logger.info(f"DTW alignment successful: {len(aligned_imu)} points")
+                return aligned_imu, aligned_skel, aligned_timestamps
             else:
-                aligned_ts = imu_timestamps[mask]
-                aligned_imu = imu_data[mask]
-
-                # Interpolate skeleton data to IMU timestamps
-                from scipy.interpolate import interp1d
-                
-                # Create interpolation functions for each skeleton column
-                interp_funcs = []
-                for i in range(skel_data.shape[1]):
-                    interp_funcs.append(
-                        interp1d(skel_times, skel_data[:, i], 
-                                bounds_error=False, fill_value="extrapolate")
-                    )
-                
-                # Apply interpolation
-                aligned_skel = np.zeros((len(aligned_ts), skel_data.shape[1]))
-                for i, func in enumerate(interp_funcs):
-                    aligned_skel[:, i] = func(aligned_ts)
-                
-                logger.info(f"Interpolation alignment successful: {len(aligned_ts)} points")
-                return aligned_imu, aligned_skel, aligned_ts
-
+                logger.warning(f"DTW alignment produced insufficient points: {len(aligned_imu)}")
+                # Fall through to other methods
         except Exception as e:
-            logger.warning(f"Interpolation failed: {e}, falling back to basic alignment")
-            method = 'crop'
+            logger.warning(f"DTW alignment failed: {e}, trying interpolation")
     
-    # Basic crop alignment as final fallback
+    # Try interpolation
+    try:
+        # Find common time range
+        t_min = max(imu_timestamps[0], skel_timestamps[0])
+        t_max = min(imu_timestamps[-1], skel_timestamps[-1])
+        
+        if t_max <= t_min:
+            logger.warning("No overlapping time range between modalities")
+            return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
+        
+        # Filter IMU data to common range
+        imu_mask = (imu_timestamps >= t_min) & (imu_timestamps <= t_max)
+        filtered_imu = imu_data[imu_mask]
+        filtered_timestamps = imu_timestamps[imu_mask]
+        
+        if len(filtered_timestamps) < 10:
+            logger.warning(f"Insufficient IMU points in common time range: {len(filtered_timestamps)}")
+            # Fall through to crop method
+        else:
+            # Interpolate skeleton to IMU timestamps
+            from scipy.interpolate import interp1d
+            
+            interp_funcs = []
+            for i in range(skel_data.shape[1]):
+                interp_funcs.append(
+                    interp1d(skel_timestamps, skel_data[:, i], 
+                           bounds_error=False, fill_value="extrapolate")
+                )
+            
+            # Apply interpolation
+            interp_skel = np.zeros((len(filtered_timestamps), skel_data.shape[1]))
+            for i, func in enumerate(interp_funcs):
+                interp_skel[:, i] = func(filtered_timestamps)
+            
+            logger.info(f"Interpolation alignment successful: {len(filtered_timestamps)} points")
+            return filtered_imu, interp_skel, filtered_timestamps
+    except Exception as e:
+        logger.warning(f"Interpolation failed: {e}, falling back to crop alignment")
+    
+    # Last resort: simple crop alignment
     logger.info("Using basic crop alignment as fallback")
     min_len = min(len(imu_data), len(skel_data))
-    if min_len < min_points:
-        logger.warning(f"Insufficient samples after cropping: {min_len} < {min_points}")
-        return (np.zeros((0, imu_data.shape[1])), 
-                np.zeros((0, skel_data.shape[1])), 
-                np.zeros(0))
+    
+    if min_len < 10:  # Ensure sufficient samples
+        logger.warning(f"Insufficient samples after cropping: {min_len}")
+        return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
     
     return imu_data[:min_len], skel_data[:min_len], imu_timestamps[:min_len]
 
-
-###############################################################################
-# Trial Matching Functionality
-###############################################################################
-
-def match_trials(accel_files, gyro_files, skel_files):
-    """
-    Match trials across modalities based on filenames.
+class Processor:
+    """Base processor for handling sensor data loading and window creation."""
     
-    Args:
-        accel_files: List of accelerometer file paths
-        gyro_files: List of gyroscope file paths
-        skel_files: List of skeleton file paths
+    def __init__(self, file_path='', mode='variable_time', max_length=128, 
+                window_size_sec=4.0, stride_sec=1.0, resample_fps=None):
+        """
+        Initialize processor.
         
-    Returns:
-        List of (subject_id, action_id, trial_num, accel_path, gyro_path, skel_path) tuples
-    """
-    # Extract trial info from filenames
-    def extract_info(filepath):
-        if not filepath:
-            return None
-            
-        filename = os.path.basename(filepath)
-        match = re.match(r"S(\d+)A(\d+)T(\d+)\.csv", filename)
-        if match:
-            subj = int(match.group(1))
-            act = int(match.group(2))
-            trial = int(match.group(3))
-            return (subj, act, trial, filepath)
-        return None
-    
-    # Create dictionaries of trial info
-    accel_dict = {}
-    for f in accel_files:
-        info = extract_info(f)
-        if info:
-            accel_dict[(info[0], info[1], info[2])] = f
-    
-    gyro_dict = {}
-    for f in gyro_files:
-        info = extract_info(f)
-        if info:
-            gyro_dict[(info[0], info[1], info[2])] = f
-    
-    skel_dict = {}
-    for f in skel_files:
-        info = extract_info(f)
-        if info:
-            skel_dict[(info[0], info[1], info[2])] = f
-    
-    # Match trials that have at least accelerometer data
-    matched_trials = []
-    for key in accel_dict:
-        subj, act, trial = key
-        accel_path = accel_dict[key]
-        gyro_path = gyro_dict.get(key, None)
-        skel_path = skel_dict.get(key, None)
-        
-        matched_trials.append((subj, act, trial, accel_path, gyro_path, skel_path))
-    
-    # Sort by subject, action, trial
-    matched_trials.sort()
-    logger.info(f"Matched {len(matched_trials)} trials")
-    
-    return matched_trials
-
-
-###############################################################################
-# Processor Class
-###############################################################################
-
-class Processor(nn.Module):
-    def __init__(self, file_path='', mode='variable_time', max_length=128, window_size_sec=4.0, stride_sec=1.0):
-        super().__init__()
+        Args:
+            file_path: Path to data file
+            mode: Processing mode ('variable_time', 'fixed', 'resample')
+            max_length: Maximum sequence length
+            window_size_sec: Window size in seconds
+            stride_sec: Stride in seconds
+            resample_fps: If specified, resample data to this frame rate
+        """
         self.file_path = file_path
         self.mode = mode
         self.max_length = max_length
         self.window_size_sec = window_size_sec
         self.stride_sec = stride_sec
+        self.resample_fps = resample_fps
 
     def load_file(self, is_skeleton=False, is_gyroscope=False):
-        """Load file based on type and mode."""
+        """
+        Load data file with robust error handling.
+        
+        Args:
+            is_skeleton: Whether loading skeleton data
+            is_gyroscope: Whether loading gyroscope data (unused)
+            
+        Returns:
+            Loaded data array
+        """
         try:
             if not self.file_path or not os.path.exists(self.file_path):
                 logger.warning(f"File path invalid or not found: {self.file_path}")
                 return np.zeros((0, 4 if not is_skeleton else 97), dtype=np.float32)
                 
-            if self.mode == 'variable_time':
-                if is_skeleton:
-                    # Load skeleton data
+            if is_skeleton:
+                # Load skeleton data
+                try:
                     df = pd.read_csv(self.file_path, header=None)
                     data = df.values.astype(np.float32)
                     
                     # Add time column if not present
                     if data.shape[1] == 96:  # No time column
                         data = create_skeleton_timestamps(data, fps=30.0)
-                else:
-                    # Load IMU data
-                    data = parse_watch_csv(self.file_path)
+                    
+                except Exception as e:
+                    logger.warning(f"Error loading skeleton data: {e}")
+                    return np.zeros((0, 97), dtype=np.float32)
             else:
-                # Fixed mode
-                df = pd.read_csv(self.file_path, header=None)
-                data = df.values.astype(np.float32)
+                # Load IMU data
+                data = parse_watch_csv(self.file_path)
+            
+            # Resample if requested
+            if self.resample_fps is not None and data.shape[0] > 1:
+                data = resample_to_fixed_rate(data, target_fps=self.resample_fps)
                 
             logger.info(f"Loaded {self.file_path}: shape={data.shape}")
             return data
             
         except Exception as e:
             logger.warning(f"Error loading {self.file_path}: {e}")
-            return np.zeros((0, 4 if not is_skeleton else 97), dtype=np.float32)
+            shape = (0, 97) if is_skeleton else (0, 4)
+            return np.zeros(shape, dtype=np.float32)
 
     def process(self, data, is_fused=False):
-        """Process data into windows."""
+        """
+        Process data into windows.
+        
+        Args:
+            data: Data array with time in first column
+            is_fused: Whether data is already fused
+            
+        Returns:
+            List of window arrays
+        """
         if data.size == 0:
             logger.warning("Empty data, no windows created")
             return []
             
         if self.mode == 'variable_time':
-            if data.shape[1] == 4 or is_fused:
-                # For IMU or fused data, create fixed-length windows
+            if data.shape[1] <= 4 or is_fused:  # IMU or fused data (fixed length)
                 windows = sliding_windows_by_time_fixed(
                     data, 
                     self.window_size_sec, 
                     self.stride_sec, 
                     self.max_length
                 )
-            else:
-                # For skeleton data, create variable-length windows
+            else:  # Skeleton (variable length)
                 windows = sliding_windows_by_time(
                     data, 
                     self.window_size_sec, 
                     self.stride_sec
                 )
-        else:
-            # Single window for fixed mode
+        elif self.mode == 'resample':
+            # First resample to fixed rate
+            resampled = resample_to_fixed_rate(data, target_fps=30.0)
+            # Then create windows
+            windows = sliding_windows_by_time(
+                resampled,
+                self.window_size_sec,
+                self.stride_sec
+            )
+        else:  # 'fixed' mode
+            # Single window
             windows = [data]
             
         logger.info(f"Created {len(windows)} windows")

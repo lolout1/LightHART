@@ -1,4 +1,4 @@
-# utils/enhanced_dataset_builder.py
+# utils/enhanced_dataset_builder.py (modified)
 
 import os
 import numpy as np
@@ -10,26 +10,24 @@ import json
 
 from utils.processor.base_quat import (
     parse_watch_csv, 
-    create_skeleton_timestamps,
-    sliding_windows_by_time_fixed,
-    sliding_windows_by_time
+    create_skeleton_timestamps
 )
-from utils.imu_fusion import (
+from utils.imu_fusion_robust import (  # Note we're using our new robust version
     StandardKalmanIMU, 
     ExtendedKalmanIMU, 
     UnscentedKalmanIMU,
     calibrate_filter, 
     extract_orientation_from_skeleton,
-    robust_align_modalities
+    fuse_inertial_modalities
 )
+from utils.enhanced_alignment import robust_align_modalities
 
 # Configure logging
 logger = logging.getLogger("EnhancedDatasetBuilder")
 
 class EnhancedDatasetBuilder:
     """
-    Enhanced dataset builder that handles asynchronous modalities and drift correction.
-    Optimized for fall detection with SmartFallMM dataset.
+    Enhanced dataset builder with robust error handling and flexible fusion options.
     """
     
     def __init__(
@@ -41,7 +39,7 @@ class EnhancedDatasetBuilder:
         window_size_sec: float = 4.0,
         stride_sec: float = 1.0,
         imu_fusion: str = 'ekf',
-        align_method: str = 'enhanced',
+        align_method: str = 'dtw',
         wrist_idx: int = 9,  # Index of the wrist joint
         **kwargs
     ):
@@ -97,6 +95,8 @@ class EnhancedDatasetBuilder:
         # Init data containers
         self.data = {}
         self.processed_data = {'labels': []}
+        
+        logger.info(f"Initialized EnhancedDatasetBuilder: mode={mode}, fusion={imu_fusion}")
     
     def _trial_label(self, trial) -> int:
         """
@@ -219,7 +219,7 @@ class EnhancedDatasetBuilder:
             else:  # ADL
                 nonfall_trials.append(trial)
         
-        # Shuffle trials
+        # Shuffle trials for randomness
         np.random.shuffle(fall_trials)
         np.random.shuffle(nonfall_trials)
         
@@ -283,21 +283,20 @@ class EnhancedDatasetBuilder:
                     logger.warning("Insufficient data for calibration")
                     continue
                 
-                # Align modalities
-                accel_values = accel_data[:, 1:4]  # Skip time column
-                accel_timestamps = accel_data[:, 0]
-                
-                # Create skeleton timestamps
+                # Create skeleton timestamps if needed
                 if skel_data.shape[1] == 96:  # No time column
-                    skel_timestamps = create_skeleton_timestamps(skel_data)
-                    skel_with_time = np.column_stack([skel_timestamps, skel_data])
+                    skel_timestamps = np.arange(skel_data.shape[0]) / 30.0  # 30 fps
                 else:
-                    skel_with_time = skel_data
+                    skel_timestamps = skel_data[:, 0]
+                    skel_data = skel_data[:, 1:]  # Remove time column
                 
-                # Align IMU and skeleton
+                # Align data using robust alignment
                 aligned_accel, aligned_skel, aligned_ts = robust_align_modalities(
-                    accel_values, skel_data, accel_timestamps,
-                    method=self.align_method, wrist_idx=self.wrist_idx
+                    accel_data[:, 1:4],  # Skip time column
+                    skel_data,
+                    accel_data[:, 0],
+                    method=self.align_method,
+                    wrist_idx=self.wrist_idx
                 )
                 
                 if aligned_accel.shape[0] < 50 or aligned_skel.shape[0] < 50:
@@ -306,11 +305,13 @@ class EnhancedDatasetBuilder:
                 
                 # Get gyro values aligned to same timestamps
                 from scipy.interpolate import interp1d
+                
+                # Extract gyro values (skip time column)
                 gyro_values = gyro_data[:, 1:4]
                 gyro_timestamps = gyro_data[:, 0]
                 
-                if not np.array_equal(gyro_timestamps, accel_timestamps):
-                    # Interpolate gyro to aligned timestamps
+                # Interpolate gyro to aligned timestamps
+                try:
                     gyro_interp = interp1d(
                         gyro_timestamps, 
                         gyro_values,
@@ -319,10 +320,9 @@ class EnhancedDatasetBuilder:
                         fill_value="extrapolate"
                     )
                     aligned_gyro = gyro_interp(aligned_ts)
-                else:
-                    # If timestamps already match, just use corresponding indices
-                    gyro_indices = [np.argmin(np.abs(gyro_timestamps - t)) for t in aligned_ts]
-                    aligned_gyro = gyro_values[gyro_indices]
+                except Exception as e:
+                    logger.warning(f"Gyro interpolation failed: {e}, using zeros")
+                    aligned_gyro = np.zeros_like(aligned_accel)
                 
                 # Calibrate filter
                 _, params = calibrate_filter(
@@ -365,268 +365,188 @@ class EnhancedDatasetBuilder:
             skel_path: Path to skeleton data file (optional)
             
         Returns:
-            Dictionary with aligned data and reference orientations
+            Dictionary with aligned data
         """
-        # Load accelerometer data
+        result = {
+            'accel_data': None,
+            'gyro_data': None,
+            'skel_data': None,
+            'aligned': False,
+            'reference_orientations': None,
+            'reference_timestamps': None
+        }
+        
+        # Load accelerometer data (required)
         accel_data = parse_watch_csv(accel_path)
         if accel_data.shape[0] == 0:
             logger.warning(f"Empty accelerometer data: {accel_path}")
             return None
         
-        # Load gyroscope data
-        gyro_data = parse_watch_csv(gyro_path) if gyro_path else np.zeros((0, 4))
-        if gyro_data.shape[0] == 0:
-            logger.warning(f"Empty gyroscope data: {gyro_path}")
-            # Can proceed with just accelerometer if needed
+        result['accel_data'] = accel_data
+        result['accel_timestamps'] = accel_data[:, 0]
         
-        # Load skeleton data if provided
-        skel_data = None
-        if skel_path:
-            try:
-                df = pd.read_csv(skel_path, header=None).dropna(how='all').fillna(0)
-                skel_array = df.values.astype(np.float32)
-                
-                # Add time column if not present
-                if skel_array.shape[1] == 96:  # No time column
-                    skel_timestamps = create_skeleton_timestamps(skel_array)
-                    skel_data = skel_array
-                else:
-                    skel_data = skel_array
-            except Exception as e:
-                logger.warning(f"Error loading skeleton data: {e}")
-                if self.skel_error_strategy == 'drop_trial':
-                    return None
+        # Load gyroscope data (optional)
+        if gyro_path and os.path.exists(gyro_path):
+            gyro_data = parse_watch_csv(gyro_path)
+            if gyro_data.shape[0] > 0:
+                result['gyro_data'] = gyro_data
+            else:
+                logger.warning(f"Empty gyroscope data: {gyro_path}")
+        else:
+            logger.warning("No gyroscope data provided")
         
-        # Extract timestamps from accelerometer
-        accel_timestamps = accel_data[:, 0]
+        # No skeleton data - return early
+        if not skel_path or not os.path.exists(skel_path):
+            return result
         
-        # Align gyroscope with accelerometer if both exist
-        if gyro_data.shape[0] > 0:
-            # Interpolate gyroscope to match accelerometer timestamps
-            from scipy.interpolate import interp1d
-            
-            # Check if timestamps differ
-            gyro_timestamps = gyro_data[:, 0]
-            
-            if not np.array_equal(accel_timestamps, gyro_timestamps):
-                try:
-                    gyro_interp = interp1d(
-                        gyro_timestamps,
-                        gyro_data[:, 1:],
-                        axis=0,
-                        bounds_error=False,
-                        fill_value="extrapolate"
-                    )
-                    
-                    # Get common time range
-                    t_min = max(accel_timestamps[0], gyro_timestamps[0])
-                    t_max = min(accel_timestamps[-1], gyro_timestamps[-1])
-                    
-                    # Filter to common range
-                    valid_mask = (accel_timestamps >= t_min) & (accel_timestamps <= t_max)
-                    valid_accel_data = accel_data[valid_mask]
-                    valid_timestamps = accel_timestamps[valid_mask]
-                    
-                    # Interpolate gyroscope
-                    valid_gyro_values = gyro_interp(valid_timestamps)
-                    valid_gyro_data = np.column_stack([valid_timestamps, valid_gyro_values])
-                    
-                    # Update data
-                    accel_data = valid_accel_data
-                    gyro_data = valid_gyro_data
-                    accel_timestamps = valid_timestamps
-                except Exception as e:
-                    logger.warning(f"Error interpolating gyroscope data: {e}")
-                    # Proceed with unaligned data if needed
-        
-        # If no skeleton data, return IMU-only
-        if skel_data is None or skel_data.shape[0] == 0:
-            return {
-                'accel_data': accel_data,
-                'gyro_data': gyro_data,
-                'accel_timestamps': accel_timestamps,
-                'skel_data': None,
-                'aligned': False,
-                'reference_orientations': None,
-                'reference_timestamps': None
-            }
-        
-        # Align skeleton and IMU data
+        # Load skeleton data
         try:
-            # Generate skeleton timestamps (at 30 fps)
-            skel_timestamps = create_skeleton_timestamps(skel_data, fps=30.0)
+            df = pd.read_csv(skel_path, header=None).dropna(how='all').fillna(0)
+            skel_array = df.values.astype(np.float32)
             
-            # Align modalities using robust method
-            aligned_imu, aligned_skel, aligned_timestamps = robust_align_modalities(
-                imu_data=accel_data[:, 1:4],  # Use acceleration values only
-                skel_data=skel_data,
-                imu_timestamps=accel_timestamps,
-                skel_fps=30.0,
-                method=self.align_method,
-                wrist_idx=self.wrist_idx
-            )
+            # Add time column if not present
+            if skel_array.shape[1] == 96:  # No time column
+                skel_ts = np.arange(skel_array.shape[0]) / 30.0  # 30 fps
+                result['skel_data'] = skel_array
+            else:
+                skel_ts = skel_array[:, 0]
+                result['skel_data'] = skel_array[:, 1:]  # Remove time column
+                
+            result['skel_timestamps'] = skel_ts
             
-            if aligned_imu.shape[0] > 0 and aligned_skel.shape[0] > 0:
-                # Extract reference orientations for drift correction
-                reference_orientations = extract_orientation_from_skeleton(
-                    aligned_skel, wrist_idx=self.wrist_idx
+            # Try alignment
+            if result['skel_data'] is not None and result['skel_data'].shape[0] > 0:
+                # Extract accel values (skip time column)
+                accel_values = accel_data[:, 1:4]
+                accel_timestamps = accel_data[:, 0]
+                
+                # Align modalities
+                aligned_accel, aligned_skel, aligned_ts = robust_align_modalities(
+                    accel_values,
+                    result['skel_data'],
+                    accel_timestamps,
+                    method=self.align_method,
+                    wrist_idx=self.wrist_idx
                 )
                 
-                # For each aligned IMU sample, find corresponding gyro sample
-                if gyro_data.shape[0] > 0:
-                    aligned_gyro = np.zeros((len(aligned_timestamps), 3))
+                if aligned_accel.shape[0] > 10 and aligned_skel.shape[0] > 10:
+                    # Update aligned data
+                    result['aligned_accel'] = aligned_accel
+                    result['aligned_skel'] = aligned_skel
+                    result['aligned_timestamps'] = aligned_ts
+                    result['aligned'] = True
                     
-                    for i, ts in enumerate(aligned_timestamps):
-                        # Find closest gyro timestamp
-                        gyro_idx = np.argmin(np.abs(gyro_data[:, 0] - ts))
-                        aligned_gyro[i] = gyro_data[gyro_idx, 1:4]
+                    # Extract reference orientations
+                    reference_orientations = extract_orientation_from_skeleton(
+                        aligned_skel, wrist_idx=self.wrist_idx
+                    )
                     
-                    # Create gyro data with aligned timestamps
-                    aligned_gyro_data = np.column_stack([aligned_timestamps, aligned_gyro])
+                    result['reference_orientations'] = reference_orientations
+                    result['reference_timestamps'] = aligned_ts
+                    
+                    # Also align gyroscope if available
+                    if 'gyro_data' in result and result['gyro_data'] is not None:
+                        gyro_data = result['gyro_data']
+                        gyro_values = gyro_data[:, 1:4]
+                        gyro_timestamps = gyro_data[:, 0]
+                        
+                        # Interpolate gyro to aligned timestamps
+                        try:
+                            from scipy.interpolate import interp1d
+                            
+                            gyro_interp = interp1d(
+                                gyro_timestamps,
+                                gyro_values,
+                                axis=0,
+                                bounds_error=False,
+                                fill_value="extrapolate"
+                            )
+                            
+                            aligned_gyro = gyro_interp(aligned_ts)
+                            result['aligned_gyro'] = aligned_gyro
+                        except Exception as e:
+                            logger.warning(f"Gyro interpolation failed: {e}, using zeros")
+                            result['aligned_gyro'] = np.zeros_like(aligned_accel)
                 else:
-                    aligned_gyro_data = None
-                
-                # Recreate aligned accelerometer data with timestamps
-                aligned_accel_data = np.column_stack([aligned_timestamps, aligned_imu])
-                
-                return {
-                    'accel_data': aligned_accel_data,
-                    'gyro_data': aligned_gyro_data,
-                    'accel_timestamps': aligned_timestamps,
-                    'skel_data': aligned_skel,
-                    'aligned': True,
-                    'reference_orientations': reference_orientations,
-                    'reference_timestamps': aligned_timestamps
-                }
-            else:
-                logger.warning("Alignment failed, using original data")
-                return {
-                    'accel_data': accel_data,
-                    'gyro_data': gyro_data,
-                    'accel_timestamps': accel_timestamps,
-                    'skel_data': skel_data,
-                    'aligned': False,
-                    'reference_orientations': None,
-                    'reference_timestamps': None
-                }
+                    logger.warning("Alignment failed")
+        
         except Exception as e:
-            logger.warning(f"Error in modality alignment: {e}")
-            return {
-                'accel_data': accel_data,
-                'gyro_data': gyro_data,
-                'accel_timestamps': accel_timestamps,
-                'skel_data': skel_data,
-                'aligned': False,
-                'reference_orientations': None,
-                'reference_timestamps': None
-            }
+            logger.warning(f"Error loading or aligning skeleton data: {e}")
+            if self.skel_error_strategy == 'drop_trial':
+                return None
+        
+        return result
     
-    def process_with_fusion(self, accel_data, gyro_data, accel_timestamps=None, 
-                          reference_orientations=None, reference_timestamps=None):
+    def process_with_fusion(self, data_dict):
         """
-        Process IMU data with fusion and drift correction.
+        Process data with IMU fusion.
         
         Args:
-            accel_data: Accelerometer data with timestamps
-            gyro_data: Gyroscope data with timestamps
-            accel_timestamps: Timestamps for accelerometer
-            reference_orientations: Optional reference orientations from skeleton
-            reference_timestamps: Optional timestamps for reference orientations
+            data_dict: Dictionary from load_and_align_data
             
         Returns:
-            Fused data with orientation features
+            Dictionary with fused windows
         """
-        # Extract timestamps if not provided
-        if accel_timestamps is None:
-            accel_timestamps = accel_data[:, 0]
+        if data_dict is None or 'accel_data' not in data_dict or data_dict['accel_data'] is None:
+            logger.warning("No accelerometer data for fusion")
+            return {}
         
-        # Extract values
-        accel_values = accel_data[:, 1:4]
+        # Get accelerometer data
+        accel_data = data_dict['accel_data']
         
-        if gyro_data is not None and gyro_data.shape[0] > 0:
-            gyro_values = gyro_data[:, 1:4]
-        else:
-            # Create zero gyro values if not available
-            gyro_values = np.zeros_like(accel_values)
+        # Get gyroscope data if available
+        gyro_data = data_dict.get('gyro_data', None)
         
-        # Create Kalman filter based on selected type
-        if self.imu_fusion == 'standard':
-            kalman_filter = StandardKalmanIMU(
-                process_noise=self.fusion_params['process_noise'],
-                measurement_noise=self.fusion_params['measurement_noise'],
-                gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
-                drift_correction_weight=self.fusion_params['drift_correction_weight']
-            )
-        elif self.imu_fusion == 'ekf':
-            kalman_filter = ExtendedKalmanIMU(
-                process_noise=self.fusion_params['process_noise'],
-                measurement_noise=self.fusion_params['measurement_noise'],
-                gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
-                drift_correction_weight=self.fusion_params['drift_correction_weight']
-            )
-        else:  # 'ukf'
-            kalman_filter = UnscentedKalmanIMU(
-                process_noise=self.fusion_params['process_noise'],
-                measurement_noise=self.fusion_params['measurement_noise'],
-                gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
-                drift_correction_weight=self.fusion_params['drift_correction_weight']
-            )
+        # Get reference data if available
+        reference_orientations = data_dict.get('reference_orientations', None)
+        reference_timestamps = data_dict.get('reference_timestamps', None)
         
-        # Set reference data for drift correction if available
-        if reference_orientations is not None and reference_timestamps is not None:
-            kalman_filter.set_reference_data(reference_timestamps, reference_orientations)
+        # Process data through IMU fusion
+        result = fuse_inertial_modalities(
+            {'accelerometer': [accel_data], 'gyroscope': [gyro_data] if gyro_data is not None else []},
+            fusion_method=self.imu_fusion,
+            use_gyro=gyro_data is not None,
+            reference_orientations=reference_orientations,
+            reference_timestamps=reference_timestamps
+        )
         
-        # Process the sequence with drift correction
-        fused_data = kalman_filter.process_sequence(accel_values, gyro_values, accel_timestamps)
-        
-        # Add timestamp column
-        return np.column_stack([accel_timestamps, fused_data])
-    
-    def create_windows(self, data, is_skeleton=False):
-        """
-        Create windows from data.
-        
-        Args:
-            data: Array with timestamps in first column
-            is_skeleton: Whether the data is skeleton
+        # Create windows
+        fused_windows = []
+        if 'fused_imu' in result and result['fused_imu']:
+            fused_data = result['fused_imu'][0]
             
-        Returns:
-            List of windows
-        """
-        if data is None or data.shape[0] == 0:
-            return []
-        
-        # Get timestamps
-        timestamps = data[:, 0]
-        min_t = timestamps[0]
-        max_t = timestamps[-1]
-        
-        windows = []
-        t_start = min_t
-        
-        while t_start + self.window_size_sec <= max_t + 1e-9:
-            # Extract data within time window
-            mask = (timestamps >= t_start) & (timestamps < t_start + self.window_size_sec)
-            window_data = data[mask]
+            # Use sliding windows to create fixed-length segments
+            from utils.processor.base import sliding_windows_by_time_fixed
             
-            if is_skeleton:
-                # For skeleton, keep variable length
-                if window_data.shape[0] >= 5:  # Minimum sample threshold
-                    windows.append(window_data)
-            else:
-                # For IMU, resample to fixed length
-                if window_data.shape[0] >= 5:
-                    # Resample to fixed length
-                    if window_data.shape[0] != self.max_length:
-                        indices = np.linspace(0, window_data.shape[0] - 1, self.max_length).astype(int)
-                        resampled = window_data[indices]
-                        windows.append(resampled)
-                    else:
-                        windows.append(window_data)
-            
-            t_start += self.stride_sec
+            fused_windows = sliding_windows_by_time_fixed(
+                fused_data,
+                window_size_sec=self.window_size_sec,
+                stride_sec=self.stride_sec,
+                fixed_count=self.max_length
+            )
         
-        return windows
+        # Also create skeleton windows if available
+        skel_windows = []
+        if 'aligned' in data_dict and data_dict['aligned'] and 'aligned_skel' in data_dict:
+            aligned_skel = data_dict['aligned_skel']
+            aligned_ts = data_dict['aligned_timestamps']
+            
+            # Add time column
+            skel_with_time = np.column_stack([aligned_ts, aligned_skel])
+            
+            # Create variable-length windows
+            from utils.processor.base import sliding_windows_by_time
+            
+            skel_windows = sliding_windows_by_time(
+                skel_with_time,
+                window_size_sec=self.window_size_sec,
+                stride_sec=self.stride_sec
+            )
+        
+        return {
+            'fused_imu': fused_windows,
+            'skeleton': skel_windows
+        }
     
     def process_trial(self, trial, subjects=None):
         """
@@ -672,42 +592,32 @@ class EnhancedDatasetBuilder:
             return None
         
         # Process with fusion
-        fused_data = self.process_with_fusion(
-            alignment_result['accel_data'],
-            alignment_result['gyro_data'],
-            alignment_result['accel_timestamps'],
-            alignment_result['reference_orientations'],
-            alignment_result['reference_timestamps']
-        )
+        fusion_result = self.process_with_fusion(alignment_result)
         
-        # Create windows
-        imu_windows = self.create_windows(fused_data, is_skeleton=False)
-        
-        if not imu_windows:
+        # Check if we have any windows
+        if not fusion_result or 'fused_imu' not in fusion_result or not fusion_result['fused_imu']:
             logger.warning(f"No valid windows for trial: {trial.subject_id}-{trial.action_id}-{trial.sequence_number}")
             return None
         
-        # Create skeleton windows if available and aligned
+        # Create labels for each window
+        imu_windows = fusion_result['fused_imu']
+        skel_windows = fusion_result.get('skeleton', [])
+        
+        # Match counts if both modalities are present
+        if skel_windows:
+            min_windows = min(len(imu_windows), len(skel_windows))
+            imu_windows = imu_windows[:min_windows]
+            skel_windows = skel_windows[:min_windows]
+            labels = [label] * min_windows
+        else:
+            labels = [label] * len(imu_windows)
+        
+        # Assemble result dictionary
         trial_dict = {'fused_imu': imu_windows}
-        labels = [label] * len(imu_windows)
+        if skel_windows:
+            trial_dict['skeleton'] = skel_windows
         
-        if alignment_result['skel_data'] is not None and alignment_result['aligned']:
-            # Add time column to skeleton data
-            skel_with_time = np.column_stack([
-                alignment_result['accel_timestamps'],
-                alignment_result['skel_data']
-            ])
-            
-            skel_windows = self.create_windows(skel_with_time, is_skeleton=True)
-            
-            if skel_windows:
-                # Match number of windows
-                min_windows = min(len(imu_windows), len(skel_windows))
-                trial_dict['fused_imu'] = imu_windows[:min_windows]
-                trial_dict['skeleton'] = skel_windows[:min_windows]
-                labels = [label] * min_windows
-        
-        # Save to cache
+        # Cache result
         if self.use_cache:
             try:
                 np.savez_compressed(
