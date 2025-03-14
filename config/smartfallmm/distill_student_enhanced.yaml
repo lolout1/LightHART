@@ -1,9 +1,10 @@
 # config/smartfallmm/distill_student_enhanced.yaml
-# Enhanced cross-modal distillation config
+
+# Enhanced student distillation configuration
 
 teacher_model: Models.transformer_quat_enhanced.QuatTeacherEnhanced
 teacher_args:
-  feat_dim: 16
+  feat_dim: 21  # Enhanced IMU features
   d_model: 64
   nhead: 4
   num_layers: 3
@@ -13,7 +14,7 @@ teacher_args:
 
 student_model: Models.transformer_quat_enhanced.QuatStudentEnhanced
 student_args:
-  feat_dim: 16
+  feat_dim: 21  # Enhanced IMU features
   d_model: 48
   nhead: 4
   num_layers: 2
@@ -31,14 +32,15 @@ dataset_args:
   sensors: ['watch']
   window_size_sec: 4.0
   stride_sec: 1.0
-  imu_fusion: 'ekf'  # Options: 'standard', 'ekf', 'ukf'
-  align_method: 'dtw'
+  imu_fusion: 'ekf'  # Enhanced EKF for fall detection
+  align_method: 'enhanced'  # Enhanced alignment for different start/stop times
   wrist_idx: 9  # Index of wrist joint to align with watch
   calibrate_filter: true
-  calibration_samples: 5
+  drift_correction_weight: 0.3
+  fall_specific_features: true
+  skel_error_strategy: 'best_effort'
   use_cache: true
-  cache_dir: './.cache_quat_enhanced'
-  skel_error_strategy: 'drop_trial'
+  cache_dir: './.cache_enhanced'
 
 phase: 'train'
 batch_size: 16
@@ -54,7 +56,7 @@ work_dir: 'exps/student_enhanced'
 print_log: true
 include_val: true
 early_stop_patience: 15
-teacher_weight_dir: 'exps/teacher_quat'
+teacher_weight_dir: 'exps/teacher_enhanced'
 num_workers: 4
 
 distill_args:
