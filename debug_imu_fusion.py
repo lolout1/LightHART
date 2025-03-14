@@ -24,6 +24,7 @@ import pandas as pd
 from pathlib import Path
 import json
 import time
+from collections import defaultdict
 
 # Import utilities for data loading and processing
 from utils.processor.base_quat import (
@@ -146,16 +147,21 @@ def align_modalities(data_dict, wrist_idx=9, method='dtw'):
                 
                 # Interpolate gyro to aligned timestamps
                 from scipy.interpolate import interp1d
-                gyro_interp = interp1d(
-                    gyro_timestamps,
-                    gyro_values,
-                    axis=0,
-                    bounds_error=False,
-                    fill_value="extrapolate"
-                )
-                
-                aligned_gyro = gyro_interp(aligned_ts)
-                data_dict['aligned_gyro'] = aligned_gyro
+                try:
+                    gyro_interp = interp1d(
+                        gyro_timestamps,
+                        gyro_values,
+                        axis=0,
+                        bounds_error=False,
+                        fill_value="extrapolate"
+                    )
+                    
+                    aligned_gyro = gyro_interp(aligned_ts)
+                    data_dict['aligned_gyro'] = aligned_gyro
+                except Exception as e:
+                    print(f"Error interpolating gyro: {e}")
+                    # Create zero gyro values
+                    data_dict['aligned_gyro'] = np.zeros_like(aligned_imu)
         else:
             print("Alignment produced insufficient data points.")
     except Exception as e:
@@ -295,7 +301,8 @@ def plot_results(data_dict, filter_results, output_dir, trial_info=""):
     gs = GridSpec(4, 1)
     
     quat_components = ["w", "x", "y", "z"]
-    quat_idx = [-7, -6, -5, -4]  # Quaternion is 4 columns before euler
+    # The quaternion components are at columns -7, -6, -5, -4 (before euler angles)
+    quat_idx = [-7, -6, -5, -4]
     
     for i in range(4):
         ax = plt.subplot(gs[i, 0])
@@ -303,8 +310,12 @@ def plot_results(data_dict, filter_results, output_dir, trial_info=""):
         # Plot each filter
         for filter_type, result in filter_results.items():
             timestamps = result['timestamps']
-            quat = result['output'][:, quat_idx[i]]
-            ax.plot(timestamps, quat, label=f"{filter_type}")
+            # Make sure quaternion data is available in the output
+            try:
+                quat = result['output'][:, quat_idx[i]]
+                ax.plot(timestamps, quat, label=f"{filter_type}")
+            except IndexError:
+                print(f"Warning: Quaternion component {quat_components[i]} not found in {filter_type} output")
         
         ax.set_ylabel(f"Quat {quat_components[i]}")
         ax.grid(True)
@@ -350,8 +361,8 @@ def plot_results(data_dict, filter_results, output_dir, trial_info=""):
     plt.figure(figsize=(10, 6))
     
     # Compute errors if we have reference data
+    errors = {}
     if has_reference:
-        errors = {}
         ref_orientations = data_dict['reference_orientations']
         
         for filter_type, result in filter_results.items():
@@ -379,7 +390,7 @@ def plot_results(data_dict, filter_results, output_dir, trial_info=""):
     results_summary = {
         'trial_info': trial_info,
         'processing_times': {k: v['processing_time'] for k, v in filter_results.items()},
-        'data_points': len(timestamps),
+        'data_points': len(timestamps) if 'timestamps' in locals() else 0,
         'errors': errors if has_reference else None
     }
     
