@@ -6,19 +6,24 @@ import pandas as pd
 import time
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import json
 
 from utils.processor.base_quat import (
     parse_watch_csv, 
-    create_skeleton_timestamps
+    create_skeleton_timestamps,
+    sliding_windows_by_time_fixed,
+    sliding_windows_by_time
 )
 from utils.imu_fusion import (
-    StandardKalmanIMU, ExtendedKalmanIMU, UnscentedKalmanIMU,
-    calibrate_filter, extract_orientation_from_skeleton
-)
-from utils.enhanced_alignment import (
-    enhanced_align_modalities
+    StandardKalmanIMU, 
+    ExtendedKalmanIMU, 
+    UnscentedKalmanIMU,
+    calibrate_filter, 
+    extract_orientation_from_skeleton,
+    robust_align_modalities
 )
 
+# Configure logging
 logger = logging.getLogger("EnhancedDatasetBuilder")
 
 class EnhancedDatasetBuilder:
@@ -51,8 +56,8 @@ class EnhancedDatasetBuilder:
             window_size_sec: Window size in seconds
             stride_sec: Stride size in seconds
             imu_fusion: Fusion method ('standard', 'ekf', 'ukf')
-            align_method: Method for aligning IMU and skeleton ('enhanced', 'dtw', 'basic')
-            wrist_idx: Index of the wrist joint (default: 9)
+            align_method: Method for aligning IMU and skeleton
+            wrist_idx: Index of the wrist joint
             **kwargs: Additional arguments
         """
         self.dataset = dataset
@@ -92,9 +97,6 @@ class EnhancedDatasetBuilder:
         # Init data containers
         self.data = {}
         self.processed_data = {'labels': []}
-        
-        # Setup logging
-        logging.basicConfig(level=logging.INFO)
     
     def _trial_label(self, trial) -> int:
         """
@@ -134,6 +136,225 @@ class EnhancedDatasetBuilder:
             f"enhanced_s{trial.subject_id}_a{trial.action_id}_t{trial.sequence_number}_sub{sstr}_fuse{fusion}_align{align}.npz"
         )
     
+    def get_calibration_cache_filename(self) -> str:
+        """
+        Generate calibration filename.
+        
+        Returns:
+            Calibration cache file path
+        """
+        return os.path.join(
+            self.cache_dir,
+            f"kalman_params_{self.imu_fusion}_wrist{self.wrist_idx}.json"
+        )
+    
+    def load_calibration_parameters(self) -> bool:
+        """
+        Load calibration parameters from cache.
+        
+        Returns:
+            True if parameters were loaded, False otherwise
+        """
+        path = self.get_calibration_cache_filename()
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    params = json.load(f)
+                self.fusion_params = params
+                logger.info(f"Loaded calibrated parameters: {params}")
+                return True
+            except Exception as e:
+                logger.warning(f"Error loading calibration parameters: {e}")
+        return False
+    
+    def save_calibration_parameters(self) -> bool:
+        """
+        Save calibration parameters to cache.
+        
+        Returns:
+            True if parameters were saved, False otherwise
+        """
+        path = self.get_calibration_cache_filename()
+        try:
+            with open(path, 'w') as f:
+                json.dump(self.fusion_params, f)
+            logger.info(f"Saved calibration parameters to {path}")
+            return True
+        except Exception as e:
+            logger.warning(f"Error saving calibration parameters: {e}")
+            return False
+    
+    def get_representative_trials(self, subjects, n=5) -> list:
+        """
+        Get a balanced set of representative trials for calibration.
+        
+        Args:
+            subjects: List of subject IDs to include
+            n: Number of trials to select
+            
+        Returns:
+            List of selected trials
+        """
+        # Get falls and non-falls separately
+        fall_trials = []
+        nonfall_trials = []
+        
+        for trial in self.dataset.matched_trials:
+            if trial.subject_id not in subjects:
+                continue
+                
+            # Must have accelerometer, gyroscope and skeleton
+            keys = trial.files.keys()
+            if not all(k in keys for k in ['accelerometer', 'gyroscope', 'skeleton']):
+                continue
+                
+            # Check file existence
+            if not all(os.path.exists(trial.files[k]) for k in ['accelerometer', 'gyroscope', 'skeleton']):
+                continue
+                
+            # Get label
+            label = self._trial_label(trial)
+            if label == 1:  # Fall
+                fall_trials.append(trial)
+            else:  # ADL
+                nonfall_trials.append(trial)
+        
+        # Shuffle trials
+        np.random.shuffle(fall_trials)
+        np.random.shuffle(nonfall_trials)
+        
+        # Select balanced set
+        n_fall = min(n//2, len(fall_trials))
+        n_nonfall = min(n-n_fall, len(nonfall_trials))
+        
+        if n_fall == 0 and fall_trials:
+            n_fall = min(n, len(fall_trials))
+        if n_nonfall == 0 and nonfall_trials:
+            n_nonfall = min(n, len(nonfall_trials))
+        
+        selected = fall_trials[:n_fall] + nonfall_trials[:n_nonfall]
+        np.random.shuffle(selected)
+        
+        logger.info(f"Selected {len(selected)} representative trials for calibration ({n_fall} falls, {n_nonfall} ADLs)")
+        return selected
+    
+    def calibrate_filter_parameters(self, subjects) -> None:
+        """
+        Calibrate filter parameters using skeleton as ground truth.
+        
+        Args:
+            subjects: List of subject IDs to include
+        """
+        # Try to load from cache first
+        if self.load_calibration_parameters():
+            return
+            
+        logger.info(f"Calibrating {self.imu_fusion} filter parameters...")
+        
+        # Get representative trials
+        trials = self.get_representative_trials(subjects, self.calibration_samples)
+        if not trials:
+            logger.warning("No suitable trials for calibration. Using default parameters.")
+            return
+        
+        # Process each trial to calibrate
+        all_params = []
+        for trial in trials:
+            try:
+                logger.info(f"Calibrating with trial S{trial.subject_id}A{trial.action_id}T{trial.sequence_number}")
+                
+                # Load data
+                accel_path = trial.files['accelerometer']
+                gyro_path = trial.files['gyroscope']
+                skel_path = trial.files['skeleton']
+                
+                accel_data = parse_watch_csv(accel_path)
+                gyro_data = parse_watch_csv(gyro_path)
+                
+                # Load skeleton data
+                try:
+                    df = pd.read_csv(skel_path, header=None).dropna(how='all').fillna(0)
+                    skel_data = df.values.astype(np.float32)
+                except Exception as e:
+                    logger.warning(f"Error loading skeleton data: {e}")
+                    continue
+                
+                if accel_data.shape[0] < 50 or gyro_data.shape[0] < 50 or skel_data.shape[0] < 50:
+                    logger.warning("Insufficient data for calibration")
+                    continue
+                
+                # Align modalities
+                accel_values = accel_data[:, 1:4]  # Skip time column
+                accel_timestamps = accel_data[:, 0]
+                
+                # Create skeleton timestamps
+                if skel_data.shape[1] == 96:  # No time column
+                    skel_timestamps = create_skeleton_timestamps(skel_data)
+                    skel_with_time = np.column_stack([skel_timestamps, skel_data])
+                else:
+                    skel_with_time = skel_data
+                
+                # Align IMU and skeleton
+                aligned_accel, aligned_skel, aligned_ts = robust_align_modalities(
+                    accel_values, skel_data, accel_timestamps,
+                    method=self.align_method, wrist_idx=self.wrist_idx
+                )
+                
+                if aligned_accel.shape[0] < 50 or aligned_skel.shape[0] < 50:
+                    logger.warning("Insufficient aligned data for calibration")
+                    continue
+                
+                # Get gyro values aligned to same timestamps
+                from scipy.interpolate import interp1d
+                gyro_values = gyro_data[:, 1:4]
+                gyro_timestamps = gyro_data[:, 0]
+                
+                if not np.array_equal(gyro_timestamps, accel_timestamps):
+                    # Interpolate gyro to aligned timestamps
+                    gyro_interp = interp1d(
+                        gyro_timestamps, 
+                        gyro_values,
+                        axis=0,
+                        bounds_error=False,
+                        fill_value="extrapolate"
+                    )
+                    aligned_gyro = gyro_interp(aligned_ts)
+                else:
+                    # If timestamps already match, just use corresponding indices
+                    gyro_indices = [np.argmin(np.abs(gyro_timestamps - t)) for t in aligned_ts]
+                    aligned_gyro = gyro_values[gyro_indices]
+                
+                # Calibrate filter
+                _, params = calibrate_filter(
+                    aligned_accel,
+                    aligned_gyro,
+                    aligned_skel,
+                    filter_type=self.imu_fusion,
+                    timestamps=aligned_ts,
+                    wrist_idx=self.wrist_idx
+                )
+                
+                all_params.append(params)
+                logger.info(f"Trial parameters: {params}")
+                
+            except Exception as e:
+                logger.warning(f"Error calibrating trial: {e}")
+                continue
+        
+        # Calculate average parameters
+        if all_params:
+            avg_params = np.mean(all_params, axis=0)
+            self.fusion_params = {
+                'process_noise': float(avg_params[0]),
+                'measurement_noise': float(avg_params[1]),
+                'gyro_bias_noise': float(avg_params[2]),
+                'drift_correction_weight': self.fusion_params['drift_correction_weight']
+            }
+            logger.info(f"Calibrated parameters: {self.fusion_params}")
+            self.save_calibration_parameters()
+        else:
+            logger.warning("Calibration failed. Using default parameters.")
+    
     def load_and_align_data(self, accel_path, gyro_path, skel_path=None):
         """
         Load accelerometer, gyroscope, and skeleton data and align them.
@@ -165,10 +386,14 @@ class EnhancedDatasetBuilder:
                 df = pd.read_csv(skel_path, header=None).dropna(how='all').fillna(0)
                 skel_array = df.values.astype(np.float32)
                 
-                # Skeleton data doesn't have time column
-                skel_data = skel_array
+                # Add time column if not present
+                if skel_array.shape[1] == 96:  # No time column
+                    skel_timestamps = create_skeleton_timestamps(skel_array)
+                    skel_data = skel_array
+                else:
+                    skel_data = skel_array
             except Exception as e:
-                logger.error(f"Error loading skeleton data: {e}")
+                logger.warning(f"Error loading skeleton data: {e}")
                 if self.skel_error_strategy == 'drop_trial':
                     return None
         
@@ -211,7 +436,7 @@ class EnhancedDatasetBuilder:
                     gyro_data = valid_gyro_data
                     accel_timestamps = valid_timestamps
                 except Exception as e:
-                    logger.error(f"Error interpolating gyroscope data: {e}")
+                    logger.warning(f"Error interpolating gyroscope data: {e}")
                     # Proceed with unaligned data if needed
         
         # If no skeleton data, return IMU-only
@@ -231,25 +456,21 @@ class EnhancedDatasetBuilder:
             # Generate skeleton timestamps (at 30 fps)
             skel_timestamps = create_skeleton_timestamps(skel_data, fps=30.0)
             
-            # Align modalities using enhanced method
-            alignment_result = enhanced_align_modalities(
+            # Align modalities using robust method
+            aligned_imu, aligned_skel, aligned_timestamps = robust_align_modalities(
                 imu_data=accel_data[:, 1:4],  # Use acceleration values only
                 skel_data=skel_data,
                 imu_timestamps=accel_timestamps,
                 skel_fps=30.0,
-                wrist_idx=self.wrist_idx,
-                return_all=True
+                method=self.align_method,
+                wrist_idx=self.wrist_idx
             )
             
-            if alignment_result['success']:
-                # Extract aligned data
-                aligned_imu = alignment_result['aligned_imu']
-                aligned_skel = alignment_result['aligned_skel']
-                aligned_timestamps = alignment_result['aligned_timestamps']
-                
-                # Get reference orientations for drift correction
-                ref_timestamps = alignment_result['reference_timestamps']
-                ref_orientations = alignment_result['reference_orientations']
+            if aligned_imu.shape[0] > 0 and aligned_skel.shape[0] > 0:
+                # Extract reference orientations for drift correction
+                reference_orientations = extract_orientation_from_skeleton(
+                    aligned_skel, wrist_idx=self.wrist_idx
+                )
                 
                 # For each aligned IMU sample, find corresponding gyro sample
                 if gyro_data.shape[0] > 0:
@@ -274,11 +495,11 @@ class EnhancedDatasetBuilder:
                     'accel_timestamps': aligned_timestamps,
                     'skel_data': aligned_skel,
                     'aligned': True,
-                    'reference_orientations': ref_orientations,
-                    'reference_timestamps': ref_timestamps
+                    'reference_orientations': reference_orientations,
+                    'reference_timestamps': aligned_timestamps
                 }
             else:
-                logger.warning("Enhanced alignment failed, using original data")
+                logger.warning("Alignment failed, using original data")
                 return {
                     'accel_data': accel_data,
                     'gyro_data': gyro_data,
@@ -289,7 +510,7 @@ class EnhancedDatasetBuilder:
                     'reference_timestamps': None
                 }
         except Exception as e:
-            logger.error(f"Error in modality alignment: {e}")
+            logger.warning(f"Error in modality alignment: {e}")
             return {
                 'accel_data': accel_data,
                 'gyro_data': gyro_data,
@@ -512,6 +733,10 @@ class EnhancedDatasetBuilder:
         """
         self.data.clear()
         self.processed_data = {'labels': []}
+        
+        # Calibrate filter parameters if needed
+        if self.do_calibration and self.imu_fusion in ['standard', 'ekf', 'ukf']:
+            self.calibrate_filter_parameters(subjects)
         
         # Generate tasks for each trial
         tasks = [(t, subjects) for t in self.dataset.matched_trials]

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python
 """
 debug_imu_fusion.py - Comprehensive debugging tool for IMU filtering pipeline
@@ -11,7 +12,8 @@ This script tests each component of the IMU fusion pipeline:
 
 It includes detailed logging, visualization, and performance metrics.
 """
-
+# Add to the top of debug_imu_fusion.py
+import re
 import os
 import sys
 import time

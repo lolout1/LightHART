@@ -1,0 +1,78 @@
+=== Running IMU fusion debug ===
+Testing EKF filter...
+2025-03-14 00:56:07,243 - IMUFusionDebug - INFO - Debug configuration:
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Data directory: data/smartfallmm
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Subjects: [29, 30, 31]
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Actions: [1, 10]
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Max trials: 5
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Window size: 4.0 seconds
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Stride: 1.0 seconds
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Max length: 128
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Wrist index: 9
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Filters: ['ekf']
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 2015, in <module>
+    main()
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1876, in main
+    trials = get_trial_list(args.data_dir, subjects, args.max_trials)
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1771, in get_trial_list
+    match = re.match(r'S(\d+)A(\d+)T(\d+)\.csv', file)
+NameError: name 're' is not defined
+Testing Standard Kalman filter...
+2025-03-14 00:56:08,430 - IMUFusionDebug - INFO - Debug configuration:
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Data directory: data/smartfallmm
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Subjects: [29, 30, 31]
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Actions: [1, 10]
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Max trials: 5
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Window size: 4.0 seconds
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Stride: 1.0 seconds
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Max length: 128
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Wrist index: 9
+2025-03-14 00:56:08,435 - IMUFusionDebug - INFO -   Filters: ['standard']
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 2015, in <module>
+    main()
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1876, in main
+    trials = get_trial_list(args.data_dir, subjects, args.max_trials)
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1771, in get_trial_list
+    match = re.match(r'S(\d+)A(\d+)T(\d+)\.csv', file)
+NameError: name 're' is not defined
+Testing Unscented Kalman filter...
+2025-03-14 00:56:09,592 - IMUFusionDebug - INFO - Debug configuration:
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Data directory: data/smartfallmm
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Subjects: [29, 30, 31]
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Actions: [1, 10]
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Max trials: 5
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Window size: 4.0 seconds
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Stride: 1.0 seconds
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Max length: 128
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Wrist index: 9
+2025-03-14 00:56:09,597 - IMUFusionDebug - INFO -   Filters: ['ukf']
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 2015, in <module>
+    main()
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1876, in main
+    trials = get_trial_list(args.data_dir, subjects, args.max_trials)
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1771, in get_trial_list
+    match = re.match(r'S(\d+)A(\d+)T(\d+)\.csv', file)
+NameError: name 're' is not defined
+Comparing all filters...
+2025-03-14 00:56:10,798 - IMUFusionDebug - INFO - Debug configuration:
+2025-03-14 00:56:10,800 - IMUFusionDebug - INFO -   Data directory: data/smartfallmm
+2025-03-14 00:56:10,800 - IMUFusionDebug - INFO -   Subjects: [29, 30, 31]
+2025-03-14 00:56:10,800 - IMUFusionDebug - INFO -   Actions: [1, 10]
+2025-03-14 00:56:10,801 - IMUFusionDebug - INFO -   Max trials: 5
+2025-03-14 00:56:10,801 - IMUFusionDebug - INFO -   Window size: 4.0 seconds
+2025-03-14 00:56:10,801 - IMUFusionDebug - INFO -   Stride: 1.0 seconds
+2025-03-14 00:56:10,801 - IMUFusionDebug - INFO -   Max length: 128
+2025-03-14 00:56:10,801 - IMUFusionDebug - INFO -   Wrist index: 9
+2025-03-14 00:56:10,801 - IMUFusionDebug - INFO -   Filters: ['standard', 'ekf', 'ukf']
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 2015, in <module>
+    main()
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1876, in main
+    trials = get_trial_list(args.data_dir, subjects, args.max_trials)
+  File "/mmfs1/home/sww35/test/LightHART/./debug_imu_fusion.py", line 1771, in get_trial_list
+    match = re.match(r'S(\d+)A(\d+)T(\d+)\.csv', file)
+NameError: name 're' is not defined
+Debug complete! Results saved to debug_output_20250314_005605

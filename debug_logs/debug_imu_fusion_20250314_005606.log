@@ -1,0 +1,10 @@
+2025-03-14 00:56:07,243 - IMUFusionDebug - INFO - Debug configuration:
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Data directory: data/smartfallmm
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Subjects: [29, 30, 31]
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Actions: [1, 10]
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Max trials: 5
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Window size: 4.0 seconds
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Stride: 1.0 seconds
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Max length: 128
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Wrist index: 9
+2025-03-14 00:56:07,244 - IMUFusionDebug - INFO -   Filters: ['ekf']

@@ -1,0 +1,82 @@
+=== Running IMU fusion debug ===
+Testing EKF filter...
+./debug_imu_fusion.py: line 14: $'\ndebug_imu_fusion.py - Comprehensive debugging tool for IMU filtering pipeline\n\nThis script tests each component of the IMU fusion pipeline:\n1. Data loading\n2. Filter implementation (Standard, EKF, UKF)\n3. Modality alignment\n4. Window creation\n5. End-to-end performance\n\nIt includes detailed logging, visualization, and performance metrics.\n': command not found
+./debug_imu_fusion.py: line 16: import: command not found
+./debug_imu_fusion.py: line 17: import: command not found
+./debug_imu_fusion.py: line 18: import: command not found
+./debug_imu_fusion.py: line 19: import: command not found
+./debug_imu_fusion.py: line 20: import: command not found
+./debug_imu_fusion.py: line 21: import: command not found
+./debug_imu_fusion.py: line 22: import: command not found
+./debug_imu_fusion.py: line 23: import: command not found
+./debug_imu_fusion.py: line 24: from: command not found
+./debug_imu_fusion.py: line 25: import: command not found
+./debug_imu_fusion.py: line 26: import: command not found
+./debug_imu_fusion.py: line 27: from: command not found
+./debug_imu_fusion.py: line 28: import: command not found
+./debug_imu_fusion.py: line 29: from: command not found
+./debug_imu_fusion.py: line 30: from: command not found
+./debug_imu_fusion.py: line 33: log_dir: command not found
+./debug_imu_fusion.py: line 34: syntax error near unexpected token `log_dir,'
+./debug_imu_fusion.py: line 34: `os.makedirs(log_dir, exist_ok=True)'
+Testing Standard Kalman filter...
+./debug_imu_fusion.py: line 14: $'\ndebug_imu_fusion.py - Comprehensive debugging tool for IMU filtering pipeline\n\nThis script tests each component of the IMU fusion pipeline:\n1. Data loading\n2. Filter implementation (Standard, EKF, UKF)\n3. Modality alignment\n4. Window creation\n5. End-to-end performance\n\nIt includes detailed logging, visualization, and performance metrics.\n': command not found
+./debug_imu_fusion.py: line 16: import: command not found
+./debug_imu_fusion.py: line 17: import: command not found
+./debug_imu_fusion.py: line 18: import: command not found
+./debug_imu_fusion.py: line 19: import: command not found
+./debug_imu_fusion.py: line 20: import: command not found
+./debug_imu_fusion.py: line 21: import: command not found
+./debug_imu_fusion.py: line 22: import: command not found
+./debug_imu_fusion.py: line 23: import: command not found
+./debug_imu_fusion.py: line 24: from: command not found
+./debug_imu_fusion.py: line 25: import: command not found
+./debug_imu_fusion.py: line 26: import: command not found
+./debug_imu_fusion.py: line 27: from: command not found
+./debug_imu_fusion.py: line 28: import: command not found
+./debug_imu_fusion.py: line 29: from: command not found
+./debug_imu_fusion.py: line 30: from: command not found
+./debug_imu_fusion.py: line 33: log_dir: command not found
+./debug_imu_fusion.py: line 34: syntax error near unexpected token `log_dir,'
+./debug_imu_fusion.py: line 34: `os.makedirs(log_dir, exist_ok=True)'
+Testing Unscented Kalman filter...
+./debug_imu_fusion.py: line 14: $'\ndebug_imu_fusion.py - Comprehensive debugging tool for IMU filtering pipeline\n\nThis script tests each component of the IMU fusion pipeline:\n1. Data loading\n2. Filter implementation (Standard, EKF, UKF)\n3. Modality alignment\n4. Window creation\n5. End-to-end performance\n\nIt includes detailed logging, visualization, and performance metrics.\n': command not found
+./debug_imu_fusion.py: line 16: import: command not found
+./debug_imu_fusion.py: line 17: import: command not found
+./debug_imu_fusion.py: line 18: import: command not found
+./debug_imu_fusion.py: line 19: import: command not found
+./debug_imu_fusion.py: line 20: import: command not found
+./debug_imu_fusion.py: line 21: import: command not found
+./debug_imu_fusion.py: line 22: import: command not found
+./debug_imu_fusion.py: line 23: import: command not found
+./debug_imu_fusion.py: line 24: from: command not found
+./debug_imu_fusion.py: line 25: import: command not found
+./debug_imu_fusion.py: line 26: import: command not found
+./debug_imu_fusion.py: line 27: from: command not found
+./debug_imu_fusion.py: line 28: import: command not found
+./debug_imu_fusion.py: line 29: from: command not found
+./debug_imu_fusion.py: line 30: from: command not found
+./debug_imu_fusion.py: line 33: log_dir: command not found
+./debug_imu_fusion.py: line 34: syntax error near unexpected token `log_dir,'
+./debug_imu_fusion.py: line 34: `os.makedirs(log_dir, exist_ok=True)'
+Comparing all filters...
+./debug_imu_fusion.py: line 14: $'\ndebug_imu_fusion.py - Comprehensive debugging tool for IMU filtering pipeline\n\nThis script tests each component of the IMU fusion pipeline:\n1. Data loading\n2. Filter implementation (Standard, EKF, UKF)\n3. Modality alignment\n4. Window creation\n5. End-to-end performance\n\nIt includes detailed logging, visualization, and performance metrics.\n': command not found
+./debug_imu_fusion.py: line 16: import: command not found
+./debug_imu_fusion.py: line 17: import: command not found
+./debug_imu_fusion.py: line 18: import: command not found
+./debug_imu_fusion.py: line 19: import: command not found
+./debug_imu_fusion.py: line 20: import: command not found
+./debug_imu_fusion.py: line 21: import: command not found
+./debug_imu_fusion.py: line 22: import: command not found
+./debug_imu_fusion.py: line 23: import: command not found
+./debug_imu_fusion.py: line 24: from: command not found
+./debug_imu_fusion.py: line 25: import: command not found
+./debug_imu_fusion.py: line 26: import: command not found
+./debug_imu_fusion.py: line 27: from: command not found
+./debug_imu_fusion.py: line 28: import: command not found
+./debug_imu_fusion.py: line 29: from: command not found
+./debug_imu_fusion.py: line 30: from: command not found
+./debug_imu_fusion.py: line 33: log_dir: command not found
+./debug_imu_fusion.py: line 34: syntax error near unexpected token `log_dir,'
+./debug_imu_fusion.py: line 34: `os.makedirs(log_dir, exist_ok=True)'
+Debug complete! Results saved to debug_output_20250314_011153

@@ -221,6 +221,11 @@ class DatasetBuilderQuat:
         nf = min(n//2, len(fall))
         nn = min(n-nf, len(nonfall))
         
+        if nf == 0 and len(fall)>0:
+            nf = min(n, len(fall))
+        if nn == 0 and len(nonfall)>0:
+            nn = min(n, len(nonfall))
+        
         selected = fall[:nf] + nonfall[:nn]
         np.random.shuffle(selected)
         
@@ -270,13 +275,49 @@ class DatasetBuilderQuat:
                 if a_data.shape[0] == 0 or g_data.shape[0] == 0 or s_data.shape[0] == 0:
                     continue
                 
+                # Align modalities
+                accel_values = a_data[:, 1:4]  # Skip time column
+                accel_timestamps = a_data[:, 0]
+                
+                # Align IMU and skeleton
+                aligned_imu, aligned_skel, aligned_ts = robust_align_modalities(
+                    accel_values,
+                    s_data,
+                    accel_timestamps,
+                    method=self.align_method,
+                    wrist_idx=self.wrist_idx
+                )
+                
+                if aligned_imu.shape[0] < 10 or aligned_skel.shape[0] < 10:
+                    print("Insufficient aligned data for calibration")
+                    continue
+                
+                # Interpolate gyro to aligned timestamps
+                from scipy.interpolate import interp1d
+                gyro_values = g_data[:, 1:4]
+                gyro_timestamps = g_data[:, 0]
+                
+                if not np.array_equal(gyro_timestamps, accel_timestamps):
+                    gyro_interp = interp1d(
+                        gyro_timestamps,
+                        gyro_values,
+                        axis=0,
+                        bounds_error=False,
+                        fill_value="extrapolate"
+                    )
+                    aligned_gyro = gyro_interp(aligned_ts)
+                else:
+                    # Just use corresponding indices
+                    gyro_indices = [np.argmin(np.abs(gyro_timestamps - t)) for t in aligned_ts]
+                    aligned_gyro = gyro_values[gyro_indices]
+                
                 # Calibrate filter
                 _, params = calibrate_filter(
-                    a_data[:, 1:], 
-                    g_data[:, 1:], 
-                    s_data, 
-                    self.imu_fusion, 
-                    a_data[:, 0],
+                    aligned_imu,
+                    aligned_gyro,
+                    aligned_skel,
+                    filter_type=self.imu_fusion,
+                    timestamps=aligned_ts,
                     wrist_idx=self.wrist_idx
                 )
                 
@@ -485,14 +526,15 @@ class DatasetBuilderQuat:
         if has_skel:
             try:
                 ali_imu, ali_skel, nts = robust_align_modalities(
-                    final_imu, s_data, final_imu[:, 0], 
+                    final_imu[:, 1:4], s_data[:, 1:], final_imu[:, 0], 
                     method=self.align_method,
                     wrist_idx=self.wrist_idx
                 )
                 
                 if ali_imu.shape[0] > 0 and ali_skel.shape[0] > 0:
-                    final_imu = ali_imu
-                    s_data = ali_skel
+                    # Add time column back
+                    final_imu = np.column_stack([nts, ali_imu])
+                    s_data = np.column_stack([nts, ali_skel])
                 else:
                     if self.skel_error_strategy == 'drop_trial':
                         return None
@@ -703,7 +745,8 @@ def multimodal_quat_collate_fn(batch):
         lab_list.append(lab)
     
     # Convert labels to tensor
-    labels = np.array(lab_list)
+    import torch
+    labels = torch.tensor(lab_list, dtype=torch.long)
     
     return imu_list, sk_list, labels
 
@@ -719,6 +762,8 @@ def pad_collate_fn(batch, fixed_imu_len=128, fixed_skel_len=None):
     Returns:
         Tuple of (imu_tensor, imu_mask, skeleton_tensor, skeleton_mask, labels_tensor)
     """
+    import torch
+    
     # Separate components
     imu_list, sk_list, lab_list = [], [], []
     
@@ -747,8 +792,8 @@ def pad_collate_fn(batch, fixed_imu_len=128, fixed_skel_len=None):
         has_skeleton = False
     
     # Create padded tensors for IMU
-    imu_tensor = np.zeros((batch_size, fixed_imu_len, imu_feat_dim))
-    imu_mask = np.ones((batch_size, fixed_imu_len), dtype=bool)
+    imu_tensor = torch.zeros((batch_size, fixed_imu_len, imu_feat_dim), dtype=torch.float32)
+    imu_mask = torch.ones((batch_size, fixed_imu_len), dtype=torch.bool)
     
     # Fill IMU tensor and create mask
     for i in range(batch_size):
@@ -756,7 +801,7 @@ def pad_collate_fn(batch, fixed_imu_len=128, fixed_skel_len=None):
         seq_len = min(imu.shape[0], fixed_imu_len)
         
         # Copy data without time column
-        imu_tensor[i, :seq_len, :] = imu[:seq_len, 1:]
+        imu_tensor[i, :seq_len, :] = torch.from_numpy(imu[:seq_len, 1:])
         
         # Set mask (False = valid data, True = padding)
         imu_mask[i, :seq_len] = False
@@ -768,8 +813,8 @@ def pad_collate_fn(batch, fixed_imu_len=128, fixed_skel_len=None):
             max_skel_len = max(sk.shape[0] for sk in sk_list)
             fixed_skel_len = max_skel_len
         
-        skel_tensor = np.zeros((batch_size, fixed_skel_len, skel_feat_dim))
-        skel_mask = np.ones((batch_size, fixed_skel_len), dtype=bool)
+        skel_tensor = torch.zeros((batch_size, fixed_skel_len, skel_feat_dim), dtype=torch.float32)
+        skel_mask = torch.ones((batch_size, fixed_skel_len), dtype=torch.bool)
         
         # Fill skeleton tensor and create mask
         for i in range(batch_size):
@@ -778,13 +823,16 @@ def pad_collate_fn(batch, fixed_imu_len=128, fixed_skel_len=None):
                 seq_len = min(sk.shape[0], fixed_skel_len)
                 
                 # Copy data without time column
-                skel_tensor[i, :seq_len, :] = sk[:seq_len, 1:1+skel_feat_dim]
+                skel_tensor[i, :seq_len, :] = torch.from_numpy(sk[:seq_len, 1:1+skel_feat_dim])
                 
                 # Set mask
                 skel_mask[i, :seq_len] = False
     else:
         # Empty tensors if no skeleton data
-        skel_tensor = np.zeros((batch_size, 1, skel_feat_dim))
-        skel_mask = np.ones((batch_size, 1), dtype=bool)
+        skel_tensor = torch.zeros((batch_size, 1, skel_feat_dim), dtype=torch.float32)
+        skel_mask = torch.ones((batch_size, 1), dtype=torch.bool)
     
-    return imu_tensor, imu_mask, skel_tensor, skel_mask, np.array(lab_list)
+    # Convert labels to tensor
+    labels = torch.tensor(lab_list, dtype=torch.long)
+    
+    return imu_tensor, imu_mask, skel_tensor, skel_mask, labels
