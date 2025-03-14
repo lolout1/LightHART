@@ -38,27 +38,27 @@ from collections import defaultdict
 import glob
 import logging
 import re
-from scipy.interpolate import interp1d
+from typing import Dict, List, Tuple, Optional, Union, Any
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("imu_debug.log")
+    ]
 )
 logger = logging.getLogger("IMUFusionDebug")
 
-# Import custom modules (update these to use the robust versions)
-from utils.processor.base import (
-    parse_watch_csv,
-    create_skeleton_timestamps
-)
-from utils.imu_fusion_robust import (
+# Import custom modules
+from utils.processor.base import parse_watch_csv
+from utils.robust_alignment import align_all_modalities, extract_wrist_trajectory
+from utils.robust_kalman import (
     RobustStandardKalmanIMU, 
     RobustExtendedKalmanIMU, 
-    RobustUnscentedKalmanIMU,
-    extract_orientation_from_skeleton
+    RobustUnscentedKalmanIMU
 )
-from utils.enhanced_alignment import robust_align_modalities
 
 def str2bool(v):
     """Convert string to boolean."""
@@ -74,26 +74,51 @@ def str2bool(v):
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Debug IMU Fusion Pipeline")
+    
+    # Data source arguments
     parser.add_argument("--data_dir", type=str, default="data/smartfallmm",
                         help="Base directory for dataset (containing 'young'/'old' subdirs)")
     parser.add_argument("--subjects", type=str, default="29,30,31",
                         help="Comma-separated list of subject IDs to test")
     parser.add_argument("--actions", type=str, default=None,
                         help="Comma-separated list of action IDs to test (None=all)")
+    
+    # Filter selection
     parser.add_argument("--filters", type=str, default="standard,ekf,ukf",
                         help="Comma-separated list of filters to test: standard,ekf,ukf")
+    
+    # Processing parameters
     parser.add_argument("--max_trials", type=int, default=5,
                         help="Maximum number of trials to debug")
     parser.add_argument("--window_size", type=float, default=4.0,
                         help="Window size in seconds for sliding windows")
     parser.add_argument("--wrist_idx", type=int, default=9,
                         help="Index of wrist joint in skeleton data")
+    parser.add_argument("--align_method", type=str, default="dtw",
+                        help="Method for aligning modalities: dtw, xcorr, direct")
+    parser.add_argument("--target_fps", type=float, default=30.0,
+                        help="Target sampling rate for resampling")
+    
+    # Output options
     parser.add_argument("--output_dir", type=str, default="debug_output",
                         help="Directory to store results and visualizations")
     parser.add_argument("--no_plot", dest="plot", action='store_false', 
                         help="Skip generating plots")
+    parser.add_argument("--interactive", action='store_true',
+                        help="Show interactive plots (not just saving them)")
+    
+    # Advanced options
+    parser.add_argument("--calibrate_filters", action='store_true',
+                        help="Calibrate filters before testing")
+    parser.add_argument("--num_workers", type=int, default=1,
+                        help="Number of parallel workers for processing")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
+    
+    # Debug verbosity
+    parser.add_argument("--verbose", action='store_true', 
+                        help="Enable verbose logging")
+    
     return parser.parse_args()
 
 def find_sensor_files(base_dir, subject_list, action_list=None):
@@ -191,16 +216,17 @@ def find_sensor_files(base_dir, subject_list, action_list=None):
                         file_dict[s_id][a_id][t_id]['skeleton'] = file
                         counts['skeleton'] += 1
     
-    # Count matched trials (must have accelerometer at minimum)
+    # Count matched trials (with both accelerometer and gyroscope)
     for s_id in file_dict:
         for a_id in file_dict[s_id]:
             for t_id in file_dict[s_id][a_id]:
-                if 'accelerometer' in file_dict[s_id][a_id][t_id]:
+                files = file_dict[s_id][a_id][t_id]
+                if 'accelerometer' in files and 'gyroscope' in files:
                     counts['matched'] += 1
     
     logger.info(f"Found {counts['accelerometer']} accelerometer, {counts['gyroscope']} gyroscope, "
                 f"and {counts['skeleton']} skeleton files")
-    logger.info(f"Total matched trials with accelerometer: {counts['matched']}")
+    logger.info(f"Total matched trials (accel+gyro): {counts['matched']}")
     
     return file_dict, counts
 
@@ -225,12 +251,13 @@ def get_trial_list(file_dict, max_trials=5, seed=42):
     for s_id in file_dict:
         for a_id in file_dict[s_id]:
             for t_id in file_dict[s_id][a_id]:
-                # Must have accelerometer at minimum
-                if 'accelerometer' not in file_dict[s_id][a_id][t_id]:
+                # Must have both accelerometer and gyroscope
+                files = file_dict[s_id][a_id][t_id]
+                if 'accelerometer' not in files or 'gyroscope' not in files:
                     continue
                 
                 # Categorize (activity IDs > 9 are falls)
-                trial = (s_id, a_id, t_id, file_dict[s_id][a_id][t_id])
+                trial = (s_id, a_id, t_id, files)
                 if a_id > 9:
                     fall_trials.append(trial)
                 else:
@@ -279,7 +306,6 @@ def load_sensor_data(file_paths):
         
         if accel_data.shape[0] > 0:
             result['accel_data'] = accel_data
-            result['accel_timestamps'] = accel_data[:, 0]
             logger.info(f"Loaded accelerometer data: {accel_data.shape}")
         else:
             logger.warning(f"Empty accelerometer data: {accel_path}")
@@ -296,7 +322,6 @@ def load_sensor_data(file_paths):
         
         if gyro_data.shape[0] > 0:
             result['gyro_data'] = gyro_data
-            result['gyro_timestamps'] = gyro_data[:, 0]
             logger.info(f"Loaded gyroscope data: {gyro_data.shape}")
         else:
             logger.warning(f"Empty gyroscope data: {gyro_path}")
@@ -311,14 +336,11 @@ def load_sensor_data(file_paths):
             df = pd.read_csv(skel_path, header=None)
             skel_array = df.values.astype(np.float32)
             
-            # Add time column if not present
+            # Check for time column
             if skel_array.shape[1] == 96:  # No time column
-                skel_timestamps = np.arange(skel_array.shape[0]) / 30.0  # 30 fps
                 result['skel_data'] = skel_array
-                result['skel_timestamps'] = skel_timestamps
             else:
                 result['skel_data'] = skel_array[:, 1:]  # Skip time column
-                result['skel_timestamps'] = skel_array[:, 0]
                 
             logger.info(f"Loaded skeleton data: {skel_array.shape}")
         except Exception as e:
@@ -328,192 +350,40 @@ def load_sensor_data(file_paths):
     
     return result
 
-def align_sensor_data(data_dict, wrist_idx=9, method='dtw'):
+def apply_imu_fusion(aligned_data, filter_types=None):
     """
-    Align sensor data across modalities.
+    Apply different IMU fusion filters to the aligned data.
     
     Args:
-        data_dict: Dictionary with loaded sensor data
-        wrist_idx: Index of wrist joint
-        method: Alignment method
-        
-    Returns:
-        Dictionary with aligned data
-    """
-    # Must have accelerometer data at minimum
-    if 'accel_data' not in data_dict:
-        logger.warning("No accelerometer data for alignment")
-        return data_dict
-    
-    # If no additional modalities to align, return as is
-    has_gyro = 'gyro_data' in data_dict
-    has_skel = 'skel_data' in data_dict
-    
-    if not has_gyro and not has_skel:
-        logger.info("No additional modalities to align with accelerometer")
-        return data_dict
-    
-    result = data_dict.copy()
-    
-    # Extract accelerometer data
-    accel_values = data_dict['accel_data'][:, 1:4]  # Skip time column
-    accel_timestamps = data_dict['accel_timestamps']
-    
-    # If we have skeleton data, align it with accelerometer
-    if has_skel:
-        logger.info(f"Aligning skeleton with accelerometer using {method} method")
-        
-        # Get skeleton data
-        skel_data = data_dict['skel_data']
-        
-        try:
-            # Align using robust method
-            aligned_accel, aligned_skel, aligned_ts = robust_align_modalities(
-                accel_values,
-                skel_data,
-                accel_timestamps,
-                method=method,
-                wrist_idx=wrist_idx
-            )
-            
-            if aligned_accel.shape[0] > 10 and aligned_skel.shape[0] > 10:
-                logger.info(f"Alignment succeeded: {aligned_accel.shape[0]} points")
-                
-                # Store aligned data
-                result['aligned_accel'] = aligned_accel
-                result['aligned_skel'] = aligned_skel
-                result['aligned_timestamps'] = aligned_ts
-                
-                # Extract reference orientations from skeleton
-                logger.info("Extracting reference orientations from skeleton")
-                try:
-                    reference_orientations = extract_orientation_from_skeleton(
-                        aligned_skel, wrist_idx=wrist_idx
-                    )
-                    
-                    # Check for length mismatch and fix if needed
-                    if len(reference_orientations) != len(aligned_ts):
-                        logger.warning(f"Orientation length mismatch: {len(reference_orientations)} vs {len(aligned_ts)}")
-                        # Use the shorter length
-                        min_len = min(len(reference_orientations), len(aligned_ts))
-                        result['reference_orientations'] = reference_orientations[:min_len]
-                        result['aligned_accel'] = aligned_accel[:min_len]
-                        result['aligned_skel'] = aligned_skel[:min_len]
-                        result['aligned_timestamps'] = aligned_ts[:min_len]
-                    else:
-                        result['reference_orientations'] = reference_orientations
-                    
-                except Exception as e:
-                    logger.warning(f"Error extracting orientations: {e}")
-                
-                # If gyroscope is available, align it with common timebase
-                if has_gyro:
-                    gyro_values = data_dict['gyro_data'][:, 1:4]  # Skip time column
-                    gyro_timestamps = data_dict['gyro_timestamps']
-                    
-                    try:
-                        # Interpolate gyro to aligned timestamps
-                        gyro_interp = interp1d(
-                            gyro_timestamps,
-                            gyro_values,
-                            axis=0,
-                            bounds_error=False,
-                            fill_value="extrapolate"
-                        )
-                        
-                        aligned_gyro = gyro_interp(aligned_ts)
-                        result['aligned_gyro'] = aligned_gyro[:min_len] if 'min_len' in locals() else aligned_gyro
-                        
-                    except Exception as e:
-                        logger.warning(f"Gyro interpolation failed: {e}, using zeros")
-                        # Create zeros array of matching length
-                        result['aligned_gyro'] = np.zeros_like(result['aligned_accel'])
-            else:
-                logger.warning("Alignment failed to produce sufficient data points")
-                
-        except Exception as e:
-            logger.warning(f"Error during alignment: {e}")
-    
-    # If we have gyro but no skeleton (or alignment failed), interpolate gyro to accel timestamps
-    elif has_gyro and 'aligned_timestamps' not in result:
-        logger.info("Aligning gyroscope with accelerometer timing")
-        
-        gyro_values = data_dict['gyro_data'][:, 1:4]  # Skip time column
-        gyro_timestamps = data_dict['gyro_timestamps']
-        
-        try:
-            # Interpolate gyro to accel timestamps
-            gyro_interp = interp1d(
-                gyro_timestamps,
-                gyro_values,
-                axis=0,
-                bounds_error=False,
-                fill_value="extrapolate"
-            )
-            
-            # Find common time range
-            t_min = max(accel_timestamps[0], gyro_timestamps[0])
-            t_max = min(accel_timestamps[-1], gyro_timestamps[-1])
-            
-            # Filter to common range
-            mask = (accel_timestamps >= t_min) & (accel_timestamps <= t_max)
-            
-            if np.sum(mask) > 10:
-                filtered_ts = accel_timestamps[mask]
-                filtered_accel = accel_values[mask]
-                
-                # Interpolate gyro to this timebase
-                aligned_gyro = gyro_interp(filtered_ts)
-                
-                # Store aligned data
-                result['aligned_accel'] = filtered_accel
-                result['aligned_gyro'] = aligned_gyro
-                result['aligned_timestamps'] = filtered_ts
-            else:
-                logger.warning("Insufficient overlap between accelerometer and gyroscope")
-                
-        except Exception as e:
-            logger.warning(f"Gyroscope alignment failed: {e}")
-    
-    return result
-
-def apply_imu_fusion(data_dict, filter_types=['standard', 'ekf', 'ukf']):
-    """
-    Apply different IMU fusion filters to the data.
-    
-    Args:
-        data_dict: Dictionary with aligned sensor data
+        aligned_data: Dictionary with aligned sensor data
         filter_types: List of filter types to apply
     
     Returns:
         Dictionary with filter results
     """
+    if filter_types is None:
+        filter_types = ['standard', 'ekf', 'ukf']
+    
     # Check if we have aligned data
-    if 'aligned_accel' not in data_dict or 'aligned_timestamps' not in data_dict:
+    if aligned_data is None or 'accel' not in aligned_data:
         logger.warning("No aligned data available for fusion")
         return {}
     
     # Extract aligned data
-    accel_values = data_dict['aligned_accel']
-    timestamps = data_dict['aligned_timestamps']
-    
-    # Check if gyro data is available
-    if 'aligned_gyro' in data_dict:
-        gyro_values = data_dict['aligned_gyro']
-    else:
-        logger.warning("No aligned gyro data, using zeros")
-        gyro_values = np.zeros_like(accel_values)
-    
-    # Ensure all data has the same length
-    min_len = min(len(accel_values), len(gyro_values), len(timestamps))
-    accel_values = accel_values[:min_len]
-    gyro_values = gyro_values[:min_len]
-    timestamps = timestamps[:min_len]
+    accel_values = aligned_data['accel']
+    gyro_values = aligned_data['gyro']
+    timestamps = aligned_data['timestamps']
     
     # Get reference orientations if available
-    reference_orientations = data_dict.get('reference_orientations')
-    if reference_orientations is not None:
-        reference_orientations = reference_orientations[:min_len]
+    reference_orientations = None
+    if 'skeleton' in aligned_data:
+        try:
+            from utils.imu_fusion import extract_orientation_from_skeleton
+            reference_orientations = extract_orientation_from_skeleton(
+                aligned_data['skeleton']
+            )
+        except Exception as e:
+            logger.warning(f"Error extracting reference orientations: {e}")
     
     # Process with each filter type
     results = {}
@@ -568,7 +438,7 @@ def calculate_metrics(filter_results, reference_orientations=None):
     metrics = {}
     
     # If no reference orientations, just calculate processing time
-    if reference_orientations is None:
+    if reference_orientations is None or len(reference_orientations) == 0:
         for filter_type, result in filter_results.items():
             metrics[filter_type] = {
                 'processing_time': result['processing_time'],
@@ -598,10 +468,18 @@ def calculate_metrics(filter_results, reference_orientations=None):
         angle_range = np.where(angle_range > 0.01, angle_range, 0.01)  # Avoid division by zero
         normalized_error = rmse / np.mean(angle_range)
         
+        # Calculate component-wise metrics
+        mse_roll = np.mean((euler[:, 0] - ref[:, 0])**2)
+        mse_pitch = np.mean((euler[:, 1] - ref[:, 1])**2)
+        mse_yaw = np.mean((euler[:, 2] - ref[:, 2])**2)
+        
         # Store metrics
         metrics[filter_type] = {
             'mse': float(mse),
             'rmse': float(rmse),
+            'mse_roll': float(mse_roll),
+            'mse_pitch': float(mse_pitch),
+            'mse_yaw': float(mse_yaw),
             'normalized_error': float(normalized_error),
             'processing_time': proc_time,
             'num_samples': min_len
@@ -609,7 +487,8 @@ def calculate_metrics(filter_results, reference_orientations=None):
     
     return metrics
 
-def plot_filter_results(filter_results, reference_orientations=None, output_path=None):
+def plot_filter_results(filter_results, reference_orientations=None, output_path=None, 
+                        plot_title=None, show_plot=False):
     """
     Generate plots for filter results.
     
@@ -617,6 +496,8 @@ def plot_filter_results(filter_results, reference_orientations=None, output_path
         filter_results: Dictionary with filter outputs
         reference_orientations: Optional ground truth orientations
         output_path: Path to save plot
+        plot_title: Optional title for the plot
+        show_plot: Whether to display the plot interactively
         
     Returns:
         Path to saved plot file
@@ -632,51 +513,78 @@ def plot_filter_results(filter_results, reference_orientations=None, output_path
     first_filter = list(filter_results.keys())[0]
     timestamps = filter_results[first_filter]['timestamps']
     
+    # Create color cycle and line styles for better differentiation
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    line_styles = ['-', '--', '-.', ':']
+    
+    # Calculate time in seconds from start
+    if len(timestamps) > 0:
+        time_sec = timestamps - timestamps[0]
+    else:
+        time_sec = []
+    
     # Plot Euler angles (roll, pitch, yaw)
     angle_names = ["Roll", "Pitch", "Yaw"]
     for i in range(3):
         ax = plt.subplot(3, 1, i+1)
         
-        # Plot each filter result
-        for filter_type, result in filter_results.items():
+        # Plot each filter result with distinct formatting
+        for j, (filter_type, result) in enumerate(filter_results.items()):
             output = result['output']
+            
             # Extract Euler angle (columns 10-12)
-            euler = output[:, 10+i]
-            ax.plot(timestamps, euler, label=filter_type)
+            if output.shape[1] >= 13:  # Ensure the output has enough columns
+                euler = output[:, 10+i]
+                ax.plot(time_sec, euler, 
+                       color=colors[j % len(colors)],
+                       linestyle=line_styles[j % len(line_styles)],
+                       linewidth=2,
+                       label=filter_type)
+            else:
+                logger.warning(f"Output for {filter_type} doesn't have Euler angles")
         
         # Plot reference if available
-        if reference_orientations is not None:
-            min_len = min(len(timestamps), len(reference_orientations))
-            ax.plot(timestamps[:min_len], reference_orientations[:min_len, i], 
-                   'k--', label='Skeleton Reference')
+        if reference_orientations is not None and len(reference_orientations) > 0:
+            min_len = min(len(time_sec), len(reference_orientations))
+            if min_len > 0:
+                ax.plot(time_sec[:min_len], reference_orientations[:min_len, i], 
+                       'k--', linewidth=1.5, label='Skeleton Reference')
         
         ax.set_ylabel(f"{angle_names[i]} (rad)")
         ax.set_xlabel("Time (s)" if i == 2 else "")
-        ax.grid(True)
+        ax.grid(True, alpha=0.3)
         
-        # Add legend on last subplot
+        # Add legend on first subplot
         if i == 0:
-            ax.legend()
+            ax.legend(loc='upper right')
+        
+        # Add title
+        if i == 0 and plot_title:
+            ax.set_title(plot_title, fontsize=14)
     
     plt.tight_layout()
     
     # Save figure if output path provided
     if output_path:
-        plt.savefig(output_path, dpi=150)
-        plt.close()
-        return output_path
-    else:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        logger.info(f"Saved plot to {output_path}")
+        
+    # Show plot if requested
+    if show_plot:
         plt.show()
+    else:
         plt.close()
-        return None
+        
+    return output_path
 
-def plot_performance_comparison(all_metrics, output_path=None):
+def plot_performance_comparison(all_metrics, output_path=None, show_plot=False):
     """
     Plot performance comparison across all trials.
     
     Args:
         all_metrics: List of metrics dictionaries for each trial
         output_path: Path to save plot
+        show_plot: Whether to display the plot interactively
         
     Returns:
         Path to saved plot file
@@ -691,56 +599,153 @@ def plot_performance_comparison(all_metrics, output_path=None):
     for trial_metrics in all_metrics:
         for filter_type, metrics in trial_metrics.items():
             for metric_name, value in metrics.items():
-                filter_metrics[filter_type][metric_name].append(value)
+                if isinstance(value, (int, float)):  # Only collect numeric metrics
+                    filter_metrics[filter_type][metric_name].append(value)
     
-    # Create figure
-    plt.figure(figsize=(15, 10))
+    # Create figure with enhanced layout
+    plt.figure(figsize=(15, 12))
+    
+    # Use a nice color palette
+    colors = plt.cm.tab10(np.linspace(0, 1, len(filter_metrics)))
     
     # Plot processing time
     plt.subplot(2, 2, 1)
-    for filter_type in filter_metrics:
-        times = filter_metrics[filter_type]['processing_time']
-        plt.bar(filter_type, np.mean(times), yerr=np.std(times), capsize=5)
+    filter_names = []
+    times = []
+    errors = []
+    
+    for i, (filter_type, metrics) in enumerate(filter_metrics.items()):
+        if 'processing_time' in metrics and len(metrics['processing_time']) > 0:
+            filter_names.append(filter_type)
+            times.append(np.mean(metrics['processing_time']))
+            errors.append(np.std(metrics['processing_time']))
+    
+    bars = plt.bar(filter_names, times, yerr=errors, capsize=5, color=colors[:len(filter_names)])
     plt.ylabel("Processing Time (s)")
-    plt.title("Average Processing Time")
+    plt.title("Average Processing Time per Filter", fontweight='bold')
+    plt.grid(axis='y', alpha=0.3)
+    
+    # Add value labels on bars
+    for bar, time in zip(bars, times):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                f'{time:.3f}s', ha='center', va='bottom', fontsize=9)
     
     # Plot error metrics if available
-    if 'mse' in filter_metrics[list(filter_metrics.keys())[0]]:
+    if any('mse' in metrics for metrics in filter_metrics.values()):
         # MSE
         plt.subplot(2, 2, 2)
-        for filter_type in filter_metrics:
-            mse = filter_metrics[filter_type]['mse']
-            plt.bar(filter_type, np.mean(mse), yerr=np.std(mse), capsize=5)
+        mse_data = []
+        mse_errors = []
+        
+        for filter_type in filter_names:
+            if 'mse' in filter_metrics[filter_type]:
+                mse_values = filter_metrics[filter_type]['mse']
+                mse_data.append(np.mean(mse_values))
+                mse_errors.append(np.std(mse_values))
+            else:
+                mse_data.append(0)
+                mse_errors.append(0)
+        
+        bars = plt.bar(filter_names, mse_data, yerr=mse_errors, capsize=5, color=colors[:len(filter_names)])
         plt.ylabel("Mean Squared Error (rad²)")
-        plt.title("Average MSE")
+        plt.title("Average MSE (lower is better)", fontweight='bold')
+        plt.grid(axis='y', alpha=0.3)
+        
+        # Add value labels
+        for bar, mse in zip(bars, mse_data):
+            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                    f'{mse:.4f}', ha='center', va='bottom', fontsize=9)
         
         # RMSE
         plt.subplot(2, 2, 3)
-        for filter_type in filter_metrics:
-            rmse = filter_metrics[filter_type]['rmse']
-            plt.bar(filter_type, np.mean(rmse), yerr=np.std(rmse), capsize=5)
-        plt.ylabel("RMSE (rad)")
-        plt.title("Average RMSE")
+        rmse_data = []
+        rmse_errors = []
         
-        # Normalized Error
+        for filter_type in filter_names:
+            if 'rmse' in filter_metrics[filter_type]:
+                rmse_values = filter_metrics[filter_type]['rmse']
+                rmse_data.append(np.mean(rmse_values))
+                rmse_errors.append(np.std(rmse_values))
+            else:
+                rmse_data.append(0)
+                rmse_errors.append(0)
+        
+        bars = plt.bar(filter_names, rmse_data, yerr=rmse_errors, capsize=5, color=colors[:len(filter_names)])
+        plt.ylabel("RMSE (rad)")
+        plt.title("Average RMSE (lower is better)", fontweight='bold')
+        plt.grid(axis='y', alpha=0.3)
+        
+        # Add value labels
+        for bar, rmse in zip(bars, rmse_data):
+            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                    f'{rmse:.4f}', ha='center', va='bottom', fontsize=9)
+        
+        # Normalized Error or Component-wise comparison
         plt.subplot(2, 2, 4)
-        for filter_type in filter_metrics:
-            nerr = filter_metrics[filter_type]['normalized_error']
-            plt.bar(filter_type, np.mean(nerr), yerr=np.std(nerr), capsize=5)
-        plt.ylabel("Normalized Error")
-        plt.title("Average Normalized Error")
+        
+        # Check if we have component-wise metrics
+        if any('mse_roll' in metrics for metrics in filter_metrics.values()):
+            # Create a grouped bar chart for component-wise errors
+            width = 0.25
+            x = np.arange(len(filter_names))
+            
+            roll_data = []
+            pitch_data = []
+            yaw_data = []
+            
+            for filter_type in filter_names:
+                roll_data.append(np.mean(filter_metrics[filter_type].get('mse_roll', [0])))
+                pitch_data.append(np.mean(filter_metrics[filter_type].get('mse_pitch', [0])))
+                yaw_data.append(np.mean(filter_metrics[filter_type].get('mse_yaw', [0])))
+            
+            plt.bar(x - width, roll_data, width, label='Roll', color='#1f77b4')
+            plt.bar(x, pitch_data, width, label='Pitch', color='#ff7f0e')
+            plt.bar(x + width, yaw_data, width, label='Yaw', color='#2ca02c')
+            
+            plt.xlabel('Filter Type')
+            plt.ylabel('MSE (rad²)')
+            plt.title('Component-wise Errors', fontweight='bold')
+            plt.xticks(x, filter_names)
+            plt.legend()
+            
+        else:
+            # Just show normalized error
+            nerr_data = []
+            nerr_errors = []
+            
+            for filter_type in filter_names:
+                if 'normalized_error' in filter_metrics[filter_type]:
+                    nerr_values = filter_metrics[filter_type]['normalized_error']
+                    nerr_data.append(np.mean(nerr_values))
+                    nerr_errors.append(np.std(nerr_values))
+                else:
+                    nerr_data.append(0)
+                    nerr_errors.append(0)
+            
+            bars = plt.bar(filter_names, nerr_data, yerr=nerr_errors, capsize=5, color=colors[:len(filter_names)])
+            plt.ylabel("Normalized Error")
+            plt.title("Average Normalized Error (lower is better)", fontweight='bold')
+            plt.grid(axis='y', alpha=0.3)
+            
+            # Add value labels
+            for bar, nerr in zip(bars, nerr_data):
+                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{nerr:.4f}', ha='center', va='bottom', fontsize=9)
     
     plt.tight_layout()
     
     # Save figure if output path provided
     if output_path:
-        plt.savefig(output_path, dpi=150)
-        plt.close()
-        return output_path
-    else:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        logger.info(f"Saved performance comparison to {output_path}")
+    
+    # Show plot if requested
+    if show_plot:
         plt.show()
+    else:
         plt.close()
-        return None
+    
+    return output_path
 
 def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
     """
@@ -761,7 +766,8 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
     with open(report_path, 'w') as f:
         f.write(f"IMU Fusion Debug Report\n")
         f.write(f"======================\n\n")
-        f.write(f"Trial: {trial_info}\n\n")
+        f.write(f"Trial: {trial_info}\n")
+        f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
         # Data information
         f.write(f"1. Data Summary\n")
@@ -771,8 +777,13 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
         if 'accel_data' in data_dict:
             accel_shape = data_dict['accel_data'].shape
             f.write(f"Accelerometer: {accel_shape[0]} samples, {accel_shape[1]} columns\n")
-            f.write(f"  Time range: {data_dict['accel_timestamps'][0]:.2f} - "
-                   f"{data_dict['accel_timestamps'][-1]:.2f} seconds\n")
+            
+            # Calculate sampling statistics if we have timestamps
+            if accel_shape[0] > 1:
+                accel_timestamps = data_dict['accel_data'][:, 0]
+                dt = np.diff(accel_timestamps)
+                f.write(f"  Sampling: Mean={np.mean(dt)*1000:.2f}ms, Min={np.min(dt)*1000:.2f}ms, "
+                       f"Max={np.max(dt)*1000:.2f}ms, Std={np.std(dt)*1000:.2f}ms\n")
         else:
             f.write("Accelerometer: Not available\n")
         
@@ -780,8 +791,13 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
         if 'gyro_data' in data_dict:
             gyro_shape = data_dict['gyro_data'].shape
             f.write(f"Gyroscope: {gyro_shape[0]} samples, {gyro_shape[1]} columns\n")
-            f.write(f"  Time range: {data_dict['gyro_timestamps'][0]:.2f} - "
-                   f"{data_dict['gyro_timestamps'][-1]:.2f} seconds\n")
+            
+            # Calculate sampling statistics if we have timestamps
+            if gyro_shape[0] > 1:
+                gyro_timestamps = data_dict['gyro_data'][:, 0]
+                dt = np.diff(gyro_timestamps)
+                f.write(f"  Sampling: Mean={np.mean(dt)*1000:.2f}ms, Min={np.min(dt)*1000:.2f}ms, "
+                       f"Max={np.max(dt)*1000:.2f}ms, Std={np.std(dt)*1000:.2f}ms\n")
         else:
             f.write("Gyroscope: Not available\n")
         
@@ -789,8 +805,6 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
         if 'skel_data' in data_dict:
             skel_shape = data_dict['skel_data'].shape
             f.write(f"Skeleton: {skel_shape[0]} frames, {skel_shape[1]} features\n")
-            f.write(f"  Time range: {data_dict['skel_timestamps'][0]:.2f} - "
-                   f"{data_dict['skel_timestamps'][-1]:.2f} seconds\n")
         else:
             f.write("Skeleton: Not available\n")
         
@@ -798,22 +812,39 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
         f.write(f"\n2. Alignment Results\n")
         f.write(f"-------------------\n")
         
-        if 'aligned_accel' in data_dict:
-            aligned_shape = data_dict['aligned_accel'].shape
-            f.write(f"Aligned data: {aligned_shape[0]} samples\n")
-            f.write(f"  Time range: {data_dict['aligned_timestamps'][0]:.2f} - "
-                   f"{data_dict['aligned_timestamps'][-1]:.2f} seconds\n")
+        if 'aligned_data' in data_dict and data_dict['aligned_data'] is not None:
+            aligned_data = data_dict['aligned_data']
+            f.write(f"Aligned data: {len(aligned_data['timestamps'])} samples\n")
             
-            if 'aligned_gyro' in data_dict:
-                f.write(f"  Gyroscope aligned: Yes\n")
-            else:
-                f.write(f"  Gyroscope aligned: No (using zeros)\n")
+            # Acceleration statistics
+            accel_mag = np.linalg.norm(aligned_data['accel'], axis=1)
+            f.write(f"  Acceleration magnitude: Mean={np.mean(accel_mag):.2f}, Min={np.min(accel_mag):.2f}, "
+                   f"Max={np.max(accel_mag):.2f}, Std={np.std(accel_mag):.2f}\n")
             
-            if 'reference_orientations' in data_dict:
-                ref_shape = data_dict['reference_orientations'].shape
-                f.write(f"  Reference orientations: {ref_shape[0]} samples extracted from skeleton\n")
+            # Gyroscope statistics
+            gyro_mag = np.linalg.norm(aligned_data['gyro'], axis=1)
+            f.write(f"  Angular velocity magnitude: Mean={np.mean(gyro_mag):.2f}, Min={np.min(gyro_mag):.2f}, "
+                   f"Max={np.max(gyro_mag):.2f}, Std={np.std(gyro_mag):.2f}\n")
+                
+            if 'skeleton' in aligned_data:
+                f.write(f"  Skeleton data included in alignment: Yes\n")
+                
+                # Extract reference orientations for reporting
+                try:
+                    from utils.imu_fusion import extract_orientation_from_skeleton
+                    ref_orient = extract_orientation_from_skeleton(aligned_data['skeleton'])
+                    
+                    # Orientation statistics
+                    ref_means = np.mean(ref_orient, axis=0)
+                    ref_stds = np.std(ref_orient, axis=0)
+                    f.write(f"  Reference orientation statistics:\n")
+                    f.write(f"    Roll:  Mean={ref_means[0]:.2f}, Std={ref_stds[0]:.2f}\n")
+                    f.write(f"    Pitch: Mean={ref_means[1]:.2f}, Std={ref_stds[1]:.2f}\n")
+                    f.write(f"    Yaw:   Mean={ref_means[2]:.2f}, Std={ref_stds[2]:.2f}\n")
+                except Exception as e:
+                    f.write(f"  Error extracting reference orientations: {e}\n")
             else:
-                f.write(f"  Reference orientations: None\n")
+                f.write(f"  Skeleton data included in alignment: No\n")
         else:
             f.write("No aligned data available\n")
         
@@ -828,6 +859,17 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
                 f.write(f"{filter_type} filter:\n")
                 f.write(f"  Processing time: {result['processing_time']:.3f} seconds\n")
                 f.write(f"  Output shape: {result['output'].shape}\n")
+                
+                # Extract orientation statistics
+                if result['output'].shape[1] >= 13:  # Check for Euler angles
+                    euler = result['output'][:, 10:13]
+                    euler_means = np.mean(euler, axis=0)
+                    euler_stds = np.std(euler, axis=0)
+                    
+                    f.write(f"  Orientation statistics:\n")
+                    f.write(f"    Roll:  Mean={euler_means[0]:.2f}, Std={euler_stds[0]:.2f}\n")
+                    f.write(f"    Pitch: Mean={euler_means[1]:.2f}, Std={euler_stds[1]:.2f}\n")
+                    f.write(f"    Yaw:   Mean={euler_means[2]:.2f}, Std={euler_stds[2]:.2f}\n")
         
         # Performance metrics
         f.write(f"\n4. Performance Metrics\n")
@@ -837,17 +879,22 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
             f.write("No performance metrics available\n")
         else:
             # Create a table header
-            f.write(f"{'Filter Type':<15} {'MSE':<10} {'RMSE':<10} {'Norm Error':<15} {'Time (s)':<10}\n")
-            f.write("-" * 60 + "\n")
+            f.write(f"{'Filter Type':<15} {'MSE':<10} {'RMSE':<10} {'Roll MSE':<10} {'Pitch MSE':<10} "
+                   f"{'Yaw MSE':<10} {'Norm Error':<10} {'Time (s)':<10}\n")
+            f.write("-" * 85 + "\n")
             
             for filter_type, m in metrics.items():
                 # Format metrics with appropriate precision
                 mse = f"{m.get('mse', 'N/A'):.6f}" if 'mse' in m else "N/A"
                 rmse = f"{m.get('rmse', 'N/A'):.6f}" if 'rmse' in m else "N/A"
+                mse_roll = f"{m.get('mse_roll', 'N/A'):.6f}" if 'mse_roll' in m else "N/A"
+                mse_pitch = f"{m.get('mse_pitch', 'N/A'):.6f}" if 'mse_pitch' in m else "N/A"
+                mse_yaw = f"{m.get('mse_yaw', 'N/A'):.6f}" if 'mse_yaw' in m else "N/A"
                 norm_err = f"{m.get('normalized_error', 'N/A'):.6f}" if 'normalized_error' in m else "N/A"
                 proc_time = f"{m['processing_time']:.3f}"
                 
-                f.write(f"{filter_type:<15} {mse:<10} {rmse:<10} {norm_err:<15} {proc_time:<10}\n")
+                f.write(f"{filter_type:<15} {mse:<10} {rmse:<10} {mse_roll:<10} {mse_pitch:<10} "
+                       f"{mse_yaw:<10} {norm_err:<10} {proc_time:<10}\n")
         
         # Recommendations
         f.write(f"\n5. Analysis and Recommendations\n")
@@ -856,33 +903,86 @@ def generate_report(trial_info, data_dict, filter_results, metrics, output_dir):
         if metrics:
             # Find best filter based on error if available, otherwise processing time
             if 'mse' in list(metrics.values())[0]:
-                best_filter = min(metrics.items(), key=lambda x: x[1]['mse'])[0]
-                f.write(f"Based on orientation accuracy, the {best_filter} filter performs best for this trial.\n")
+                best_accuracy = min(metrics.items(), key=lambda x: x[1].get('mse', float('inf')))[0]
+                best_speed = min(metrics.items(), key=lambda x: x[1]['processing_time'])[0]
+                
+                f.write(f"Based on orientation accuracy, the {best_accuracy} filter performs best for this trial.\n")
+                f.write(f"Based on processing time, the {best_speed} filter performs best for this trial.\n")
+                
+                # Component-wise analysis
+                if all(key in metrics[best_accuracy] for key in ['mse_roll', 'mse_pitch', 'mse_yaw']):
+                    component_errors = {
+                        'roll': metrics[best_accuracy]['mse_roll'],
+                        'pitch': metrics[best_accuracy]['mse_pitch'],
+                        'yaw': metrics[best_accuracy]['mse_yaw']
+                    }
+                    worst_component = max(component_errors.items(), key=lambda x: x[1])[0]
+                    f.write(f"The {worst_component} component has the highest error, which is typical due to "
+                           f"gyroscope drift in this axis.\n")
             else:
-                best_filter = min(metrics.items(), key=lambda x: x[1]['processing_time'])[0]
-                f.write(f"Based on processing time, the {best_filter} filter performs best for this trial.\n")
+                best_speed = min(metrics.items(), key=lambda x: x[1]['processing_time'])[0]
+                f.write(f"Based on processing time, the {best_speed} filter performs best for this trial.\n")
             
             # Observations about gyroscope data
-            if 'gyro_data' in data_dict:
-                f.write(f"Gyroscope data is available and used for fusion.\n")
-            else:
-                f.write(f"Gyroscope data is not available. Performance could be improved with gyroscope data.\n")
+            if 'aligned_data' in data_dict and data_dict['aligned_data'] is not None:
+                gyro_mag = np.linalg.norm(data_dict['aligned_data']['gyro'], axis=1)
+                if np.max(gyro_mag) > 3.0:
+                    f.write(f"Gyroscope data shows significant angular motion (max {np.max(gyro_mag):.2f} rad/s), "
+                           f"which helps with orientation estimation.\n")
+                else:
+                    f.write(f"Gyroscope data shows limited angular motion (max {np.max(gyro_mag):.2f} rad/s), "
+                           f"which may affect orientation accuracy.\n")
             
             # Observations about skeleton reference
-            if 'reference_orientations' in data_dict:
+            if 'aligned_data' in data_dict and data_dict['aligned_data'] is not None and 'skeleton' in data_dict['aligned_data']:
                 f.write(f"Skeleton reference orientations are available for drift correction.\n")
             else:
                 f.write(f"No skeleton reference is available. Drift correction could improve long-term accuracy.\n")
+            
+            # Recommendations for this specific trial
+            f.write(f"\nRecommendations for this trial:\n")
+            
+            # If we have significant errors
+            if 'mse' in list(metrics.values())[0]:
+                avg_mse = np.mean([m['mse'] for m in metrics.values() if 'mse' in m])
+                if avg_mse > 0.1:  # High error threshold
+                    f.write(f"- All filters show relatively high orientation errors for this trial.\n")
+                    f.write(f"  Consider using a hybrid approach with occasional resets from skeleton data.\n")
+                else:
+                    f.write(f"- Orientation estimation is working well with the selected filters.\n")
+            
+            # Speed vs. accuracy tradeoff
+            if 'mse' in list(metrics.values())[0] and 'best_accuracy' in locals() and 'best_speed' in locals() and best_accuracy != best_speed:
+                speed_ratio = metrics[best_accuracy]['processing_time'] / metrics[best_speed]['processing_time']
+                error_ratio = metrics[best_speed].get('mse', float('inf')) / metrics[best_accuracy].get('mse', 1.0)
+                
+                if speed_ratio > 2 and error_ratio < 1.5:
+                    f.write(f"- Consider using the faster {best_speed} filter as it provides similar accuracy "
+                           f"with {speed_ratio:.1f}x better performance.\n")
+                elif error_ratio > 2:
+                    f.write(f"- The more accurate {best_accuracy} filter is recommended despite being slower, "
+                           f"as it reduces errors by {error_ratio:.1f}x.\n")
         else:
-            f.write(f"Insufficient data to provide recommendations.\n")
+            f.write(f"Insufficient data to provide detailed recommendations.\n")
+        
+        # General recommendations for implementation
+        f.write(f"\nGeneral Implementation Recommendations:\n")
+        f.write(f"- When implementing in real-time, consider adaptive filter selection based on detected motion:\n")
+        f.write(f"  • Use standard Kalman for low dynamics (sitting, standing)\n")
+        f.write(f"  • Use EKF for moderate dynamics (walking, basic movements)\n")
+        f.write(f"  • Use UKF for high dynamics (falls, rapid movements)\n")
+        f.write(f"- Consider using a simplified filter for steady-state and switching to more complex\n")
+        f.write(f"  filters only when significant motion is detected to save battery life.\n")
+        f.write(f"- Use the robust filter implementations to avoid quaternion and matrix stability issues.\n")
     
     return report_path
 
-def process_trial(trial_info, file_paths, output_dir, filter_types=None, wrist_idx=9, plot=True):
+def process_trial(args, trial_info, file_paths, output_dir, filter_types=None, wrist_idx=9, plot=True):
     """
     Process a single trial with all filters.
     
     Args:
+        args: Command line arguments
         trial_info: Trial information string
         file_paths: Dictionary with file paths
         output_dir: Output directory
@@ -910,17 +1010,64 @@ def process_trial(trial_info, file_paths, output_dir, filter_types=None, wrist_i
         return None
     
     # Align sensor data
-    data_dict = align_sensor_data(data_dict, wrist_idx=wrist_idx)
+    try:
+        logger.info(f"Aligning sensor data using method: {args.align_method}")
+        
+        # Check if we have all modalities
+        if 'accel_data' in data_dict and 'gyro_data' in data_dict and 'skel_data' in data_dict:
+            # All modalities available - align everything
+            aligned_data = align_all_modalities(
+                data_dict['accel_data'],
+                data_dict['gyro_data'],
+                data_dict['skel_data'],
+                target_fps=args.target_fps,
+                wrist_idx=wrist_idx,
+                method=args.align_method
+            )
+        elif 'accel_data' in data_dict and 'gyro_data' in data_dict:
+            # Only IMU data available
+            from utils.robust_alignment import align_imu_data
+            aligned_data = align_imu_data(
+                data_dict['accel_data'],
+                data_dict['gyro_data'],
+                target_fps=args.target_fps
+            )
+        else:
+            # Can't align with just accelerometer
+            logger.warning(f"Insufficient data for alignment: need at least accelerometer and gyroscope")
+            aligned_data = None
+        
+        # Store aligned data in the data dictionary
+        data_dict['aligned_data'] = aligned_data
+        
+    except Exception as e:
+        logger.error(f"Error during alignment: {e}")
+        traceback.print_exc()
+        aligned_data = None
+        data_dict['aligned_data'] = None
     
-    # Apply IMU fusion
-    filter_results = apply_imu_fusion(data_dict, filter_types)
+    # Apply IMU fusion if alignment succeeded
+    if aligned_data is not None:
+        filter_results = apply_imu_fusion(aligned_data, filter_types)
+    else:
+        logger.warning(f"Skipping IMU fusion due to failed alignment")
+        filter_results = {}
     
     if not filter_results:
         logger.warning(f"No filter results for trial {trial_info}")
         return None
     
     # Calculate metrics
-    reference_orientations = data_dict.get('reference_orientations')
+    reference_orientations = None
+    if aligned_data is not None and 'skeleton' in aligned_data:
+        try:
+            from utils.imu_fusion import extract_orientation_from_skeleton
+            reference_orientations = extract_orientation_from_skeleton(
+                aligned_data['skeleton']
+            )
+        except Exception as e:
+            logger.warning(f"Error extracting reference orientations: {e}")
+    
     metrics = calculate_metrics(filter_results, reference_orientations)
     
     # Generate plots if requested
@@ -928,29 +1075,61 @@ def process_trial(trial_info, file_paths, output_dir, filter_types=None, wrist_i
         try:
             # Plot filter results
             plot_path = os.path.join(trial_dir, "orientation_comparison.png")
-            plot_filter_results(filter_results, reference_orientations, plot_path)
+            plot_filter_results(
+                filter_results, 
+                reference_orientations, 
+                plot_path, 
+                plot_title=f"Orientation Comparison - {trial_info}",
+                show_plot=args.interactive
+            )
             
-            # Plot accelerometer data
-            if 'accel_data' in data_dict:
-                accel_plot_path = os.path.join(trial_dir, "accelerometer_data.png")
-                plt.figure(figsize=(10, 6))
+            # Plot acceleration and angular velocity
+            if aligned_data is not None:
+                motion_plot_path = os.path.join(trial_dir, "motion_data.png")
                 
-                accel_data = data_dict['accel_data'][:, 1:4]  # Skip time column
-                timestamps = data_dict['accel_timestamps']
+                plt.figure(figsize=(15, 10))
                 
-                plt.plot(timestamps, accel_data[:, 0], label='X')
-                plt.plot(timestamps, accel_data[:, 1], label='Y')
-                plt.plot(timestamps, accel_data[:, 2], label='Z')
-                plt.plot(timestamps, np.linalg.norm(accel_data, axis=1), 'k--', label='Magnitude')
+                # Plot acceleration
+                plt.subplot(2, 1, 1)
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         aligned_data['accel'][:, 0], 'r-', label='X')
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         aligned_data['accel'][:, 1], 'g-', label='Y')
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         aligned_data['accel'][:, 2], 'b-', label='Z')
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         np.linalg.norm(aligned_data['accel'], axis=1), 'k--', label='Magnitude')
                 
-                plt.xlabel('Time (s)')
-                plt.ylabel('Acceleration (m/s²)')
-                plt.title('Accelerometer Data')
+                plt.title("Acceleration Data")
+                plt.xlabel("Time (s)")
+                plt.ylabel("Acceleration (m/s²)")
+                plt.grid(True, alpha=0.3)
                 plt.legend()
-                plt.grid(True)
                 
-                plt.savefig(accel_plot_path, dpi=150)
-                plt.close()
+                # Plot angular velocity
+                plt.subplot(2, 1, 2)
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         aligned_data['gyro'][:, 0], 'r-', label='X')
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         aligned_data['gyro'][:, 1], 'g-', label='Y')
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         aligned_data['gyro'][:, 2], 'b-', label='Z')
+                plt.plot(aligned_data['timestamps'] - aligned_data['timestamps'][0], 
+                         np.linalg.norm(aligned_data['gyro'], axis=1), 'k--', label='Magnitude')
+                
+                plt.title("Angular Velocity Data")
+                plt.xlabel("Time (s)")
+                plt.ylabel("Angular Velocity (rad/s)")
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+                
+                plt.tight_layout()
+                plt.savefig(motion_plot_path, dpi=150, bbox_inches='tight')
+                
+                if args.interactive:
+                    plt.show()
+                else:
+                    plt.close()
             
             # Plot metrics comparison
             metrics_plot_path = os.path.join(trial_dir, "metrics_comparison.png")
@@ -959,20 +1138,31 @@ def process_trial(trial_info, file_paths, output_dir, filter_types=None, wrist_i
             
             # Processing time
             plt.subplot(1, 2, 1)
-            plt.bar(metrics.keys(), [m['processing_time'] for m in metrics.values()])
+            filter_names = list(metrics.keys())
+            times = [metrics[f]['processing_time'] for f in filter_names]
+            
+            plt.bar(filter_names, times)
             plt.ylabel('Processing Time (s)')
             plt.title('Filter Processing Time')
+            plt.grid(axis='y', alpha=0.3)
             
             # Error metrics if available
             if 'mse' in list(metrics.values())[0]:
                 plt.subplot(1, 2, 2)
-                plt.bar(metrics.keys(), [m['mse'] for m in metrics.values()])
+                mse_values = [metrics[f]['mse'] for f in filter_names]
+                
+                plt.bar(filter_names, mse_values)
                 plt.ylabel('MSE (rad²)')
                 plt.title('Orientation Error')
+                plt.grid(axis='y', alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(metrics_plot_path, dpi=150)
-            plt.close()
+            plt.savefig(metrics_plot_path, dpi=150, bbox_inches='tight')
+            
+            if args.interactive:
+                plt.show()
+            else:
+                plt.close()
             
         except Exception as e:
             logger.warning(f"Error generating plots: {e}")
@@ -989,8 +1179,17 @@ def main():
     # Parse arguments
     args = parse_args()
     
+    # Configure logging verbosity
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     # Set up output directory
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Log all arguments
+    logger.info("Starting IMU fusion debugging with parameters:")
+    for arg, value in vars(args).items():
+        logger.info(f"  {arg}: {value}")
     
     # Process filter types
     filter_types = [f.strip().lower() for f in args.filters.split(',')]
@@ -1029,6 +1228,7 @@ def main():
         
         # Process trial
         metrics = process_trial(
+            args=args,
             trial_info=trial_info,
             file_paths=files,
             output_dir=args.output_dir,
@@ -1043,7 +1243,7 @@ def main():
     # Generate summary plots
     if args.plot and all_metrics:
         summary_path = os.path.join(args.output_dir, "filter_performance_summary.png")
-        plot_performance_comparison(all_metrics, summary_path)
+        plot_performance_comparison(all_metrics, summary_path, show_plot=args.interactive)
     
     # Save summary report
     summary_path = os.path.join(args.output_dir, "summary_report.txt")
@@ -1059,7 +1259,8 @@ def main():
         for trial_metrics in all_metrics:
             for filter_type, metrics in trial_metrics.items():
                 for metric_name, value in metrics.items():
-                    avg_metrics[filter_type][metric_name].append(value)
+                    if isinstance(value, (int, float)):  # Only collect numeric metrics
+                        avg_metrics[filter_type][metric_name].append(value)
         
         # Write summary table
         f.write(f"Average Performance Metrics:\n")
@@ -1081,38 +1282,86 @@ def main():
             
             f.write(f"{filter_type:<15} {mse_str:<12} {rmse_str:<12} {nerr_str:<15} {time_str:<12}\n")
         
+        # Component-wise analysis if available
+        if any('mse_roll' in metrics for metrics in avg_metrics.values()):
+            f.write("\nComponent-wise Analysis:\n")
+            f.write("----------------------\n")
+            f.write(f"{'Filter Type':<15} {'Roll MSE':<12} {'Pitch MSE':<12} {'Yaw MSE':<12}\n")
+            f.write("-" * 55 + "\n")
+            
+            for filter_type, metrics in avg_metrics.items():
+                roll_vals = metrics.get('mse_roll', [])
+                pitch_vals = metrics.get('mse_pitch', [])
+                yaw_vals = metrics.get('mse_yaw', [])
+                
+                roll_str = f"{np.mean(roll_vals):.6f}" if roll_vals else "N/A"
+                pitch_str = f"{np.mean(pitch_vals):.6f}" if pitch_vals else "N/A"
+                yaw_str = f"{np.mean(yaw_vals):.6f}" if yaw_vals else "N/A"
+                
+                f.write(f"{filter_type:<15} {roll_str:<12} {pitch_str:<12} {yaw_str:<12}\n")
+        
         # Overall recommendations
         f.write(f"\nOverall Recommendations:\n")
         f.write(f"-----------------------\n")
         
         # Find best filter based on error if available
-        if 'mse' in avg_metrics[list(avg_metrics.keys())[0]]:
-            best_acc_filter = min(avg_metrics.items(), 
-                               key=lambda x: np.mean(x[1].get('mse', [np.inf])))[0]
+        if any('mse' in metrics for metrics in avg_metrics.values()):
+            best_acc_filter = min(
+                [k for k, v in avg_metrics.items() if 'mse' in v],
+                key=lambda x: np.mean(avg_metrics[x].get('mse', [np.inf]))
+            )
             
-            f.write(f"For best orientation accuracy: Use the {best_acc_filter} filter\n")
+            f.write(f"• For best orientation accuracy: Use the {best_acc_filter} filter\n")
         
         # Find fastest filter
-        best_speed_filter = min(avg_metrics.items(),
-                             key=lambda x: np.mean(x[1].get('processing_time', [np.inf])))[0]
+        if all('processing_time' in metrics for metrics in avg_metrics.values()):
+            best_speed_filter = min(
+                avg_metrics.keys(),
+                key=lambda x: np.mean(avg_metrics[x].get('processing_time', [np.inf]))
+            )
+            
+            f.write(f"• For fastest processing: Use the {best_speed_filter} filter\n")
         
-        f.write(f"For fastest processing: Use the {best_speed_filter} filter\n")
+        # Optimal algorithm for fall detection
+        f.write(f"\nRecommendations for Fall Detection Implementation:\n")
+        f.write(f"1. For real-time fall detection on smartwatch or phone devices:\n")
         
-        # General recommendations
-        f.write(f"\nGeneral observations:\n")
-        if not all('mse' in metrics for metrics in all_metrics):
-            f.write(f"• Skeleton reference data was not available for all trials.\n")
-            f.write(f"  Consider using skeleton data during training for drift correction.\n")
+        if 'best_speed_filter' in locals() and 'best_acc_filter' in locals():
+            if best_speed_filter == best_acc_filter:
+                f.write(f"   The {best_speed_filter} filter provides the best balance of accuracy and efficiency.\n")
+            else:
+                # Calculate tradeoff
+                speed_ratio = np.mean(avg_metrics[best_acc_filter]['processing_time']) / np.mean(avg_metrics[best_speed_filter]['processing_time'])
+                if 'mse' in avg_metrics[best_speed_filter] and 'mse' in avg_metrics[best_acc_filter]:
+                    error_ratio = np.mean(avg_metrics[best_speed_filter]['mse']) / np.mean(avg_metrics[best_acc_filter]['mse'])
+                    
+                    if speed_ratio > 2 and error_ratio < 1.5:
+                        f.write(f"   The {best_speed_filter} filter is recommended, as it is {speed_ratio:.1f}x faster while maintaining\n")
+                        f.write(f"   acceptable accuracy (only {error_ratio:.1f}x higher error).\n")
+                    elif error_ratio > 2:
+                        f.write(f"   If accuracy is critical, use the {best_acc_filter} filter which reduces errors by {error_ratio:.1f}x\n")
+                        f.write(f"   at the cost of {speed_ratio:.1f}x slower processing.\n")
+                    else:
+                        f.write(f"   Consider an adaptive approach that switches between {best_speed_filter} (for routine movements)\n")
+                        f.write(f"   and {best_acc_filter} (during potential fall events).\n")
+                else:
+                    f.write(f"   Consider using {best_speed_filter} for real-time processing, switching to\n")
+                    f.write(f"   {best_acc_filter} only during high-motion events to conserve battery.\n")
         
-        if not all('gyro_data' in trial_metrics for trial_metrics in all_metrics):
-            f.write(f"• Gyroscope data was not available for all trials.\n")
-            f.write(f"  Gyroscope data significantly improves orientation estimation.\n")
+        # Implementation recommendations
+        f.write(f"\n2. Implementation Best Practices:\n")
+        f.write(f"   • Use proper timestamp-based alignment for acc/gyro data, resampled to 30 Hz\n")
+        f.write(f"   • Add robust quaternion normalization to prevent zero-norm errors\n")
+        f.write(f"   • Implement covariance regularization to ensure matrix positive definiteness\n")
+        f.write(f"   • Use adaptive sampling rates based on detected activity levels\n")
+        f.write(f"   • Consider motion-based filter switching for optimal accuracy/efficiency tradeoff\n")
         
-        f.write(f"\nIntegration recommendations:\n")
-        f.write(f"• For real-time use on wearable devices, the {best_speed_filter} filter offers the best balance of accuracy and efficiency.\n")
-        f.write(f"• For offline analysis where processing time is less critical, the {best_acc_filter if 'best_acc_filter' in locals() else best_speed_filter} filter provides the most accurate results.\n")
-        f.write(f"• Quaternion representation should be used internally for stable orientation tracking.\n")
-        f.write(f"• Euler angles can be derived from quaternions for visualization and feature extraction.\n")
+        # Integration with existing codebase
+        f.write(f"\n3. Integration with Existing Codebase:\n")
+        f.write(f"   • Maintain the current teacher-student knowledge distillation approach\n")
+        f.write(f"   • Use skeleton data and other sensors during training only\n")
+        f.write(f"   • For inference, implement the recommended IMU fusion approach for watch/phone data\n")
+        f.write(f"   • The quaternion representation provides the most stable rotation tracking\n")
     
     logger.info(f"Summary report saved to {summary_path}")
     logger.info("IMU fusion debugging complete!")
