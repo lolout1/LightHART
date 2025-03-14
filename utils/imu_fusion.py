@@ -1,4 +1,188 @@
-def process_step(self, accel, gyro, dt, timestamp=None):
+"""
+IMU fusion module with multiple Kalman filter implementations for orientation estimation.
+Supports Standard, Extended, and Unscented Kalman Filters with quaternion representation.
+
+Features:
+- Drift correction using skeleton reference data
+- Quaternion-based orientation representation
+- Fall-specific feature extraction
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.linalg import block_diag
+from scipy.spatial.transform import Rotation as R
+from scipy.optimize import minimize
+from scipy.interpolate import interp1d
+import time
+import logging
+from typing import Optional, Tuple, List, Dict, Union
+
+# Configure logging
+logger = logging.getLogger("IMUFusion")
+
+class BaseKalmanFilter:
+    """Base class for IMU fusion with drift correction capabilities."""
+    
+    def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1, 
+                 gyro_bias_noise=0.01, drift_correction_weight=0.3):
+        """
+        Initialize the base Kalman filter.
+        
+        Args:
+            dt: Default time step in seconds
+            process_noise: Process noise variance
+            measurement_noise: Measurement noise variance
+            gyro_bias_noise: Gyroscope bias noise variance
+            drift_correction_weight: Weight for skeleton-based drift correction
+        """
+        self.dt = dt
+        self.process_noise = process_noise
+        self.measurement_noise = measurement_noise
+        self.gyro_bias_noise = gyro_bias_noise
+        self.drift_correction_weight = drift_correction_weight
+        self.name = "Base Filter"
+        self.initialized = False
+        
+        # Reference data for drift correction
+        self.reference_timestamps = None
+        self.reference_orientations = None
+        self.use_reference = False
+        
+        # Fall detection specific parameters
+        self.fall_detection_features = True  # Enable fall-specific features
+        
+    def initialize(self, accel):
+        """Initialize the filter - implemented by subclasses."""
+        raise NotImplementedError
+        
+    def set_reference_data(self, timestamps, orientations):
+        """
+        Set reference orientation data from skeleton.
+        
+        Args:
+            timestamps: Array of reference timestamps
+            orientations: Array of reference orientations (euler angles)
+        """
+        if timestamps is None or orientations is None:
+            self.use_reference = False
+            return
+        
+        if len(timestamps) == 0 or len(orientations) == 0:
+            self.use_reference = False
+            return
+        
+        if len(timestamps) != len(orientations):
+            logger.warning(f"Reference mismatch: {len(timestamps)} timestamps vs {len(orientations)} orientations. Disabling reference.")
+            self.use_reference = False
+            return
+            
+        self.reference_timestamps = np.array(timestamps).flatten()
+        self.reference_orientations = np.array(orientations)
+        self.use_reference = True
+        logger.info(f"Reference data set: {len(timestamps)} points")
+        
+    def get_reference_orientation(self, timestamp):
+        """
+        Get reference orientation at a specific timestamp.
+        
+        Args:
+            timestamp: Time point to get reference orientation
+            
+        Returns:
+            Reference orientation or None if not available
+        """
+        if not self.use_reference:
+            return None
+            
+        # Check if we have valid reference data
+        if self.reference_timestamps is None or self.reference_orientations is None:
+            return None
+            
+        if len(self.reference_timestamps) != len(self.reference_orientations):
+            return None
+            
+        # Check if timestamp is within range
+        if (timestamp < self.reference_timestamps[0] or 
+            timestamp > self.reference_timestamps[-1]):
+            return None
+        
+        try:
+            # Interpolate reference orientation
+            interp_func = interp1d(
+                self.reference_timestamps,
+                self.reference_orientations,
+                axis=0,
+                bounds_error=False,
+                fill_value="extrapolate"
+            )
+            
+            return interp_func(timestamp)
+        except Exception as e:
+            logger.warning(f"Error interpolating reference orientation: {e}")
+            return None
+        
+    def apply_drift_correction(self, estimated_orientation, timestamp):
+        """
+        Apply drift correction using reference orientation.
+        
+        Args:
+            estimated_orientation: Orientation from Kalman filter
+            timestamp: Current timestamp
+            
+        Returns:
+            Corrected orientation
+        """
+        if not self.use_reference:
+            return estimated_orientation
+            
+        reference = self.get_reference_orientation(timestamp)
+        if reference is None:
+            return estimated_orientation
+            
+        # Apply weighted correction
+        w = self.drift_correction_weight
+        corrected = (1 - w) * estimated_orientation + w * reference
+        return corrected
+    
+    def extract_fall_features(self, accel, gyro, orientation, prev_accel=None):
+        """
+        Extract fall-specific features.
+        
+        Args:
+            accel: Current acceleration (3,)
+            gyro: Current angular velocity (3,)
+            orientation: Current orientation (3,) (euler angles)
+            prev_accel: Previous acceleration or None
+            
+        Returns:
+            Dictionary of fall-specific features
+        """
+        if not self.fall_detection_features:
+            return {}
+            
+        features = {}
+        
+        # 1. Vertical acceleration component (using orientation)
+        r = R.from_euler('xyz', orientation)
+        world_accel = r.apply(accel)
+        features['vert_accel'] = world_accel[2]  # Vertical component
+        
+        # 2. Orientation change rate - useful for detecting sudden posture changes
+        features['pitch'] = orientation[1]  # Pitch angle
+        
+        # 3. Impact detection - sudden changes in acceleration magnitude
+        accel_mag = np.linalg.norm(accel)
+        features['accel_magnitude'] = accel_mag
+        
+        # 4. Jerk - rate of acceleration change (first derivative of acceleration)
+        if prev_accel is not None:
+            jerk = (accel - prev_accel) / self.dt
+            features['jerk_magnitude'] = np.linalg.norm(jerk)
+        
+        return features
+    
+    def process_step(self, accel, gyro, dt, timestamp=None):
         """
         Process a single step of sensor data.
         
@@ -42,6 +226,7 @@ def process_step(self, accel, gyro, dt, timestamp=None):
             self.initialize(accel_data[0])
         
         # Process each measurement
+        prev_accel = None
         for i in range(N):
             accel = accel_data[i]
             gyro = gyro_data[i]
@@ -55,8 +240,15 @@ def process_step(self, accel, gyro, dt, timestamp=None):
                 dt = self.dt
             
             # Process step
-            state, features = self.process_step(accel, gyro, dt, timestamps[i])
-            output[i] = features
+            try:
+                state, features = self.process_step(accel, gyro, dt, timestamps[i])
+                output[i] = features
+                prev_accel = accel
+            except Exception as e:
+                logger.warning(f"Error processing step {i}: {e}")
+                if i > 0:
+                    # Use previous output if available
+                    output[i] = output[i-1]
         
         return output
 
@@ -90,6 +282,8 @@ class StandardKalmanIMU(BaseKalmanFilter):
         
         # Measurement noise
         self.R = np.eye(self.measurement_dim) * self.measurement_noise
+        
+        self.name = "Standard Kalman"
     
     def initialize(self, accel):
         """Initialize filter state using initial acceleration."""
@@ -175,11 +369,21 @@ class StandardKalmanIMU(BaseKalmanFilter):
         
         # Apply drift correction if reference data is available
         if timestamp is not None and self.use_reference:
-            self.x[:3] = self.apply_drift_correction(self.x[:3], timestamp)
+            try:
+                self.x[:3] = self.apply_drift_correction(self.x[:3], timestamp)
+            except Exception as e:
+                logger.warning(f"Drift correction failed: {e}")
         
         # Convert Euler angles to quaternion
         orientation = self.x[:3]
-        quat = R.from_euler('xyz', orientation).as_quat()
+        
+        # Create quaternion
+        try:
+            quat = R.from_euler('xyz', orientation).as_quat()
+        except Exception as e:
+            # Handle gimbal lock or other conversion issues
+            logger.warning(f"Quaternion conversion error: {e}")
+            quat = np.array([1.0, 0.0, 0.0, 0.0])  # Default to identity quaternion
         
         # Feature vector: accel, gyro, quaternion, euler
         features = np.concatenate([
@@ -220,6 +424,8 @@ class ExtendedKalmanIMU(BaseKalmanFilter):
         
         # Measurement noise
         self.R = np.eye(self.measurement_dim) * self.measurement_noise
+        
+        self.name = "Extended Kalman"
     
     def initialize(self, accel):
         """Initialize filter with first acceleration measurement."""
@@ -244,6 +450,9 @@ class ExtendedKalmanIMU(BaseKalmanFilter):
             rotation_matrix = np.eye(3) + v_skew + v_skew.dot(v_skew) * (1 - c) / (s**2)
             r = R.from_matrix(rotation_matrix)
             quat = r.as_quat()
+            
+            # Convert from scipy [x,y,z,w] to [w,x,y,z]
+            quat = np.array([quat[3], quat[0], quat[1], quat[2]])
         
         # Initialize state [quat, gyro_bias]
         self.x = np.zeros(self.state_dim)
@@ -346,8 +555,11 @@ class ExtendedKalmanIMU(BaseKalmanFilter):
         # Extract quaternion
         q = x[:4]
         
+        # Convert our quaternion [w,x,y,z] to scipy [x,y,z,w]
+        q_scipy = np.array([q[1], q[2], q[3], q[0]])
+        
         # Convert quaternion to rotation matrix
-        r = R.from_quat(q)
+        r = R.from_quat(q_scipy)
         
         # Rotate unit gravity vector [0,0,1]
         gravity_body = r.apply([0, 0, 1])
@@ -440,20 +652,34 @@ class ExtendedKalmanIMU(BaseKalmanFilter):
         
         # Apply drift correction if reference data is available
         if timestamp is not None and self.use_reference:
-            # Extract Euler angles from quaternion
-            euler = R.from_quat(self.x[:4]).as_euler('xyz')
-            
-            # Correct Euler angles
-            corrected_euler = self.apply_drift_correction(euler, timestamp)
-            
-            # Convert back to quaternion
-            corrected_quat = R.from_euler('xyz', corrected_euler).as_quat()
-            
-            self.x[:4] = corrected_quat
+            try:
+                # Extract Euler angles from quaternion
+                # Convert quaternion [w,x,y,z] to scipy [x,y,z,w]
+                q_scipy = np.array([self.x[1], self.x[2], self.x[3], self.x[0]])
+                euler = R.from_quat(q_scipy).as_euler('xyz')
+                
+                # Correct Euler angles
+                corrected_euler = self.apply_drift_correction(euler, timestamp)
+                
+                # Convert back to quaternion
+                q_corrected = R.from_euler('xyz', corrected_euler).as_quat()
+                
+                # Convert scipy [x,y,z,w] back to [w,x,y,z]
+                self.x[:4] = [q_corrected[3], q_corrected[0], q_corrected[1], q_corrected[2]]
+            except Exception as e:
+                logger.warning(f"Drift correction error: {e}")
         
         # Extract orientation for output
         quat = self.x[:4]
-        euler = R.from_quat(quat).as_euler('xyz')
+        
+        # Convert quaternion [w,x,y,z] to scipy [x,y,z,w]
+        q_scipy = np.array([quat[1], quat[2], quat[3], quat[0]])
+        
+        try:
+            euler = R.from_quat(q_scipy).as_euler('xyz')
+        except Exception as e:
+            logger.warning(f"Euler conversion error: {e}")
+            euler = np.zeros(3)
         
         # Feature vector: accel, gyro, quaternion, euler
         features = np.concatenate([
@@ -500,6 +726,8 @@ class UnscentedKalmanIMU(BaseKalmanFilter):
         
         # Save last gyro for state transition
         self.last_gyro = np.zeros(3)
+        
+        self.name = "Unscented Kalman"
     
     def initialize(self, accel):
         """Initialize filter with first acceleration."""
@@ -521,7 +749,10 @@ class UnscentedKalmanIMU(BaseKalmanFilter):
             
             rotation_matrix = np.eye(3) + v_skew + v_skew.dot(v_skew) * (1 - c) / (s**2)
             r = R.from_matrix(rotation_matrix)
-            quat = r.as_quat()
+            quat_scipy = r.as_quat()
+            
+            # Convert scipy [x,y,z,w] to [w,x,y,z]
+            quat = np.array([quat_scipy[3], quat_scipy[0], quat_scipy[1], quat_scipy[2]])
         
         self.x[:4] = quat
         self.x[4:] = np.zeros(3)  # Initial bias
@@ -633,11 +864,17 @@ class UnscentedKalmanIMU(BaseKalmanFilter):
             # Extract quaternion
             q = sigma_points[i, :4]
             
-            # Rotate unit gravity vector
-            r = R.from_quat(q)
-            gravity_body = r.apply([0, 0, 1])
+            # Convert [w,x,y,z] to scipy [x,y,z,w]
+            q_scipy = np.array([q[1], q[2], q[3], q[0]])
             
-            measurements[i] = gravity_body
+            # Rotate unit gravity vector
+            try:
+                r = R.from_quat(q_scipy)
+                gravity_body = r.apply([0, 0, 1])
+                measurements[i] = gravity_body
+            except Exception as e:
+                logger.warning(f"Measurement function error: {e}")
+                measurements[i] = np.array([0, 0, 1])
         
         return measurements
     
@@ -709,7 +946,11 @@ class UnscentedKalmanIMU(BaseKalmanFilter):
         Pzz += self.R
         
         # Calculate Kalman gain
-        K = Pxz @ np.linalg.inv(Pzz)
+        try:
+            K = Pxz @ np.linalg.inv(Pzz)
+        except np.linalg.LinAlgError as e:
+            logger.warning(f"Matrix inversion error in UKF update: {e}")
+            return
         
         # Update state
         self.x = self.x + K @ (measurement - z_pred)
@@ -744,20 +985,38 @@ class UnscentedKalmanIMU(BaseKalmanFilter):
         
         # Apply drift correction
         if timestamp is not None and self.use_reference:
-            # Convert to Euler angles
-            euler = R.from_quat(self.x[:4]).as_euler('xyz')
-            
-            # Apply correction
-            corrected_euler = self.apply_drift_correction(euler, timestamp)
-            
-            # Convert back to quaternion
-            corrected_quat = R.from_euler('xyz', corrected_euler).as_quat()
-            
-            self.x[:4] = corrected_quat
+            try:
+                # Convert to Euler angles
+                q_scipy = np.array([self.x[1], self.x[2], self.x[3], self.x[0]])
+                euler = R.from_quat(q_scipy).as_euler('xyz')
+                
+                # Apply correction
+                corrected_euler = self.apply_drift_correction(euler, timestamp)
+                
+                # Convert back to quaternion
+                corrected_quat_scipy = R.from_euler('xyz', corrected_euler).as_quat()
+                
+                # Convert back to our format [w,x,y,z]
+                self.x[:4] = [
+                    corrected_quat_scipy[3],
+                    corrected_quat_scipy[0], 
+                    corrected_quat_scipy[1], 
+                    corrected_quat_scipy[2]
+                ]
+            except Exception as e:
+                logger.warning(f"UKF drift correction error: {e}")
         
         # Extract orientation
         quat = self.x[:4]
-        euler = R.from_quat(quat).as_euler('xyz')
+        
+        # Convert to scipy format for euler angles
+        q_scipy = np.array([quat[1], quat[2], quat[3], quat[0]])
+        
+        try:
+            euler = R.from_quat(q_scipy).as_euler('xyz')
+        except Exception as e:
+            logger.warning(f"UKF euler conversion error: {e}")
+            euler = np.zeros(3)
         
         # Feature vector: accel, gyro, quaternion, euler
         features = np.concatenate([
@@ -790,6 +1049,7 @@ def extract_orientation_from_skeleton(skeleton_data, num_joints=32, joint_dim=3,
         skeleton_reshaped = skeleton_data.reshape(n_frames, num_joints, joint_dim)
     else:
         # Can't determine orientation reliably if joint structure is unknown
+        logger.warning("Unable to extract orientation from skeleton - unexpected dimensions")
         return orientations
     
     for i in range(n_frames):
@@ -839,105 +1099,6 @@ def extract_orientation_from_skeleton(skeleton_data, num_joints=32, joint_dim=3,
                 orientations[i] = orientations[i-1]
     
     return orientations
-
-def robust_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps=30.0, 
-                          method='dtw', wrist_idx=9):
-    """
-    Align IMU and skeleton data using various methods.
-    
-    Args:
-        imu_data: IMU data [accel/gyro values, no timestamps] (N, features)
-        skel_data: Skeleton data (M, features)
-        imu_timestamps: IMU timestamps (N,)
-        skel_fps: Frame rate of skeleton data (default: 30.0 Hz)
-        method: Alignment method ('dtw', 'interpolation', 'crop')
-        wrist_idx: Index of wrist joint (to align with watch data)
-        
-    Returns:
-        Tuple of (aligned_imu, aligned_skel, aligned_timestamps)
-    """
-    # Implementation details as before, unchanged...
-    # This is the same function from the utils/imu_fusion.py file
-    
-    # Generate skeleton timestamps if needed (30 fps)
-    skel_timestamps = np.arange(skel_data.shape[0]) / skel_fps
-    
-    if method == 'dtw':
-        try:
-            from dtaidistance import dtw
-            
-            # Extract features for alignment
-            # For IMU: use acceleration magnitude (from first 3 columns if available)
-            imu_feat_dim = min(3, imu_data.shape[1])
-            imu_mag = np.linalg.norm(imu_data[:, :imu_feat_dim], axis=1)
-            
-            # For skeleton: extract wrist movement
-            # Extract wrist joint trajectory from skeleton data
-            joint_dim = 3
-            if skel_data.shape[1] >= (wrist_idx + 1) * joint_dim:
-                start_idx = wrist_idx * joint_dim
-                end_idx = start_idx + joint_dim
-                
-                # If skeleton data is in flattened format
-                if skel_data.shape[1] > 32 * joint_dim:  # Likely contains all joints
-                    wrist_trajectory = skel_data[:, start_idx:end_idx]
-                else:
-                    # Reshape if needed
-                    skeleton_reshaped = skel_data.reshape(skel_data.shape[0], -1, joint_dim)
-                    wrist_trajectory = skeleton_reshaped[:, wrist_idx, :]
-            else:
-                # Fallback if wrist joint not found
-                wrist_trajectory = np.zeros((skel_data.shape[0], 3))
-            
-            # Calculate wrist velocity (magnitude)
-            wrist_vel = np.zeros(skel_data.shape[0])
-            for i in range(1, len(wrist_vel)):
-                dt = 1.0 / skel_fps
-                wrist_vel[i] = np.linalg.norm(wrist_trajectory[i] - wrist_trajectory[i-1]) / dt
-            
-            # Normalize sequences for DTW
-            norm_imu = (imu_mag - np.mean(imu_mag)) / (np.std(imu_mag) + 1e-6)
-            norm_wrist = (wrist_vel - np.mean(wrist_vel)) / (np.std(wrist_vel) + 1e-6)
-            
-            # Apply DTW
-            path = dtw.warping_path(norm_imu, norm_wrist)
-            
-            # Extract aligned indices
-            imu_idx, skel_idx = zip(*path)
-            
-            # Remove duplicates while preserving order
-            imu_unique = []
-            skel_unique = []
-            seen_imu = set()
-            seen_skel = set()
-            
-            for i, s in zip(imu_idx, skel_idx):
-                if i not in seen_imu:
-                    imu_unique.append(i)
-                    seen_imu.add(i)
-                if s not in seen_skel:
-                    skel_unique.append(s)
-                    seen_skel.add(s)
-            
-            # Create aligned arrays
-            aligned_imu = imu_data[imu_unique]
-            aligned_skel = skel_data[skel_unique]
-            
-            if imu_timestamps is not None:
-                aligned_ts = imu_timestamps[imu_unique]
-            else:
-                aligned_ts = np.arange(len(imu_unique))
-            
-            return aligned_imu, aligned_skel, aligned_ts
-            
-        except ImportError:
-            logger.warning("DTW package not found, falling back to interpolation")
-            method = 'interpolation'
-        except Exception as e:
-            logger.warning(f"DTW alignment failed: {e}, falling back to interpolation")
-            method = 'interpolation'
-    
-    # ... Rest of the function implementation (interpolation and crop methods)
 
 def calibrate_filter(accel_data, gyro_data, skeleton_data, filter_type='ekf', timestamps=None, wrist_idx=9):
     """
@@ -1012,36 +1173,42 @@ def calibrate_filter(accel_data, gyro_data, skeleton_data, filter_type='ekf', ti
     bounds = [(0.001, 0.1), (0.01, 1.0), (0.001, 0.1)]
     
     # Minimize error
-    result = minimize(
-        error_function,
-        initial_params,
-        bounds=bounds,
-        method='L-BFGS-B'
-    )
-    
-    # Create final calibrated filter
-    process_noise, measurement_noise, gyro_bias_noise = result.x
-    
-    if filter_type == 'standard':
-        calibrated_filter = StandardKalmanIMU(
-            process_noise=process_noise,
-            measurement_noise=measurement_noise,
-            gyro_bias_noise=gyro_bias_noise
+    try:
+        result = minimize(
+            error_function,
+            initial_params,
+            bounds=bounds,
+            method='L-BFGS-B'
         )
-    elif filter_type == 'ekf':
-        calibrated_filter = ExtendedKalmanIMU(
-            process_noise=process_noise,
-            measurement_noise=measurement_noise,
-            gyro_bias_noise=gyro_bias_noise
-        )
-    else:  # 'ukf'
-        calibrated_filter = UnscentedKalmanIMU(
-            process_noise=process_noise,
-            measurement_noise=measurement_noise,
-            gyro_bias_noise=gyro_bias_noise
-        )
-    
-    logger.info(f"Calibrated {filter_type} filter parameters: process_noise={process_noise:.6f}, "
-               f"measurement_noise={measurement_noise:.6f}, gyro_bias_noise={gyro_bias_noise:.6f}")
-    
-    return calibrated_filter, result.x
+        
+        # Create final calibrated filter
+        process_noise, measurement_noise, gyro_bias_noise = result.x
+        
+        # Create calibrated filter
+        if filter_type == 'standard':
+            calibrated_filter = StandardKalmanIMU(
+                process_noise=process_noise,
+                measurement_noise=measurement_noise,
+                gyro_bias_noise=gyro_bias_noise
+            )
+        elif filter_type == 'ekf':
+            calibrated_filter = ExtendedKalmanIMU(
+                process_noise=process_noise,
+                measurement_noise=measurement_noise,
+                gyro_bias_noise=gyro_bias_noise
+            )
+        else:  # 'ukf'
+            calibrated_filter = UnscentedKalmanIMU(
+                process_noise=process_noise,
+                measurement_noise=measurement_noise,
+                gyro_bias_noise=gyro_bias_noise
+            )
+        
+        logger.info(f"Calibrated {filter_type} filter parameters: process_noise={process_noise:.6f}, "
+                f"measurement_noise={measurement_noise:.6f}, gyro_bias_noise={gyro_bias_noise:.6f}")
+        
+        return calibrated_filter, result.x
+    except Exception as e:
+        logger.error(f"Calibration error: {e}")
+        # Return default parameters
+        return None, np.array([0.01, 0.1, 0.01])
