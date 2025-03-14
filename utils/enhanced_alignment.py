@@ -3,23 +3,13 @@
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.signal import find_peaks
-from scipy.spatial.transform import Rotation as R
 import logging
-from dtaidistance import dtw
+from dtaidistance import dtw  # You may need to install this package
 
 logger = logging.getLogger("ModalityAlignment")
 
 def create_skeleton_timestamps(skel_array, fps=30.0):
-    """
-    Create timestamps for skeleton data that lacks them.
-    
-    Args:
-        skel_array: Skeleton data array of shape (n_frames, n_features)
-        fps: Frame rate of skeleton data
-        
-    Returns:
-        Timestamps array of shape (n_frames,)
-    """
+    """Create timestamps for skeleton data that lacks them."""
     n_frames = skel_array.shape[0]
     timestamps = np.arange(n_frames) / fps
     return timestamps
@@ -377,7 +367,7 @@ def enhanced_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps
                                            timestamps=imu_timestamps)
     
     skel_segments = detect_activity_segments(skel_data, threshold=0.05,
-                                            timestamps=skel_timestamps)
+                                           timestamps=skel_timestamps)
     
     logger.info(f"Detected {len(imu_segments)} IMU segments and {len(skel_segments)} skeleton segments")
     

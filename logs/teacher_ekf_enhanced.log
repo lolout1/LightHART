@@ -1,0 +1,13 @@
+=== Starting Enhanced Teacher Training ===
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/test/LightHART/train_teacher_enhanced.py", line 482, in <module>
+    main()
+  File "/mmfs1/home/sww35/test/LightHART/train_teacher_enhanced.py", line 479, in main
+    trainer.start()
+  File "/mmfs1/home/sww35/test/LightHART/train_teacher_enhanced.py", line 461, in start
+    self.build_data()
+  File "/mmfs1/home/sww35/test/LightHART/train_teacher_enhanced.py", line 142, in build_data
+    data_dict = self.builder.make_dataset(subjects)
+  File "/mmfs1/home/sww35/test/LightHART/utils/enhanced_dataset_builder.py", line 517, in make_dataset
+    tasks = [(t, subjects) for t in self.dataset.matched_trials]
+AttributeError: 'NoneType' object has no attribute 'matched_trials'

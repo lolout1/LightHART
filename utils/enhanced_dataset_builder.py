@@ -11,12 +11,12 @@ from utils.processor.base_quat import (
     parse_watch_csv, 
     create_skeleton_timestamps
 )
-from utils.enhanced_imu_fusion import (
-    EnhancedExtendedKalmanIMU
+from utils.imu_fusion import (
+    StandardKalmanIMU, ExtendedKalmanIMU, UnscentedKalmanIMU,
+    calibrate_filter, extract_orientation_from_skeleton
 )
 from utils.enhanced_alignment import (
-    enhanced_align_modalities,
-    extract_orientation_from_skeleton
+    enhanced_align_modalities
 )
 
 logger = logging.getLogger("EnhancedDatasetBuilder")
@@ -328,14 +328,28 @@ class EnhancedDatasetBuilder:
             # Create zero gyro values if not available
             gyro_values = np.zeros_like(accel_values)
         
-        # Create Kalman filter - optimized for fall detection
-        kalman_filter = EnhancedExtendedKalmanIMU(
-            dt=1/30.0,  # Default sample rate
-            process_noise=self.fusion_params['process_noise'],
-            measurement_noise=self.fusion_params['measurement_noise'],
-            gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
-            drift_correction_weight=self.fusion_params['drift_correction_weight']
-        )
+        # Create Kalman filter based on selected type
+        if self.imu_fusion == 'standard':
+            kalman_filter = StandardKalmanIMU(
+                process_noise=self.fusion_params['process_noise'],
+                measurement_noise=self.fusion_params['measurement_noise'],
+                gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
+                drift_correction_weight=self.fusion_params['drift_correction_weight']
+            )
+        elif self.imu_fusion == 'ekf':
+            kalman_filter = ExtendedKalmanIMU(
+                process_noise=self.fusion_params['process_noise'],
+                measurement_noise=self.fusion_params['measurement_noise'],
+                gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
+                drift_correction_weight=self.fusion_params['drift_correction_weight']
+            )
+        else:  # 'ukf'
+            kalman_filter = UnscentedKalmanIMU(
+                process_noise=self.fusion_params['process_noise'],
+                measurement_noise=self.fusion_params['measurement_noise'],
+                gyro_bias_noise=self.fusion_params['gyro_bias_noise'],
+                drift_correction_weight=self.fusion_params['drift_correction_weight']
+            )
         
         # Set reference data for drift correction if available
         if reference_orientations is not None and reference_timestamps is not None:

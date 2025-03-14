@@ -1,1282 +1,1034 @@
-"""
-Enhanced IMU fusion implementations with quaternion-based orientation.
-
-Provides three Kalman filter variants:
-1. Standard Kalman Filter: Linear approximation for sensor fusion
-2. Extended Kalman Filter: Nonlinear model with first-order linearization
-3. Unscented Kalman Filter: Nonlinear model using sigma points for better approximation
-
-Each filter is optimized for wearable sensor fusion with quaternion representation 
-to avoid gimbal lock and ensure smooth orientation estimates.
-"""
+# utils/imu_fusion.py
 
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.linalg import block_diag
 from scipy.spatial.transform import Rotation as R
-from scipy.optimize import minimize
-import time
-from filterpy.kalman import KalmanFilter, UnscentedKalmanFilter, MerweScaledSigmaPoints
+from scipy.interpolate import interp1d
+import filterpy.kalman as kf
 from filterpy.common import Q_discrete_white_noise
-from dtaidistance import dtw
+from filterpy.kalman import MerweScaledSigmaPoints
 
-class IMUFusionBase:
-    """
-    Base class for IMU fusion implementations with parameter calibration.
-    Specifically designed for pre-processed linear acceleration data.
-    """
+class BaseKalmanFilter:
+    """Base class for all Kalman filter implementations."""
     
     def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1, 
-                 gyro_bias_noise=0.01):
-        """
-        Initialize the IMU fusion base class.
-        
-        Args:
-            dt: Time step in seconds (default: 1/30 s)
-            process_noise: Process noise variance
-            measurement_noise: Measurement noise variance
-            gyro_bias_noise: Gyroscope bias noise variance
-        """
-        self.dt = dt
+                 gyro_bias_noise=0.01, drift_correction_weight=0.3):
+        self.dt = dt  # Default time step
         self.process_noise = process_noise
         self.measurement_noise = measurement_noise
         self.gyro_bias_noise = gyro_bias_noise
-        self.name = "Base"
-        self.calibrated = False
+        self.drift_correction_weight = drift_correction_weight
+        self.initialized = False
         
-    def initialize(self):
-        """Initialize the filter - implemented by subclasses."""
-        raise NotImplementedError
+        # For drift correction using reference data (skeleton)
+        self.reference_timestamps = None
+        self.reference_orientations = None
+        self.use_reference = False
         
-    def update(self, accel, gyro, dt=None):
-        """Update filter with new measurements - implemented by subclasses."""
-        raise NotImplementedError
+        # State dimensions will depend on filter type
+        self.state_dim = 0
+        self.measurement_dim = 0
+        
+    def initialize(self, accel_data):
+        """Initialize filter using initial acceleration data."""
+        # Base implementation - to be overridden
+        self.initialized = True
     
-    def process_sequence(self, accel_seq, gyro_seq, timestamps=None):
-        """Process a sequence of measurements."""
-        raise NotImplementedError
-        
     def reset(self):
         """Reset filter state."""
-        self.initialize()
-        
-    def visualize_orientation(self, orientations, timestamps=None, title=None):
+        self.initialized = False
+    
+    def set_reference_data(self, timestamps, orientations):
         """
-        Visualize orientation estimates.
+        Set reference orientation data from skeleton for drift correction.
         
         Args:
-            orientations: Array of orientation estimates (N, 3)
-            timestamps: Optional array of timestamps (N,)
-            title: Optional plot title
+            timestamps: Array of timestamps for reference orientations
+            orientations: Array of reference orientations (Euler angles or quaternions)
+        """
+        if timestamps is None or orientations is None or len(timestamps) == 0:
+            self.use_reference = False
+            return
+            
+        self.reference_timestamps = timestamps
+        self.reference_orientations = orientations
+        self.use_reference = True
+        print(f"Reference data set for drift correction: {len(timestamps)} points")
+    
+    def get_reference_orientation(self, timestamp):
+        """
+        Get reference orientation at a specific timestamp through interpolation.
+        
+        Args:
+            timestamp: Time point to get reference orientation
+        
+        Returns:
+            Reference orientation or None if not available
+        """
+        if not self.use_reference:
+            return None
+            
+        # Check if timestamp is within range
+        if (timestamp < self.reference_timestamps[0] or 
+            timestamp > self.reference_timestamps[-1]):
+            return None
+            
+        # Interpolate reference orientation
+        interp_func = interp1d(
+            self.reference_timestamps,
+            self.reference_orientations,
+            axis=0,
+            bounds_error=False,
+            fill_value="extrapolate"
+        )
+        
+        return interp_func(timestamp)
+    
+    def apply_drift_correction(self, estimated_orientation, timestamp, quaternion=False):
+        """
+        Apply drift correction using reference orientation from skeleton.
+        
+        Args:
+            estimated_orientation: Current estimated orientation
+            timestamp: Current timestamp
+            quaternion: Whether orientation is in quaternion format
             
         Returns:
-            Matplotlib figure
+            Corrected orientation
         """
-        fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
-        
-        if timestamps is None:
-            timestamps = np.arange(len(orientations))
+        if not self.use_reference:
+            return estimated_orientation
             
-        labels = ['Roll', 'Pitch', 'Yaw']
-        for i in range(3):
-            axes[i].plot(timestamps, orientations[:, i], '-')
-            axes[i].set_ylabel(f'{labels[i]} (rad)')
-            axes[i].grid(True)
+        reference = self.get_reference_orientation(timestamp)
+        if reference is None:
+            return estimated_orientation
             
-        axes[2].set_xlabel('Time (s)')
-        if title:
-            plt.suptitle(f'Orientation Estimates: {title}')
-        plt.tight_layout()
-        return fig
+        # Apply weighted correction
+        w = self.drift_correction_weight
+        
+        if quaternion:
+            # For quaternions, we need to handle special SLERP interpolation
+            est_quat = R.from_quat(estimated_orientation).as_quat()
+            ref_quat = R.from_euler('xyz', reference).as_quat()
+            
+            # Ensure quaternions have same sign (shortest path interpolation)
+            if np.dot(est_quat, ref_quat) < 0:
+                ref_quat = -ref_quat
+                
+            # Spherical linear interpolation
+            corrected_quat = (1 - w) * est_quat + w * ref_quat
+            corrected_quat = corrected_quat / np.linalg.norm(corrected_quat)
+            
+            # Convert back to original format
+            corrected = R.from_quat(corrected_quat).as_euler('xyz')
+        else:
+            # Simple linear interpolation for Euler angles
+            corrected = (1 - w) * estimated_orientation + w * reference
+            
+        return corrected
     
-    def set_parameters(self, process_noise, measurement_noise, gyro_bias_noise):
+    def process_step(self, accel, gyro, dt, timestamp=None):
         """
-        Update filter parameters.
+        Process a single step of sensor data.
         
         Args:
-            process_noise: Process noise variance
-            measurement_noise: Measurement noise variance
-            gyro_bias_noise: Gyroscope bias noise variance
-        """
-        self.process_noise = process_noise
-        self.measurement_noise = measurement_noise
-        self.gyro_bias_noise = gyro_bias_noise
-        self.initialize()  # Reinitialize filter with new parameters
-
-
-class StandardKalmanIMU(IMUFusionBase):
-    """
-    Standard Kalman Filter for IMU processing.
-    Specifically designed for pre-processed linear acceleration data.
-    """
-    
-    def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1,
-                 gyro_bias_noise=0.01):
-        """
-        Initialize Standard Kalman Filter.
-        
-        Args:
-            dt: Time step in seconds (default: 1/30 s)
-            process_noise: Process noise variance
-            measurement_noise: Measurement noise variance
-            gyro_bias_noise: Gyroscope bias noise variance
-        """
-        super().__init__(dt, process_noise, measurement_noise, gyro_bias_noise)
-        self.name = "Standard KF"
-        # State vector: [ax, ay, az, gx, gy, gz, roll, pitch, yaw, bias_gx, bias_gy, bias_gz]
-        # Measurement vector: [ax, ay, az, gx, gy, gz]
-        self.dim_x = 12
-        self.dim_z = 6
-        self.filter = KalmanFilter(dim_x=self.dim_x, dim_z=self.dim_z)
-        self.initialize()
-        
-    def initialize(self):
-        """Initialize filter matrices."""
-        dt = self.dt
-        
-        # State transition matrix (F)
-        self.filter.F = np.eye(self.dim_x)
-        # Orientation updated by gyro rates minus biases
-        self.filter.F[6:9, 3:6] = np.eye(3) * dt
-        self.filter.F[6:9, 9:12] = -np.eye(3) * dt
-        
-        # Measurement matrix (H) - direct measurements of linear accel and gyro
-        self.filter.H = np.zeros((self.dim_z, self.dim_x))
-        self.filter.H[0:3, 0:3] = np.eye(3)  # linear accel measurements
-        self.filter.H[3:6, 3:6] = np.eye(3)  # gyro measurements
-        
-        # Process noise covariance (Q)
-        q_accel = Q_discrete_white_noise(dim=3, dt=dt, var=self.measurement_noise*5)
-        q_gyro = Q_discrete_white_noise(dim=3, dt=dt, var=self.process_noise)
-        q_orientation = Q_discrete_white_noise(dim=3, dt=dt, var=self.process_noise)
-        q_bias = Q_discrete_white_noise(dim=3, dt=dt, var=self.gyro_bias_noise)
-        self.filter.Q = block_diag(q_accel, q_gyro, q_orientation, q_bias)
-        
-        # Measurement noise covariance (R)
-        self.filter.R = np.eye(self.dim_z) * self.measurement_noise
-        self.filter.R[0:3, 0:3] *= 5  # Higher noise for accelerometer
-        
-        # Initial state
-        self.filter.x = np.zeros(self.dim_x)
-        
-        # Initial state covariance (P)
-        self.filter.P = np.eye(self.dim_x)
-        self.filter.P[0:3, 0:3] *= 5  # Higher uncertainty for accel
-        self.filter.P[3:6, 3:6] *= 1  # Gyro initial uncertainty
-        self.filter.P[6:9, 6:9] *= 10  # High uncertainty in initial orientation
-        self.filter.P[9:12, 9:12] *= 0.1  # Low uncertainty in initial bias (assume zero)
-        
-    def update(self, accel, gyro, dt=None):
-        """
-        Update filter with new measurements.
-        
-        Args:
-            accel: Accelerometer measurement (3,)
-            gyro: Gyroscope measurement (3,)
-            dt: Time step (optional)
+            accel: Acceleration measurement (3,)
+            gyro: Angular velocity measurement (3,)
+            dt: Time step
+            timestamp: Current timestamp (for drift correction)
             
         Returns:
-            Tuple of (orientation, filtered_accel)
+            Updated state estimate and covariance
         """
-        if dt is not None and dt > 0:
-            # Update state transition matrix for variable time steps
-            self.filter.F[6:9, 3:6] = np.eye(3) * dt
-            self.filter.F[6:9, 9:12] = -np.eye(3) * dt
-            
-            # Update process noise for variable time steps
-            q_accel = Q_discrete_white_noise(dim=3, dt=dt, var=self.measurement_noise*5)
-            q_gyro = Q_discrete_white_noise(dim=3, dt=dt, var=self.process_noise)
-            q_orientation = Q_discrete_white_noise(dim=3, dt=dt, var=self.process_noise)
-            q_bias = Q_discrete_white_noise(dim=3, dt=dt, var=self.gyro_bias_noise)
-            self.filter.Q = block_diag(q_accel, q_gyro, q_orientation, q_bias)
-        
-        # Concatenate measurements
-        z = np.hstack((accel, gyro))
-        
-        # Predict and update
-        self.filter.predict()
-        self.filter.update(z)
-        
-        # Extract orientation (roll, pitch, yaw)
-        orientation = self.filter.x[6:9]
-        
-        # Return orientation and filtered linear acceleration
-        # Note: We're NOT removing gravity again since the input is already linear acceleration
-        filtered_accel = self.filter.x[0:3]
-        
-        return orientation, filtered_accel
+        # Base implementation - to be overridden
+        pass
     
-    def process_sequence(self, accel_seq, gyro_seq, timestamps=None):
+    def process_sequence(self, accel_data, gyro_data, timestamps=None):
         """
-        Process an entire sequence of IMU data.
+        Process a sequence of sensor data.
         
         Args:
-            accel_seq: Accelerometer data (N, 3)
-            gyro_seq: Gyroscope data (N, 3)
+            accel_data: Accelerometer data (N, 3)
+            gyro_data: Gyroscope data (N, 3)
             timestamps: Optional timestamps (N,)
             
         Returns:
-            Augmented data with orientation and derived features
+            Fused data with orientation (N, features)
         """
-        n_samples = len(accel_seq)
-        orientation_seq = np.zeros((n_samples, 3))
-        filtered_accel_seq = np.zeros((n_samples, 3))
+        N = accel_data.shape[0]
         
-        self.reset()  # Make sure we start fresh
+        # If timestamps not provided, generate uniform timestamps
+        if timestamps is None:
+            timestamps = np.arange(N) * self.dt
         
-        # Handle variable time steps
-        if timestamps is not None:
-            dt_values = np.diff(timestamps, prepend=timestamps[0])
-            dt_values[0] = self.dt  # Use default for first sample
-        else:
-            dt_values = np.ones(n_samples) * self.dt
+        # Create output array - vary size depending on filter output features
+        output_features = 13  # Default: 3 accel + 3 gyro + 4 quaternion + 3 euler
+        output = np.zeros((N, output_features))
+        
+        # Initialize filter with first acceleration
+        if not self.initialized:
+            self.initialize(accel_data[0])
+        
+        # Process each measurement
+        for i in range(N):
+            accel = accel_data[i]
+            gyro = gyro_data[i]
             
-        for i in range(n_samples):
-            dt = dt_values[i]
-            orientation, filtered_accel = self.update(accel_seq[i], gyro_seq[i], dt)
-            orientation_seq[i] = orientation
-            filtered_accel_seq[i] = filtered_accel
+            # Compute dt if we have timestamps
+            if i > 0:
+                dt = timestamps[i] - timestamps[i-1]
+                if dt <= 0:  # Handle timestamp errors
+                    dt = self.dt
+            else:
+                dt = self.dt
             
-        # Calculate derived features
-        accel_mag = np.linalg.norm(accel_seq, axis=1).reshape(-1, 1)  # Use original linear accel
-        gyro_mag = np.linalg.norm(gyro_seq, axis=1).reshape(-1, 1)
+            # Process step
+            state, features = self.process_step(accel, gyro, dt, timestamps[i])
+            output[i] = features
         
-        # Calculate jerk (derivative of acceleration)
-        jerk = np.zeros_like(accel_seq)
-        if n_samples > 1:
-            for i in range(1, n_samples):
-                dt = dt_values[i] if timestamps is not None else self.dt
-                if dt > 0:
-                    jerk[i] = (accel_seq[i] - accel_seq[i-1]) / dt
-        jerk_mag = np.linalg.norm(jerk, axis=1).reshape(-1, 1)
-        
-        # Convert Euler orientation to quaternions for better representation
-        quat_orientation = np.zeros((n_samples, 4))
-        for i in range(n_samples):
-            r = R.from_euler('xyz', orientation_seq[i])
-            quat_orientation[i] = r.as_quat()  # [x, y, z, w] format
-        
-        # Combine all features into a single array
-        augmented_data = np.hstack((
-            accel_seq,           # Original linear acceleration (3)
-            gyro_seq,            # Original gyroscope (3)
-            filtered_accel_seq,  # Filtered linear acceleration (3)
-            orientation_seq,     # Orientation angles (3)
-            quat_orientation,    # Quaternion orientation (4)
-            accel_mag,           # Magnitude of linear acceleration (1)
-            gyro_mag,            # Magnitude of angular velocity (1)
-            jerk_mag             # Magnitude of jerk (1)
-        ))
-        
-        return augmented_data
+        return output
 
-
-class ExtendedKalmanIMU(IMUFusionBase):
+class StandardKalmanIMU(BaseKalmanFilter):
     """
-    Extended Kalman Filter for IMU processing.
-    Designed specifically for pre-processed linear acceleration data.
-    Uses nonlinear state transition model for quaternion-based orientation.
+    Standard Kalman Filter for IMU fusion.
+    
+    This uses a simplified linear model that works well for small movements
+    but has limitations for complex rotations.
     """
     
-    def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1,
-                 gyro_bias_noise=0.01):
-        """
-        Initialize Extended Kalman Filter.
+    def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1, gyro_bias_noise=0.01,
+                drift_correction_weight=0.3):
+        super().__init__(dt, process_noise, measurement_noise, gyro_bias_noise, drift_correction_weight)
         
-        Args:
-            dt: Time step in seconds (default: 1/30 s)
-            process_noise: Process noise variance
-            measurement_noise: Measurement noise variance
-            gyro_bias_noise: Gyroscope bias noise variance
-        """
-        super().__init__(dt, process_noise, measurement_noise, gyro_bias_noise)
-        self.name = "Extended KF"
-        # State: [q0,q1,q2,q3,wx,wy,wz,bx,by,bz,ax,ay,az] 
-        # (quaternion, angular velocity, gyro bias, linear acceleration)
-        self.state = np.zeros(13)
-        self.state[0] = 1.0  # Initial quaternion is identity rotation
+        # State: [orientation (3), gyro_bias (3)]
+        self.state_dim = 6
+        self.measurement_dim = 3
         
-        # Covariance matrix
-        self.P = np.eye(13) * 0.01
-        self.P[0:4, 0:4] *= 0.1    # Quaternion covariance
-        self.P[4:7, 4:7] *= 1.0    # Angular velocity covariance
-        self.P[7:10, 7:10] *= 0.1  # Bias covariance
-        self.P[10:13, 10:13] *= 5.0  # Linear acceleration covariance
+        # Create Kalman filter
+        self.kf = kf.KalmanFilter(dim_x=self.state_dim, dim_z=self.measurement_dim)
         
-        # Process noise covariance
-        self.Q = np.eye(13) * 0.01
-        self.Q[0:4, 0:4] *= 0.01              # Quaternion process noise
-        self.Q[4:7, 4:7] *= self.process_noise  # Angular velocity process noise
-        self.Q[7:10, 7:10] *= self.gyro_bias_noise  # Bias process noise
-        self.Q[10:13, 10:13] *= self.measurement_noise * 5  # Linear accel process noise
+        # Initialize state transition matrix
+        self.F = np.eye(self.state_dim)
         
-        # Measurement noise covariance
-        self.R = np.eye(6) * self.measurement_noise
-        self.R[0:3, 0:3] *= 5.0  # Linear accelerometer noise
-        self.R[3:6, 3:6] *= 1.0  # Gyroscope noise
+        # Initialize measurement matrix (H)
+        # We only directly measure orientation from accelerometer
+        self.H = np.zeros((self.measurement_dim, self.state_dim))
+        self.H[:3, :3] = np.eye(3)
         
-    def quaternion_to_euler(self, q):
-        """
-        Convert quaternion to Euler angles (roll, pitch, yaw).
-        
-        Args:
-            q: Quaternion [w, x, y, z]
-            
-        Returns:
-            Euler angles [roll, pitch, yaw]
-        """
-        r = R.from_quat([q[1], q[2], q[3], q[0]])  # scipy uses [x,y,z,w] format
-        return r.as_euler('xyz')
+        # Set measurement noise
+        self.R = np.eye(self.measurement_dim) * self.measurement_noise
     
-    def normalize_quaternion(self, q):
-        """
-        Normalize quaternion to maintain unit length.
+    def initialize(self, accel):
+        """Initialize filter state using initial acceleration."""
+        # Estimate initial orientation from gravity direction
+        gravity = -accel / np.linalg.norm(accel)
         
-        Args:
-            q: Quaternion [w, x, y, z]
-            
-        Returns:
-            Normalized quaternion
-        """
-        return q / np.linalg.norm(q)
+        # Convert to Euler angles (roll, pitch)
+        roll = np.arctan2(gravity[1], gravity[2])
+        pitch = np.arctan2(-gravity[0], np.sqrt(gravity[1]**2 + gravity[2]**2))
+        yaw = 0.0  # Can't determine yaw from gravity alone
+        
+        # Set initial state
+        self.kf.x = np.zeros(self.state_dim)
+        self.kf.x[:3] = np.array([roll, pitch, yaw])
+        
+        # Set initial covariance
+        self.kf.P = np.eye(self.state_dim) * 0.1
+        self.kf.P[2, 2] = 1.0  # Higher uncertainty for yaw
+        
+        # Set fixed matrices
+        self.kf.F = self.F
+        self.kf.H = self.H
+        self.kf.R = self.R
+        
+        self.initialized = True
     
-    def state_transition(self, x, dt):
-        """
-        Nonlinear state transition function.
-        
-        Args:
-            x: State vector
-            dt: Time step
+    def process_step(self, accel, gyro, dt, timestamp=None):
+        """Process one step using standard Kalman filter."""
+        if not self.initialized:
+            self.initialize(accel)
             
-        Returns:
-            Updated state vector
-        """
-        # Extract states
-        q = x[0:4]  # quaternion [w, x, y, z]
-        w = x[4:7]  # angular velocity
-        b = x[7:10]  # gyro bias
-        a = x[10:13]  # linear acceleration
+        # Update state transition matrix for current dt
+        self.F[:3, 3:] = np.eye(3) * dt
+        self.kf.F = self.F
         
-        # Corrected angular velocity
-        w_corrected = w - b
+        # Set process noise
+        q = Q_discrete_white_noise(dim=2, dt=dt, var=self.process_noise, block_size=3)
+        self.kf.Q = q
         
-        # Quaternion derivative
-        q_dot = 0.5 * np.array([
-            -q[1]*w_corrected[0] - q[2]*w_corrected[1] - q[3]*w_corrected[2],
-            q[0]*w_corrected[0] + q[2]*w_corrected[2] - q[3]*w_corrected[1],
-            q[0]*w_corrected[1] + q[3]*w_corrected[0] - q[1]*w_corrected[2],
-            q[0]*w_corrected[2] + q[1]*w_corrected[1] - q[2]*w_corrected[0]
+        # Gyro bias noise
+        self.kf.Q[3:, 3:] += np.eye(3) * self.gyro_bias_noise * dt
+        
+        # Prediction step using gyroscope
+        gyro_corrected = gyro - self.kf.x[3:6]  # Apply bias correction
+        
+        # Apply gyro for prediction
+        self.kf.predict()
+        
+        # Add gyro rotation to state (integrated angular velocity)
+        delta_angle = gyro_corrected * dt
+        self.kf.x[:3] += delta_angle
+        
+        # Update step using accelerometer for roll and pitch
+        # (Accelerometer can't directly measure yaw)
+        gravity = -accel / np.linalg.norm(accel)
+        roll_acc = np.arctan2(gravity[1], gravity[2])
+        pitch_acc = np.arctan2(-gravity[0], np.sqrt(gravity[1]**2 + gravity[2]**2))
+        
+        # Only update roll and pitch from accelerometer
+        acc_angles = np.array([roll_acc, pitch_acc, self.kf.x[2]])
+        
+        self.kf.update(acc_angles)
+        
+        # Apply drift correction if reference data is available
+        if timestamp is not None and self.use_reference:
+            self.kf.x[:3] = self.apply_drift_correction(self.kf.x[:3], timestamp)
+        
+        # Convert Euler angles to quaternion
+        orientation = self.kf.x[:3]
+        quat = R.from_euler('xyz', orientation).as_quat()
+        
+        # Feature vector: accel, gyro, quaternion, euler
+        features = np.concatenate([
+            accel,
+            gyro,
+            quat,
+            orientation
         ])
+        
+        return self.kf.x, features
+
+class ExtendedKalmanIMU(BaseKalmanFilter):
+    """
+    Extended Kalman Filter for IMU fusion.
+    
+    This handles nonlinear state transitions for better orientation tracking.
+    """
+    
+    def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1, gyro_bias_noise=0.01,
+                drift_correction_weight=0.3):
+        super().__init__(dt, process_noise, measurement_noise, gyro_bias_noise, drift_correction_weight)
+        
+        # State: [quaternion (4), gyro_bias (3)]
+        self.state_dim = 7
+        self.measurement_dim = 3
+        
+        # Create EKF
+        self.ekf = kf.ExtendedKalmanFilter(dim_x=self.state_dim, dim_z=self.measurement_dim)
+        
+        # Process noise
+        self.Q = np.eye(self.state_dim) * self.process_noise
+        self.Q[4:, 4:] = np.eye(3) * self.gyro_bias_noise  # Bias noise
+        
+        # Measurement noise
+        self.R = np.eye(self.measurement_dim) * self.measurement_noise
+    
+    def initialize(self, accel):
+        """Initialize filter with first acceleration measurement."""
+        # Estimate gravity direction
+        gravity = -accel / np.linalg.norm(accel)
+        
+        # Find rotation from [0,0,1] to gravity direction
+        v = np.cross([0, 0, 1], gravity)
+        s = np.linalg.norm(v)
+        
+        if s < 1e-10:
+            # Vectors are parallel, no rotation needed
+            quat = np.array([1, 0, 0, 0])  # Identity quaternion
+        else:
+            c = np.dot([0, 0, 1], gravity)
+            v_skew = np.array([
+                [0, -v[2], v[1]],
+                [v[2], 0, -v[0]],
+                [-v[1], v[0], 0]
+            ])
+            
+            rotation_matrix = np.eye(3) + v_skew + v_skew.dot(v_skew) * (1 - c) / (s**2)
+            r = R.from_matrix(rotation_matrix)
+            quat = r.as_quat()
+        
+        # Initialize state [quat, gyro_bias]
+        self.ekf.x = np.zeros(self.state_dim)
+        self.ekf.x[:4] = quat
+        
+        # Initialize covariance
+        self.ekf.P = np.eye(self.state_dim) * 0.1
+        
+        # Set measurement noise
+        self.ekf.R = self.R
+        
+        self.initialized = True
+    
+    def quaternion_update(self, q, omega, dt):
+        """Update quaternion with angular velocity."""
+        omega_norm = np.linalg.norm(omega)
+        
+        if omega_norm < 1e-10:
+            return q
+        
+        axis = omega / omega_norm
+        angle = omega_norm * dt
+        
+        # Quaternion for this rotation
+        quat_delta = np.zeros(4)
+        quat_delta[0] = np.cos(angle/2)
+        quat_delta[1:] = axis * np.sin(angle/2)
+        
+        # Quaternion multiplication
+        result = np.zeros(4)
+        result[0] = q[0]*quat_delta[0] - np.dot(q[1:], quat_delta[1:])
+        result[1:] = q[0]*quat_delta[1:] + quat_delta[0]*q[1:] + np.cross(q[1:], quat_delta[1:])
+        
+        # Normalize
+        return result / np.linalg.norm(result)
+    
+    def state_transition_function(self, x, dt, omega):
+        """
+        State transition function for EKF.
+        
+        Args:
+            x: Current state (quaternion, gyro_bias)
+            dt: Time step
+            omega: Angular velocity
+            
+        Returns:
+            New state
+        """
+        # Extract current quaternion and bias
+        q = x[:4]
+        bias = x[4:]
+        
+        # Correct gyro with bias
+        omega_corrected = omega - bias
         
         # Update quaternion
-        q_new = q + q_dot * dt
-        q_new = self.normalize_quaternion(q_new)
+        q_new = self.quaternion_update(q, omega_corrected, dt)
         
-        # Bias is modeled as constant (slow random walk)
-        b_new = b
+        # State remains the same except for quaternion
+        x_new = np.zeros_like(x)
+        x_new[:4] = q_new
+        x_new[4:] = bias  # Bias model is constant
         
-        # Angular velocity is also modeled as constant (with noise)
-        w_new = w
-        
-        # Linear acceleration is modeled as constant (with noise)
-        a_new = a
-        
-        # Combine updated states
-        x_new = np.concatenate([q_new, w_new, b_new, a_new])
         return x_new
     
-    def state_transition_jacobian(self, x, dt):
-        """
-        Jacobian of state transition function.
+    def state_transition_jacobian(self, x, dt, omega):
+        """Jacobian of state transition function."""
+        # This is a complex calculation for quaternion dynamics
+        # Simplified version that works reasonably well
+        F = np.eye(self.state_dim)
         
-        Args:
-            x: State vector
-            dt: Time step
-            
-        Returns:
-            Jacobian matrix of state transition
-        """
-        # Extract states
-        q = x[0:4]  # quaternion [w, x, y, z]
-        w = x[4:7]  # angular velocity
-        b = x[7:10]  # gyro bias
-        
-        # Corrected angular velocity
-        w_corrected = w - b
-        
-        # Initialize Jacobian
-        F = np.eye(13)
-        
-        # Jacobian of quaternion update with respect to quaternion
-        F[0:4, 0:4] = np.array([
-            [1, -0.5*w_corrected[0]*dt, -0.5*w_corrected[1]*dt, -0.5*w_corrected[2]*dt],
-            [0.5*w_corrected[0]*dt, 1, 0.5*w_corrected[2]*dt, -0.5*w_corrected[1]*dt],
-            [0.5*w_corrected[1]*dt, -0.5*w_corrected[2]*dt, 1, 0.5*w_corrected[0]*dt],
-            [0.5*w_corrected[2]*dt, 0.5*w_corrected[1]*dt, -0.5*w_corrected[0]*dt, 1]
-        ])
-        
-        # Jacobian of quaternion update with respect to angular velocity
-        F[0:4, 4:7] = np.array([
-            [-0.5*q[1]*dt, -0.5*q[2]*dt, -0.5*q[3]*dt],
-            [0.5*q[0]*dt, -0.5*q[3]*dt, 0.5*q[2]*dt],
-            [0.5*q[3]*dt, 0.5*q[0]*dt, -0.5*q[1]*dt],
-            [-0.5*q[2]*dt, 0.5*q[1]*dt, 0.5*q[0]*dt]
-        ])
-        
-        # Jacobian of quaternion update with respect to bias
-        F[0:4, 7:10] = -F[0:4, 4:7]
+        # Effect of gyro bias on quaternion
+        omega_norm = np.linalg.norm(omega)
+        if omega_norm > 1e-10:
+            q = x[:4]
+            # Approximate partial derivatives
+            for i in range(3):
+                # Small perturbation to measure Jacobian
+                delta = np.zeros(3)
+                delta[i] = 0.001
+                
+                # Forward difference approximation
+                x_plus = np.copy(x)
+                x_plus[4+i] += delta[i]
+                
+                f_plus = self.state_transition_function(x_plus, dt, omega)
+                f = self.state_transition_function(x, dt, omega)
+                
+                # Compute partial derivative
+                F[:4, 4+i] = (f_plus[:4] - f[:4]) / delta[i]
         
         return F
     
     def measurement_function(self, x):
         """
-        Nonlinear measurement function - adapted for linear acceleration
+        Measurement function for EKF.
         
-        Args:
-            x: State vector
-            
-        Returns:
-            Expected measurement vector
+        Converts quaternion to expected accelerometer measurement
+        (assuming only gravity when stationary).
         """
-        # Extract states
-        q = x[0:4]      # quaternion [w, x, y, z]
-        w = x[4:7]      # angular velocity
-        a = x[10:13]    # linear acceleration in sensor frame
+        # Extract quaternion
+        q = x[:4]
         
-        # Expected accelerometer reading (linear acceleration)
-        expected_accel = a
+        # Convert quaternion to rotation matrix
+        r = R.from_quat(q)
         
-        # Expected gyroscope reading is just angular velocity
-        expected_gyro = w
+        # Rotate unit gravity vector [0,0,1]
+        gravity_body = r.apply([0, 0, 1])
         
-        # Combine expected measurements
-        z_expected = np.concatenate([expected_accel, expected_gyro])
-        return z_expected
+        return gravity_body
     
     def measurement_jacobian(self, x):
-        """
-        Jacobian of measurement function.
+        """Jacobian of measurement function."""
+        # Simplified version - numerical approximation
+        H = np.zeros((self.measurement_dim, self.state_dim))
         
-        Args:
-            x: State vector
+        # Base measurement
+        z = self.measurement_function(x)
+        
+        # Compute partials for quaternion elements
+        for i in range(4):
+            # Small perturbation
+            delta = 0.001
+            x_plus = np.copy(x)
+            x_plus[i] += delta
             
-        Returns:
-            Jacobian matrix of measurement function
-        """
-        # Initialize measurement Jacobian
-        H = np.zeros((6, 13))
+            # Numerical partial derivative
+            z_plus = self.measurement_function(x_plus)
+            H[:, i] = (z_plus - z) / delta
         
-        # Linear acceleration directly measures accel state
-        H[0:3, 10:13] = np.eye(3)
-        
-        # Gyroscope directly measures angular velocity
-        H[3:6, 4:7] = np.eye(3)
+        # Partials for gyro bias are zero (no direct impact on measurement)
         
         return H
     
-    def update(self, accel, gyro, dt=None):
-        """
-        Update filter with new measurements.
+    def process_step(self, accel, gyro, dt, timestamp=None):
+        """Process one step using EKF."""
+        if not self.initialized:
+            self.initialize(accel)
         
-        Args:
-            accel: Accelerometer measurement (3,)
-            gyro: Gyroscope measurement (3,)
-            dt: Time step (optional)
+        # Set process noise (scales with dt)
+        self.ekf.Q = self.Q * dt
+        
+        # Prediction step
+        self.ekf.predict_x = lambda x, u: self.state_transition_function(x, dt, gyro)
+        self.ekf.F = self.state_transition_jacobian(self.ekf.x, dt, gyro)
+        
+        self.ekf.predict()
+        
+        # Update step if not in high dynamics (acceleration close to g)
+        accel_norm = np.linalg.norm(accel)
+        gravity_norm = 9.81
+        
+        if abs(accel_norm - gravity_norm) < 3.0:  # Threshold for quasi-static assumption
+            # Normalize measurement
+            z = -accel / accel_norm  # Measured gravity direction (negative of acceleration)
             
-        Returns:
-            Tuple of (orientation, filtered_accel)
-        """
-        if dt is None:
-            dt = self.dt
+            # Update with measurement
+            self.ekf.update(z, HJacobian=self.measurement_jacobian, 
+                           Hx=self.measurement_function)
+        
+        # Normalize quaternion
+        self.ekf.x[:4] = self.ekf.x[:4] / np.linalg.norm(self.ekf.x[:4])
+        
+        # Apply drift correction if reference data is available
+        if timestamp is not None and self.use_reference:
+            quat = self.ekf.x[:4]
+            euler = R.from_quat(quat).as_euler('xyz')
             
-        # Measurement vector
-        z = np.concatenate([accel, gyro])
-        
-        # Predict step
-        x_pred = self.state_transition(self.state, dt)
-        F = self.state_transition_jacobian(self.state, dt)
-        self.P = F @ self.P @ F.T + self.Q
-        
-        # Update step
-        z_pred = self.measurement_function(x_pred)
-        H = self.measurement_jacobian(x_pred)
-        
-        y = z - z_pred  # Innovation
-        S = H @ self.P @ H.T + self.R  # Innovation covariance
-        K = self.P @ H.T @ np.linalg.inv(S)  # Kalman gain
-        
-        self.state = x_pred + K @ y
-        self.state[0:4] = self.normalize_quaternion(self.state[0:4])
-        
-        # Joseph form for covariance update (more numerically stable)
-        I = np.eye(len(self.state))
-        self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ self.R @ K.T
-        
-        # Extract orientation as Euler angles
-        orientation = self.quaternion_to_euler(self.state[0:4])
-        
-        # Return orientation and filtered linear acceleration
-        filtered_accel = self.state[10:13]
-        
-        return orientation, filtered_accel
-    
-    def process_sequence(self, accel_seq, gyro_seq, timestamps=None):
-        """
-        Process an entire sequence of IMU data.
-        
-        Args:
-            accel_seq: Accelerometer data (N, 3)
-            gyro_seq: Gyroscope data (N, 3)
-            timestamps: Optional timestamps (N,)
+            # Correct Euler angles
+            corrected_euler = self.apply_drift_correction(euler, timestamp)
             
-        Returns:
-            Augmented data with orientation and derived features
-        """
-        n_samples = len(accel_seq)
-        orientation_seq = np.zeros((n_samples, 3))
-        filtered_accel_seq = np.zeros((n_samples, 3))
-        quat_orientation = np.zeros((n_samples, 4))
-        
-        # Reset filter state
-        self.state = np.zeros(13)
-        self.state[0] = 1.0  # Initial quaternion is identity rotation
-        self.P = np.eye(13) * 0.01
-        self.P[0:4, 0:4] *= 0.1    # Quaternion covariance
-        self.P[4:7, 4:7] *= 1.0    # Angular velocity covariance
-        self.P[7:10, 7:10] *= 0.1  # Bias covariance
-        self.P[10:13, 10:13] *= 5.0  # Linear acceleration covariance
-        
-        # Handle variable time steps
-        if timestamps is not None:
-            dt_values = np.diff(timestamps, prepend=timestamps[0])
-            dt_values[0] = self.dt  # Use default for first sample
-        else:
-            dt_values = np.ones(n_samples) * self.dt
+            # Convert back to quaternion
+            corrected_quat = R.from_euler('xyz', corrected_euler).as_quat()
             
-        for i in range(n_samples):
-            dt = dt_values[i]
-            orientation, filtered_accel = self.update(accel_seq[i], gyro_seq[i], dt)
-            orientation_seq[i] = orientation
-            filtered_accel_seq[i] = filtered_accel
-            quat_orientation[i] = self.state[0:4]  # Store quaternion orientation
+            self.ekf.x[:4] = corrected_quat
         
-        # Calculate derived features
-        accel_mag = np.linalg.norm(accel_seq, axis=1).reshape(-1, 1)  # Original linear accel magnitude
-        gyro_mag = np.linalg.norm(gyro_seq, axis=1).reshape(-1, 1)
+        # Extract orientation for output
+        quat = self.ekf.x[:4]
+        euler = R.from_euler('xyz', R.from_quat(quat).as_euler('xyz')).as_euler('xyz')
         
-        # Calculate jerk (derivative of acceleration)
-        jerk = np.zeros_like(accel_seq)
-        if n_samples > 1:
-            for i in range(1, n_samples):
-                dt = dt_values[i] if timestamps is not None else self.dt
-                if dt > 0:
-                    jerk[i] = (accel_seq[i] - accel_seq[i-1]) / dt
-        jerk_mag = np.linalg.norm(jerk, axis=1).reshape(-1, 1)
+        # Feature vector: accel, gyro, quaternion, euler
+        features = np.concatenate([
+            accel,
+            gyro,
+            quat,
+            euler
+        ])
         
-        # Combine all features into a single array
-        augmented_data = np.hstack((
-            accel_seq,           # Original linear acceleration (3)
-            gyro_seq,            # Original gyroscope (3)
-            filtered_accel_seq,  # Filtered linear acceleration (3)
-            orientation_seq,     # Orientation angles (3)
-            quat_orientation,    # Quaternion orientation (4)
-            accel_mag,           # Magnitude of linear acceleration (1)
-            gyro_mag,            # Magnitude of angular velocity (1)
-            jerk_mag             # Magnitude of jerk (1)
-        ))
-        
-        return augmented_data
+        return self.ekf.x, features
 
-
-class UnscentedKalmanIMU(IMUFusionBase):
+class UnscentedKalmanIMU(BaseKalmanFilter):
     """
-    Unscented Kalman Filter implementation for orientation estimation.
-    Adapted to work with pre-processed linear acceleration data.
-    Uses sigma points to better handle nonlinearities in orientation.
+    Unscented Kalman Filter for IMU fusion.
+    
+    This handles highly nonlinear systems better than EKF.
     """
     
     def __init__(self, dt=1/30.0, process_noise=0.01, measurement_noise=0.1, gyro_bias_noise=0.01,
-                 alpha=0.1, beta=2.0, kappa=0.0):
-        """
-        Initialize Unscented Kalman Filter.
+                drift_correction_weight=0.3):
+        super().__init__(dt, process_noise, measurement_noise, gyro_bias_noise, drift_correction_weight)
         
-        Args:
-            dt: Time step in seconds (default: 1/30 s)
-            process_noise: Process noise variance
-            measurement_noise: Measurement noise variance
-            gyro_bias_noise: Gyroscope bias noise variance
-            alpha: UKF tuning parameter (default: 0.1)
-            beta: UKF tuning parameter (default: 2.0)
-            kappa: UKF tuning parameter (default: 0.0)
-        """
-        super().__init__(dt, process_noise, measurement_noise, gyro_bias_noise)
-        self.name = "Unscented KF"
-        self.alpha = alpha
-        self.beta = beta
-        self.kappa = kappa
+        # State: [quaternion (4), gyro_bias (3)]
+        self.state_dim = 7
+        self.measurement_dim = 3
         
-        # State dimension: [q0,q1,q2,q3,wx,wy,wz,bx,by,bz,ax,ay,az]
-        # (quaternion, angular velocity, gyro bias, linear acceleration)
-        self.dim_x = 13
-        self.dim_z = 6  # Measurement dimension: [ax,ay,az,gx,gy,gz]
+        # Create UKF with Merwe scaled sigma points
+        points = MerweScaledSigmaPoints(
+            n=self.state_dim,
+            alpha=1e-3,
+            beta=2.0,
+            kappa=0.0
+        )
         
-        # Define sigma point calculation parameters
-        points = MerweScaledSigmaPoints(n=self.dim_x, alpha=alpha, beta=beta, kappa=kappa)
+        self.ukf = kf.UnscentedKalmanFilter(
+            dim_x=self.state_dim,
+            dim_z=self.measurement_dim,
+            dt=dt,
+            hx=self.measurement_function,
+            fx=self.state_transition_function,
+            points=points
+        )
         
-        # Create UKF
-        self.filter = UnscentedKalmanFilter(dim_x=self.dim_x, 
-                                           dim_z=self.dim_z,
-                                           dt=self.dt,
-                                           fx=self.state_transition_fn,
-                                           hx=self.measurement_fn,
-                                           points=points)
+        # Process noise
+        self.Q = np.eye(self.state_dim) * self.process_noise
+        self.Q[4:, 4:] = np.eye(3) * self.gyro_bias_noise  # Bias noise
         
-        # Initialize state and covariance
-        self.initialize()
+        # Measurement noise
+        self.R = np.eye(self.measurement_dim) * self.measurement_noise
         
-    def initialize(self):
-        """Initialize UKF state and covariance matrices."""
-        # Initial state: identity quaternion, zero angular velocity, zero bias, zero linear accel
-        self.filter.x = np.zeros(self.dim_x)
-        self.filter.x[0] = 1.0  # w component of quaternion
-        
-        # Initial covariance
-        self.filter.P = np.eye(self.dim_x) * 0.01
-        self.filter.P[0:4, 0:4] *= 0.1      # Quaternion covariance
-        self.filter.P[4:7, 4:7] *= 1.0      # Angular velocity covariance
-        self.filter.P[7:10, 7:10] *= 0.1    # Bias covariance
-        self.filter.P[10:13, 10:13] *= 5.0  # Linear acceleration covariance
-        
-        # Process noise covariance
-        self.filter.Q = np.eye(self.dim_x) * 0.01
-        self.filter.Q[0:4, 0:4] *= 0.01     # Quaternion process noise
-        self.filter.Q[4:7, 4:7] *= self.process_noise  # Angular velocity process noise
-        self.filter.Q[7:10, 7:10] *= self.gyro_bias_noise  # Bias process noise
-        self.filter.Q[10:13, 10:13] *= self.measurement_noise * 5  # Linear accel process noise
-        
-        # Measurement noise covariance
-        self.filter.R = np.eye(self.dim_z) * self.measurement_noise
-        self.filter.R[0:3, 0:3] *= 5.0  # Accelerometer noise
-        self.filter.R[3:6, 3:6] *= 1.0  # Gyroscope noise
-        
-    def normalize_quaternion(self, q):
-        """
-        Normalize quaternion to maintain unit length.
-        
-        Args:
-            q: Quaternion [w, x, y, z]
-            
-        Returns:
-            Normalized quaternion
-        """
-        return q / np.linalg.norm(q)
+        # Save last gyro for state transition
+        self.last_gyro = np.zeros(3)
     
-    def quaternion_to_euler(self, q):
-        """
-        Convert quaternion to Euler angles (roll, pitch, yaw).
+    def initialize(self, accel):
+        """Initialize filter with first acceleration measurement."""
+        # Similar to EKF initialization
+        gravity = -accel / np.linalg.norm(accel)
         
-        Args:
-            q: Quaternion [w, x, y, z]
+        # Find rotation from [0,0,1] to gravity direction
+        v = np.cross([0, 0, 1], gravity)
+        s = np.linalg.norm(v)
+        
+        if s < 1e-10:
+            quat = np.array([1, 0, 0, 0])  # Identity quaternion
+        else:
+            c = np.dot([0, 0, 1], gravity)
+            v_skew = np.array([
+                [0, -v[2], v[1]],
+                [v[2], 0, -v[0]],
+                [-v[1], v[0], 0]
+            ])
             
-        Returns:
-            Euler angles [roll, pitch, yaw]
-        """
-        r = R.from_quat([q[1], q[2], q[3], q[0]])  # scipy uses [x,y,z,w] format
-        return r.as_euler('xyz')
+            rotation_matrix = np.eye(3) + v_skew + v_skew.dot(v_skew) * (1 - c) / (s**2)
+            r = R.from_matrix(rotation_matrix)
+            quat = r.as_quat()
+        
+        # Initialize state [quat, gyro_bias]
+        self.ukf.x = np.zeros(self.state_dim)
+        self.ukf.x[:4] = quat
+        
+        # Initialize covariance
+        self.ukf.P = np.eye(self.state_dim) * 0.1
+        
+        # Set noise matrices
+        self.ukf.Q = self.Q * self.dt
+        self.ukf.R = self.R
+        
+        self.initialized = True
     
-    def state_transition_fn(self, x, dt):
+    def quaternion_update(self, q, omega, dt):
+        """Update quaternion with angular velocity."""
+        omega_norm = np.linalg.norm(omega)
+        
+        if omega_norm < 1e-10:
+            return q
+        
+        axis = omega / omega_norm
+        angle = omega_norm * dt
+        
+        # Quaternion for this rotation
+        quat_delta = np.zeros(4)
+        quat_delta[0] = np.cos(angle/2)
+        quat_delta[1:] = axis * np.sin(angle/2)
+        
+        # Quaternion multiplication
+        result = np.zeros(4)
+        result[0] = q[0]*quat_delta[0] - np.dot(q[1:], quat_delta[1:])
+        result[1:] = q[0]*quat_delta[1:] + quat_delta[0]*q[1:] + np.cross(q[1:], quat_delta[1:])
+        
+        # Normalize
+        return result / np.linalg.norm(result)
+    
+    def state_transition_function(self, x, dt):
         """
         State transition function for UKF.
         
         Args:
-            x: State vector
+            x: Current state (quaternion, gyro_bias)
             dt: Time step
             
         Returns:
-            Updated state vector
+            New state
         """
-        # Extract states
-        q = x[0:4]    # quaternion [w, x, y, z]
-        w = x[4:7]    # angular velocity
-        b = x[7:10]   # gyro bias
-        a = x[10:13]  # linear acceleration
+        # Extract current quaternion and bias
+        q = x[:4]
+        bias = x[4:]
         
-        # Corrected angular velocity
-        w_corrected = w - b
+        # Use saved gyro - UKF passes dt but not additional parameters
+        omega = self.last_gyro
         
-        # Quaternion derivative
-        q_dot = 0.5 * np.array([
-            -q[1]*w_corrected[0] - q[2]*w_corrected[1] - q[3]*w_corrected[2],
-            q[0]*w_corrected[0] + q[2]*w_corrected[2] - q[3]*w_corrected[1],
-            q[0]*w_corrected[1] + q[3]*w_corrected[0] - q[1]*w_corrected[2],
-            q[0]*w_corrected[2] + q[1]*w_corrected[1] - q[2]*w_corrected[0]
-        ])
+        # Correct gyro with bias
+        omega_corrected = omega - bias
         
         # Update quaternion
-        q_new = q + q_dot * dt
-        q_new = self.normalize_quaternion(q_new)
+        q_new = self.quaternion_update(q, omega_corrected, dt)
         
-        # Bias is modeled as constant (slow random walk)
-        b_new = b
+        # State remains the same except for quaternion
+        x_new = np.zeros_like(x)
+        x_new[:4] = q_new
+        x_new[4:] = bias  # Bias model is constant
         
-        # Angular velocity is also modeled as constant (with noise)
-        w_new = w
-        
-        # Linear acceleration is modeled as constant (with noise)
-        a_new = a
-        
-        # Combine updated states
-        x_new = np.concatenate([q_new, w_new, b_new, a_new])
         return x_new
     
-    def measurement_fn(self, x):
+    def measurement_function(self, x):
         """
-        Measurement function for UKF - adapted for linear acceleration
+        Measurement function for UKF.
         
-        Args:
-            x: State vector
-            
-        Returns:
-            Expected measurement vector
+        Converts quaternion to expected accelerometer measurement.
         """
-        # Extract states
-        w = x[4:7]      # angular velocity
-        a = x[10:13]    # linear acceleration in sensor frame
+        # Extract quaternion
+        q = x[:4]
         
-        # Expected accelerometer reading is the linear acceleration state
-        expected_accel = a
+        # Convert quaternion to rotation matrix
+        r = R.from_quat(q)
         
-        # Expected gyroscope reading is just angular velocity
-        expected_gyro = w
+        # Rotate unit gravity vector [0,0,1]
+        gravity_body = r.apply([0, 0, 1])
         
-        # Combine expected measurements
-        z_expected = np.concatenate([expected_accel, expected_gyro])
-        return z_expected
+        return gravity_body
     
-    def update(self, accel, gyro, dt=None):
-        """
-        Update filter with new measurements.
+    def process_step(self, accel, gyro, dt, timestamp=None):
+        """Process one step using UKF."""
+        if not self.initialized:
+            self.initialize(accel)
         
-        Args:
-            accel: Accelerometer measurement (3,)
-            gyro: Gyroscope measurement (3,)
-            dt: Time step (optional)
+        # Set process noise (scales with dt)
+        self.ukf.Q = self.Q * dt
+        
+        # Save gyro for state transition function
+        self.last_gyro = gyro
+        
+        # Predict step
+        self.ukf.predict(dt=dt)
+        
+        # Update step if not in high dynamics (acceleration close to g)
+        accel_norm = np.linalg.norm(accel)
+        gravity_norm = 9.81
+        
+        if abs(accel_norm - gravity_norm) < 3.0:  # Threshold for quasi-static assumption
+            # Normalize measurement
+            z = -accel / accel_norm  # Measured gravity direction (negative of acceleration)
             
-        Returns:
-            Tuple of (orientation, filtered_accel)
-        """
-        if dt is not None:
-            self.filter.dt = dt
+            # Update with measurement
+            self.ukf.update(z)
+        
+        # Normalize quaternion
+        self.ukf.x[:4] = self.ukf.x[:4] / np.linalg.norm(self.ukf.x[:4])
+        
+        # Apply drift correction if reference data is available
+        if timestamp is not None and self.use_reference:
+            quat = self.ukf.x[:4]
+            euler = R.from_quat(quat).as_euler('xyz')
             
-        # Measurement vector - using linear acceleration directly
-        z = np.concatenate([accel, gyro])
-        
-        # Predict and update
-        self.filter.predict()
-        self.filter.update(z)
-        
-        # Normalize quaternion part of state
-        self.filter.x[0:4] = self.normalize_quaternion(self.filter.x[0:4])
-        
-        # Extract orientation
-        orientation = self.quaternion_to_euler(self.filter.x[0:4])
-        
-        # Return filtered linear acceleration directly
-        filtered_accel = self.filter.x[10:13]
-        
-        return orientation, filtered_accel
-    
-    def process_sequence(self, accel_seq, gyro_seq, timestamps=None):
-        """
-        Process an entire sequence of IMU data with UKF.
-        
-        Args:
-            accel_seq: Accelerometer data (N, 3)
-            gyro_seq: Gyroscope data (N, 3)
-            timestamps: Optional timestamps (N,)
+            # Correct Euler angles
+            corrected_euler = self.apply_drift_correction(euler, timestamp)
             
-        Returns:
-            Augmented data with orientation and derived features
-        """
-        n_samples = len(accel_seq)
-        orientation_seq = np.zeros((n_samples, 3))
-        filtered_accel_seq = np.zeros((n_samples, 3))
-        quat_orientation = np.zeros((n_samples, 4))
-        
-        # Reset filter state
-        self.initialize()
-        
-        # Handle variable time steps
-        if timestamps is not None:
-            dt_values = np.diff(timestamps, prepend=timestamps[0])
-            dt_values[0] = self.dt  # Use default for first sample
-        else:
-            dt_values = np.ones(n_samples) * self.dt
+            # Convert back to quaternion
+            corrected_quat = R.from_euler('xyz', corrected_euler).as_quat()
             
-        for i in range(n_samples):
-            dt = dt_values[i]
-            orientation, filtered_accel = self.update(accel_seq[i], gyro_seq[i], dt)
-            orientation_seq[i] = orientation
-            filtered_accel_seq[i] = filtered_accel
-            quat_orientation[i] = self.filter.x[0:4]  # Store quaternion orientation
+            self.ukf.x[:4] = corrected_quat
         
-        # Calculate derived features
-        accel_mag = np.linalg.norm(accel_seq, axis=1).reshape(-1, 1)  # Original linear accel magnitude
-        gyro_mag = np.linalg.norm(gyro_seq, axis=1).reshape(-1, 1)
+        # Extract orientation for output
+        quat = self.ukf.x[:4]
+        euler = R.from_quat(quat).as_euler('xyz')
         
-        # Calculate jerk (derivative of acceleration)
-        jerk = np.zeros_like(accel_seq)
-        if n_samples > 1:
-            for i in range(1, n_samples):
-                dt = dt_values[i] if timestamps is not None else self.dt
-                if dt > 0:
-                    jerk[i] = (accel_seq[i] - accel_seq[i-1]) / dt
-        jerk_mag = np.linalg.norm(jerk, axis=1).reshape(-1, 1)
+        # Feature vector: accel, gyro, quaternion, euler
+        features = np.concatenate([
+            accel,
+            gyro,
+            quat,
+            euler
+        ])
         
-        # Calculate angular acceleration
-        angular_accel = np.zeros_like(gyro_seq)
-        if n_samples > 1:
-            for i in range(1, n_samples):
-                dt = dt_values[i] if timestamps is not None else self.dt
-                if dt > 0:
-                    angular_accel[i] = (gyro_seq[i] - gyro_seq[i-1]) / dt
-        angular_accel_mag = np.linalg.norm(angular_accel, axis=1).reshape(-1, 1)
-        
-        # Combine all features into a single array
-        augmented_data = np.hstack((
-            accel_seq,           # Original linear acceleration (3)
-            gyro_seq,            # Original gyroscope (3)
-            filtered_accel_seq,  # Filtered linear acceleration (3)
-            orientation_seq,     # Orientation angles (3)
-            quat_orientation,    # Quaternion orientation (4)
-            accel_mag,           # Magnitude of linear acceleration (1)
-            gyro_mag,            # Magnitude of angular velocity (1)
-            jerk_mag,            # Magnitude of jerk (1)
-            angular_accel_mag    # Magnitude of angular acceleration (1)
-        ))
-        
-        return augmented_data
+        return self.ukf.x, features
 
-
-def calibrate_filter(accel, gyro, skeleton, filter_type='ekf', timestamps=None, wrist_idx=9, num_joints=32):
+def extract_orientation_from_skeleton(skeleton_data, num_joints=32, joint_dim=3):
     """
-    Calibrate filter parameters by optimizing against skeleton ground truth.
+    Extract orientation information from skeleton joint positions.
+    
+    Args:
+        skeleton_data: Skeleton joint positions (n_frames, num_joints*joint_dim)
+        num_joints: Number of joints in skeleton
+        joint_dim: Dimension of each joint (typically 3 for XYZ)
+    
+    Returns:
+        Orientation as Euler angles (n_frames, 3)
+    """
+    n_frames = skeleton_data.shape[0]
+    orientations = np.zeros((n_frames, 3))
+    
+    # Indices for key joints (adapt to your skeleton structure)
+    # These are example indices - adjust based on your actual skeleton format
+    NECK = 2
+    SPINE = 1
+    RIGHT_SHOULDER = 8
+    LEFT_SHOULDER = 4
+    RIGHT_HIP = 12
+    LEFT_HIP = 16
+    
+    for i in range(n_frames):
+        # Get joint positions
+        joints = skeleton_data[i].reshape(num_joints, joint_dim)
+        
+        # Use spine and shoulders to compute orientation
+        if num_joints > max(NECK, SPINE, RIGHT_SHOULDER, LEFT_SHOULDER, RIGHT_HIP, LEFT_HIP):
+            # Calculate body plane normal vector (cross product of shoulders vector and spine vector)
+            shoulder_vector = joints[RIGHT_SHOULDER] - joints[LEFT_SHOULDER]
+            spine_vector = joints[NECK] - joints[SPINE]
+            
+            # Calculate roll (around forward axis)
+            # Roll is the angle between shoulders and horizonal plane
+            roll = np.arctan2(shoulder_vector[1], shoulder_vector[0])
+            
+            # Calculate pitch (around side axis)
+            # Pitch is the angle between spine and vertical axis
+            pitch = np.arctan2(spine_vector[0], spine_vector[2])
+            
+            # Calculate yaw (around vertical axis)
+            # Use hip vector or shoulders vector
+            yaw = np.arctan2(shoulder_vector[2], shoulder_vector[0])
+            
+            orientations[i] = [roll, pitch, yaw]
+        
+    return orientations
+
+def calibrate_filter(accel, gyro, skeleton, filter_type='ekf', timestamps=None):
+    """
+    Calibrate filter parameters using skeleton ground truth.
     
     Args:
         accel: Accelerometer data (N, 3)
-        gyro: Gyroscope data (N, 3)
-        skeleton: Skeleton data (N, 3*num_joints)
-        filter_type: Filter type ('standard', 'ekf', 'ukf')
+        gyro: Gyroscope data (N, 3) or None
+        skeleton: Skeleton data (N, num_joints*3)
+        filter_type: Type of filter to calibrate ('standard', 'ekf', 'ukf')
         timestamps: Optional timestamps (N,)
-        wrist_idx: Index of wrist joint in skeleton (default: 9)
-        num_joints: Number of joints in skeleton (default: 32)
-        
-    Returns:
-        Tuple of (calibrated_filter, [process_noise, measurement_noise, gyro_bias_noise])
-    """
-    # Extract wrist orientation from skeleton
-    ref_orientation = extract_orientation_from_skeleton(skeleton, num_joints, wrist_idx)
     
-    # Define optimization objective function
-    def objective(params):
-        # Extract parameters
+    Returns:
+        Tuple of (calibrated_filter, optimal_parameters)
+    """
+    from scipy.optimize import minimize
+    
+    # Extract orientation from skeleton
+    skeleton_orientation = extract_orientation_from_skeleton(skeleton)
+    
+    # Define error function to minimize
+    def error_function(params):
+        # Create filter with trial parameters
         process_noise, measurement_noise, gyro_bias_noise = params
         
-        # Create filter
         if filter_type == 'standard':
-            filt = StandardKalmanIMU(
+            test_filter = StandardKalmanIMU(
                 process_noise=process_noise,
                 measurement_noise=measurement_noise,
                 gyro_bias_noise=gyro_bias_noise
             )
         elif filter_type == 'ekf':
-            filt = ExtendedKalmanIMU(
+            test_filter = ExtendedKalmanIMU(
                 process_noise=process_noise,
                 measurement_noise=measurement_noise,
                 gyro_bias_noise=gyro_bias_noise
             )
-        else:  # ukf
-            filt = UnscentedKalmanIMU(
+        else:  # 'ukf'
+            test_filter = UnscentedKalmanIMU(
                 process_noise=process_noise,
                 measurement_noise=measurement_noise,
                 gyro_bias_noise=gyro_bias_noise
             )
         
-        # Process sequence
-        n_samples = min(len(accel), len(gyro), len(ref_orientation))
-        orientations = np.zeros((n_samples, 3))
-        
-        # Handle timestamps
-        if timestamps is not None and len(timestamps) >= n_samples:
-            dt_values = np.diff(timestamps[:n_samples], prepend=timestamps[0])
+        # Process data with trial filter
+        if gyro is None:
+            # If no gyro, use zeros
+            gyro_data = np.zeros_like(accel)
         else:
-            dt_values = np.ones(n_samples) * 1/30.0
+            gyro_data = gyro
+            
+        # Process a subset for efficiency
+        test_size = min(len(accel), 1000)
+        sample_indices = np.linspace(0, len(accel)-1, test_size).astype(int)
         
-        # Run filter
-        filt.reset()
-        for i in range(n_samples):
-            orientation, _ = filt.update(accel[i], gyro[i], dt_values[i])
-            orientations[i] = orientation
+        accel_sample = accel[sample_indices]
+        gyro_sample = gyro_data[sample_indices]
+        timestamps_sample = timestamps[sample_indices] if timestamps is not None else None
+        skeleton_sample = skeleton_orientation[sample_indices]
         
-        # Calculate error (MSE)
-        error = np.mean(np.sum((orientations - ref_orientation[:n_samples])**2, axis=1))
+        output = test_filter.process_sequence(accel_sample, gyro_sample, timestamps_sample)
+        
+        # Extract estimated orientation
+        estimated_orientation = output[:, 10:]  # Last 3 values are Euler angles
+        
+        # Compute error with skeleton orientation
+        error = np.mean(np.sum((estimated_orientation - skeleton_sample)**2, axis=1))
+        
         return error
     
     # Initial parameter guess
-    initial_guess = [0.01, 0.1, 0.01]
+    initial_params = np.array([0.01, 0.1, 0.01])
     
     # Parameter bounds
     bounds = [(0.001, 0.1), (0.01, 1.0), (0.001, 0.1)]
     
-    # Optimize
-    result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
+    # Minimize error
+    result = minimize(
+        error_function,
+        initial_params,
+        bounds=bounds,
+        method='L-BFGS-B'
+    )
     
-    # Get optimal parameters
-    optimal_params = result.x
+    # Create final filter with optimal parameters
+    process_noise, measurement_noise, gyro_bias_noise = result.x
     
-    # Create calibrated filter
     if filter_type == 'standard':
-        calibrated_filter = StandardKalmanIMU(
-            process_noise=optimal_params[0],
-            measurement_noise=optimal_params[1],
-            gyro_bias_noise=optimal_params[2]
+        optimal_filter = StandardKalmanIMU(
+            process_noise=process_noise,
+            measurement_noise=measurement_noise,
+            gyro_bias_noise=gyro_bias_noise
         )
     elif filter_type == 'ekf':
-        calibrated_filter = ExtendedKalmanIMU(
-            process_noise=optimal_params[0],
-            measurement_noise=optimal_params[1],
-            gyro_bias_noise=optimal_params[2]
+        optimal_filter = ExtendedKalmanIMU(
+            process_noise=process_noise,
+            measurement_noise=measurement_noise,
+            gyro_bias_noise=gyro_bias_noise
         )
-    else:  # ukf
-        calibrated_filter = UnscentedKalmanIMU(
-            process_noise=optimal_params[0],
-            measurement_noise=optimal_params[1],
-            gyro_bias_noise=optimal_params[2]
+    else:  # 'ukf'
+        optimal_filter = UnscentedKalmanIMU(
+            process_noise=process_noise,
+            measurement_noise=measurement_noise,
+            gyro_bias_noise=gyro_bias_noise
         )
     
-    return calibrated_filter, optimal_params
+    print(f"Calibrated {filter_type} parameters: process_noise={process_noise:.6f}, "
+          f"measurement_noise={measurement_noise:.6f}, gyro_bias_noise={gyro_bias_noise:.6f}")
+    
+    return optimal_filter, result.x
 
-
-def extract_orientation_from_skeleton(skeleton_data, num_joints=32, wrist_idx=9):
+def robust_align_modalities(imu_data, skel_data, timestamps, method='dtw', wrist_idx=9):
     """
-    Extract orientation from skeleton data.
+    Align IMU and skeleton data using various methods.
     
     Args:
-        skeleton_data: Skeleton data (N, 3*num_joints)
-        num_joints: Number of joints in skeleton (default: 32)
-        wrist_idx: Index of wrist joint (default: 9)
-        
-    Returns:
-        Orientation angles (N, 3)
-    """
-    n_samples = skeleton_data.shape[0]
-    
-    # Reshape to (N, num_joints, 3) for easier access
-    if skeleton_data.shape[1] == 3 * num_joints:
-        skel_reshaped = skeleton_data.reshape(n_samples, num_joints, 3)
-    else:
-        raise ValueError(f"Unexpected skeleton data shape: {skeleton_data.shape}")
-    
-    # Get wrist position
-    wrist_pos = skel_reshaped[:, wrist_idx, :]
-    
-    # Calculate orientations using wrist motion
-    orientations = np.zeros((n_samples, 3))
-    
-    # Simple approach: use consecutive positions to estimate direction
-    if n_samples > 1:
-        for i in range(1, n_samples):
-            delta = wrist_pos[i] - wrist_pos[i-1]
-            
-            # Calculate roll, pitch, yaw based on movement direction
-            if np.linalg.norm(delta) > 1e-6:
-                # Normalize
-                delta = delta / np.linalg.norm(delta)
-                
-                # Calculate angles (simplified)
-                pitch = np.arcsin(-delta[1])  # Elevation angle
-                yaw = np.arctan2(delta[0], delta[2])  # Azimuth angle
-                
-                # Roll is harder to estimate from position only
-                # Here's a simplified approach based on wrist position relative to body
-                # In a real app, you'd use more joints for a better estimate
-                roll = 0.0  # Default
-                
-                orientations[i] = [roll, pitch, yaw]
-    
-    return orientations
-
-
-def robust_align_modalities(imu_data, skel_data, imu_ts, skel_fps=30.0, method='dtw', wrist_idx=9):
-    """
-    Align IMU (watch) and skeleton data using DTW or other methods.
-    
-    Args:
-        imu_data: Array of shape (n_imu, 4+) with IMU data (time at index 0)
-        skel_data: Array of shape (n_skel, 1+96) with skeleton data (time at index 0)
-        imu_ts: Array of shape (n_imu,) with IMU timestamps
-        skel_fps: Frame rate of skeleton data (default: 30.0 Hz)
-        method: Alignment method ('dtw', 'simple')
-        wrist_idx: Index of wrist joint to align with watch data (default: 9)
+        imu_data: IMU data [accel/gyro values, no timestamps] (N, features)
+        skel_data: Skeleton data (M, features)
+        timestamps: IMU timestamps (N,)
+        method: Alignment method ('dtw', 'interpolation', 'crop')
+        wrist_idx: Index of wrist joint (to align with watch data)
         
     Returns:
         Tuple of (aligned_imu, aligned_skel, aligned_timestamps)
     """
     if imu_data.shape[0] == 0 or skel_data.shape[0] == 0:
+        # Return empty arrays if either input is empty
         return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
-    
-    # Extract skeleton wrist position for alignment
-    skel_cols = skel_data.shape[1]
-    joint_cols = 3  # x, y, z per joint
-    
-    if skel_cols >= 96 + 1:  # Time column + 96 joint coordinates (32 joints * 3)
-        wrist_start_col = 1 + wrist_idx * joint_cols  # +1 for time column
-        wrist_end_col = wrist_start_col + joint_cols
-        
-        # Extract wrist position from skeleton data
-        wrist_pos = skel_data[:, wrist_start_col:wrist_end_col]
-        
-        # Calculate wrist velocity (magnitude)
-        wrist_vel = np.zeros(skel_data.shape[0])
-        for i in range(1, skel_data.shape[0]):
-            dt = (skel_data[i, 0] - skel_data[i-1, 0]) if skel_data.shape[1] > 96 else 1.0/skel_fps
-            if dt == 0:
-                dt = 1.0/skel_fps
-            wrist_vel[i] = np.linalg.norm(wrist_pos[i] - wrist_pos[i-1]) / dt
-    else:
-        # Fallback if skeleton data doesn't match expected format
-        print("Warning: Skeleton data doesn't have expected number of columns for wrist extraction")
-        wrist_vel = np.ones(skel_data.shape[0])
-    
-    # Calculate IMU total acceleration magnitude
-    imu_mag = np.linalg.norm(imu_data[:, 1:4], axis=1)
     
     if method == 'dtw':
         try:
-            # Normalize sequences
-            norm_imu_mag = (imu_mag - np.mean(imu_mag)) / (np.std(imu_mag) + 1e-6)
-            norm_wrist_vel = (wrist_vel - np.mean(wrist_vel)) / (np.std(wrist_vel) + 1e-6)
+            from dtaidistance import dtw
             
-            # Calculate DTW path
-            path = dtw.warping_path(norm_imu_mag, norm_wrist_vel)
+            # Extract wrist movement from skeleton for alignment
+            if skel_data.shape[1] >= 96:  # Full skeleton
+                # Extract wrist joint (assuming XYZ format for each joint)
+                wrist_start_idx = wrist_idx * 3
+                wrist_xyz = skel_data[:, wrist_start_idx:wrist_start_idx+3]
+                
+                # Calculate wrist velocity (magnitude)
+                wrist_vel = np.zeros(skel_data.shape[0])
+                for i in range(1, skel_data.shape[0]):
+                    dt = 1/30.0  # Assuming 30fps for skeleton
+                    wrist_vel[i] = np.linalg.norm(wrist_xyz[i] - wrist_xyz[i-1]) / dt
+                
+                # Calculate IMU total acceleration magnitude for comparison
+                if imu_data.shape[1] >= 3:  # At least XYZ acceleration
+                    imu_mag = np.linalg.norm(imu_data[:, :3], axis=1)
+                else:
+                    imu_mag = imu_data[:, 0]  # Use first column if fewer dimensions
+                
+                # Normalize sequences for comparison
+                norm_imu = (imu_mag - np.mean(imu_mag)) / (np.std(imu_mag) + 1e-6)
+                norm_wrist = (wrist_vel - np.mean(wrist_vel)) / (np.std(wrist_vel) + 1e-6)
+                
+                # Compute DTW path
+                path = dtw.warping_path(norm_imu, norm_wrist)
+                
+                # Extract aligned indices
+                imu_idx, skel_idx = zip(*path)
+                
+                # Remove duplicates while preserving order
+                imu_unique = []
+                skel_unique = []
+                seen_imu = set()
+                seen_skel = set()
+                
+                for i, s in zip(imu_idx, skel_idx):
+                    if i not in seen_imu:
+                        imu_unique.append(i)
+                        seen_imu.add(i)
+                    if s not in seen_skel:
+                        skel_unique.append(s)
+                        seen_skel.add(s)
+                
+                # Create aligned arrays
+                aligned_imu = imu_data[imu_unique]
+                aligned_skel = skel_data[skel_unique]
+                aligned_ts = timestamps[imu_unique]
+                
+                return aligned_imu, aligned_skel, aligned_ts
+            else:
+                # Fall back to interpolation if skeleton format unexpected
+                method = 'interpolation'
+        except ImportError:
+            print("DTW package not found, falling back to interpolation")
+            method = 'interpolation'
+        except Exception as e:
+            print(f"DTW alignment failed: {e}, falling back to interpolation")
+            method = 'interpolation'
+    
+    if method == 'interpolation':
+        try:
+            # Generate timestamps for skeleton (assuming 30fps)
+            skel_timestamps = np.arange(skel_data.shape[0]) / 30.0
             
-            # Extract aligned indices
-            imu_idx, skel_idx = zip(*path)
+            # Find common time range
+            t_min = max(timestamps[0], skel_timestamps[0])
+            t_max = min(timestamps[-1], skel_timestamps[-1])
             
-            # Remove duplicates while preserving order
-            imu_unique_idx = []
-            skel_unique_idx = []
-            seen_imu = set()
-            seen_skel = set()
+            # Ensure sufficient overlap
+            if t_max <= t_min:
+                print("No time overlap between modalities")
+                return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
             
-            for i, s in zip(imu_idx, skel_idx):
-                if i not in seen_imu:
-                    imu_unique_idx.append(i)
-                    seen_imu.add(i)
-                if s not in seen_skel:
-                    skel_unique_idx.append(s)
-                    seen_skel.add(s)
+            # Filter IMU data to common range
+            imu_mask = (timestamps >= t_min) & (timestamps <= t_max)
+            if np.sum(imu_mask) < 10:  # Need at least 10 points
+                print("Insufficient IMU data in common time range")
+                return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
             
-            # Create aligned arrays
-            aligned_imu = imu_data[imu_unique_idx]
-            aligned_skel = skel_data[skel_unique_idx]
-            aligned_ts = imu_ts[imu_unique_idx]
+            filtered_imu = imu_data[imu_mask]
+            filtered_ts = timestamps[imu_mask]
             
-            return aligned_imu, aligned_skel, aligned_ts
+            # Interpolate skeleton data to IMU timestamps
+            interp_func = interp1d(
+                skel_timestamps,
+                skel_data,
+                axis=0,
+                bounds_error=False,
+                fill_value="extrapolate"
+            )
+            
+            interp_skel = interp_func(filtered_ts)
+            
+            return filtered_imu, interp_skel, filtered_ts
             
         except Exception as e:
-            print(f"DTW alignment failed: {e}, falling back to simple alignment")
-            method = 'simple'
+            print(f"Interpolation failed: {e}, falling back to crop")
+            method = 'crop'
     
-    if method == 'simple':
-        # Simple approach: use the smaller length
-        length = min(imu_data.shape[0], skel_data.shape[0])
-        if length < 10:
+    if method == 'crop':
+        # Simple approach - use common length
+        min_len = min(imu_data.shape[0], skel_data.shape[0])
+        
+        if min_len < 10:  # Need at least 10 points
+            print("Insufficient common data length")
             return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
         
-        aligned_imu = imu_data[:length]
-        aligned_skel = skel_data[:length]
-        aligned_ts = imu_ts[:length]
-        
-        return aligned_imu, aligned_skel, aligned_ts
-
-
-def compare_kalman_filters(accel_seq, gyro_seq, timestamps=None, window_size_sec=4.0, stride_sec=1.0):
-    """
-    Compare Standard, Extended, and Unscented Kalman filters on the same data.
+        return imu_data[:min_len], skel_data[:min_len], timestamps[:min_len]
     
-    Args:
-        accel_seq: Accelerometer data (N, 3)
-        gyro_seq: Gyroscope data (N, 3)
-        timestamps: Optional timestamps (N,)
-        window_size_sec: Window size in seconds for segmentation
-        stride_sec: Stride size in seconds for segmentation
-        
-    Returns:
-        Dictionary with filter results
-    """
-    # Create filters
-    standard_kf = StandardKalmanIMU()
-    ekf = ExtendedKalmanIMU()
-    ukf = UnscentedKalmanIMU()
-    
-    # Process sequences
-    standard_result = standard_kf.process_sequence(accel_seq, gyro_seq, timestamps)
-    ekf_result = ekf.process_sequence(accel_seq, gyro_seq, timestamps)
-    ukf_result = ukf.process_sequence(accel_seq, gyro_seq, timestamps)
-    
-    # Extract orientations
-    if timestamps is None:
-        timestamps = np.arange(len(accel_seq)) / 30.0  # Assume 30 Hz
-    
-    standard_orientation = standard_result[:, 3:6]  # Orientation at indices 3-5
-    ekf_orientation = ekf_result[:, 3:6]
-    ukf_orientation = ukf_result[:, 3:6]
-    
-    # Extract quaternions
-    standard_quat = standard_result[:, 6:10]  # Quaternion at indices 6-9
-    ekf_quat = ekf_result[:, 6:10]
-    ukf_quat = ukf_result[:, 6:10]
-    
-    # Create windows for analysis
-    def create_windows(data, ts, window_size, stride):
-        windows = []
-        window_ts = []
-        
-        if len(ts) == 0:
-            return windows, window_ts
-        
-        start_time = ts[0]
-        end_time = ts[-1]
-        
-        t = start_time
-        while t + window_size <= end_time:
-            # Find indices within window
-            indices = (ts >= t) & (ts < t + window_size)
-            
-            if np.sum(indices) > 0:
-                windows.append(data[indices])
-                window_ts.append(ts[indices])
-            
-            t += stride
-        
-        return windows, window_ts
-    
-    # Create windows for each result
-    standard_windows, window_ts = create_windows(standard_result, timestamps, window_size_sec, stride_sec)
-    ekf_windows, _ = create_windows(ekf_result, timestamps, window_size_sec, stride_sec)
-    ukf_windows, _ = create_windows(ukf_result, timestamps, window_size_sec, stride_sec)
-    
-    # Calculate smoothness metric (average angular jerk)
-    def calc_smoothness(orientation_windows, ts_windows):
-        smoothness = []
-        
-        for i, (window, ts) in enumerate(zip(orientation_windows, ts_windows)):
-            # Get orientation part
-            orientation = window[:, 3:6]
-            
-            # Calculate angular jerk (derivative of angular acceleration)
-            jerk = np.zeros_like(orientation)
-            if len(orientation) > 2:
-                for j in range(2, len(orientation)):
-                    dt1 = ts[j] - ts[j-1]
-                    dt2 = ts[j-1] - ts[j-2]
-                    if dt1 > 0 and dt2 > 0:
-                        acc1 = (orientation[j] - orientation[j-1]) / dt1
-                        acc2 = (orientation[j-1] - orientation[j-2]) / dt2
-                        jerk[j] = (acc1 - acc2) / ((dt1 + dt2) / 2)
-            
-            # RMS jerk magnitude
-            jerk_mag = np.linalg.norm(jerk, axis=1)
-            rms_jerk = np.sqrt(np.mean(jerk_mag**2))
-            
-            smoothness.append(rms_jerk)
-        
-        return np.mean(smoothness) if smoothness else 0
-    
-    # Calculate feature statistics
-    def calc_statistics(windows):
-        # If no windows, return empty stats
-        if not windows:
-            return {
-                'mean': None,
-                'std': None,
-                'range': None,
-                'features': None
-            }
-        
-        # Concatenate all windows
-        all_data = np.vstack(windows)
-        
-        # Calculate statistics for each feature
-        mean = np.mean(all_data, axis=0)
-        std = np.std(all_data, axis=0)
-        min_val = np.min(all_data, axis=0)
-        max_val = np.max(all_data, axis=0)
-        feature_range = max_val - min_val
-        
-        return {
-            'mean': mean,
-            'std': std,
-            'range': feature_range,
-            'features': all_data
-        }
-    
-    # Calculate smoothness
-    standard_smoothness = calc_smoothness(standard_windows, window_ts)
-    ekf_smoothness = calc_smoothness(ekf_windows, window_ts)
-    ukf_smoothness = calc_smoothness(ukf_windows, window_ts)
-    
-    # Calculate statistics
-    standard_stats = calc_statistics(standard_windows)
-    ekf_stats = calc_statistics(ekf_windows)
-    ukf_stats = calc_statistics(ukf_windows)
-    
-    # Compare computation time (on a small batch for fairness)
-    num_samples = min(1000, len(accel_seq))
-    
-    start_time = time.time()
-    standard_kf.process_sequence(accel_seq[:num_samples], gyro_seq[:num_samples], 
-                              None if timestamps is None else timestamps[:num_samples])
-    standard_time = time.time() - start_time
-    
-    start_time = time.time()
-    ekf.process_sequence(accel_seq[:num_samples], gyro_seq[:num_samples], 
-                      None if timestamps is None else timestamps[:num_samples])
-    ekf_time = time.time() - start_time
-    
-    start_time = time.time()
-    ukf.process_sequence(accel_seq[:num_samples], gyro_seq[:num_samples], 
-                      None if timestamps is None else timestamps[:num_samples])
-    ukf_time = time.time() - start_time
-    
-    # Return comparison results
-    return {
-        'standard_kf': {
-            'orientation': standard_orientation,
-            'quaternion': standard_quat,
-            'windows': standard_windows,
-            'stats': standard_stats,
-            'smoothness': standard_smoothness,
-            'time': standard_time,
-            'size': standard_result.shape[1]
-        },
-        'extended_kf': {
-            'orientation': ekf_orientation,
-            'quaternion': ekf_quat,
-            'windows': ekf_windows,
-            'stats': ekf_stats,
-            'smoothness': ekf_smoothness,
-            'time': ekf_time,
-            'size': ekf_result.shape[1]
-        },
-        'unscented_kf': {
-            'orientation': ukf_orientation,
-            'quaternion': ukf_quat,
-            'windows': ukf_windows,
-            'stats': ukf_stats,
-            'smoothness': ukf_smoothness,
-            'time': ukf_time,
-            'size': ukf_result.shape[1]
-        }
-    }
+    # If we reach here, all methods failed
+    print(f"All alignment methods failed for method {method}")
+    return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0)
