@@ -1,6 +1,6 @@
 """
-Base quaternion processing utilities for IMU data.
-Provides functions for processing IMU data with quaternion-based orientation.
+Quaternion-based processor for the SmartFallMM dataset.
+Extends base.py with orientation-specific functionality.
 """
 
 import re
@@ -11,10 +11,15 @@ import os
 from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as R
 from scipy.signal import medfilt
+import logging
+
+logger = logging.getLogger(__name__)
 
 def parse_watch_csv(file_path: str):
     """
-    Parse watch CSV with variable sampling rate.
+    Parse watch CSV => shape (N,4): [time_elapsed, x, y, z].
+    If first col is datetime, convert to seconds from first sample.
+    If first col is already numeric, subtract first value so it becomes time_elapsed=0..N.
     
     Args:
         file_path: Path to CSV file with format [time, x, y, z]

@@ -1,18 +1,15 @@
-# utils/enhanced_alignment.py
+"""
+Enhanced alignment module for SmartFallMM.
+Provides robust alignment between different modalities with different sampling rates.
+"""
 
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.signal import find_peaks
 import logging
-from dtaidistance import dtw  # You may need to install this package
+import traceback
 
-logger = logging.getLogger("ModalityAlignment")
-
-def create_skeleton_timestamps(skel_array, fps=30.0):
-    """Create timestamps for skeleton data that lacks them."""
-    n_frames = skel_array.shape[0]
-    timestamps = np.arange(n_frames) / fps
-    return timestamps
+logger = logging.getLogger(__name__)
 
 def detect_activity_segments(data, threshold=2.0, min_duration_sec=0.5, timestamps=None):
     """
@@ -138,207 +135,6 @@ def calculate_joint_velocity(joint_trajectory, timestamps=None):
     
     return velocity
 
-def find_corresponding_segments(imu_segments, skeleton_segments, max_offset=1.0):
-    """
-    Find corresponding activity segments between IMU and skeleton data.
-    
-    Args:
-        imu_segments: List of (start, end) tuples for IMU data
-        skeleton_segments: List of (start, end) tuples for skeleton data
-        max_offset: Maximum allowed time difference between segment boundaries
-        
-    Returns:
-        List of matching segment pairs ((imu_start, imu_end), (skel_start, skel_end))
-    """
-    matching_segments = []
-    
-    for i_start, i_end in imu_segments:
-        for s_start, s_end in skeleton_segments:
-            # Check if segments overlap significantly
-            overlap_start = max(i_start, s_start)
-            overlap_end = min(i_end, s_end)
-            
-            if overlap_end > overlap_start:
-                # Calculate overlap ratio
-                imu_duration = i_end - i_start
-                skel_duration = s_end - s_start
-                overlap_duration = overlap_end - overlap_start
-                
-                min_duration = min(imu_duration, skel_duration)
-                overlap_ratio = overlap_duration / min_duration
-                
-                # Check if boundaries are reasonably close
-                start_diff = abs(i_start - s_start)
-                end_diff = abs(i_end - s_end)
-                
-                if (overlap_ratio > 0.7 and 
-                    start_diff < max_offset and 
-                    end_diff < max_offset):
-                    matching_segments.append(((i_start, i_end), (s_start, s_end)))
-    
-    return matching_segments
-
-def align_segments_with_dtw(imu_data, skel_data, imu_timestamps, skel_timestamps, 
-                           matching_segments, wrist_idx=9):
-    """
-    Align IMU and skeleton data segments using DTW.
-    
-    Args:
-        imu_data: IMU data of shape (n_imu_samples, n_features)
-        skel_data: Skeleton data of shape (n_skel_frames, n_features)
-        imu_timestamps: IMU timestamps
-        skel_timestamps: Skeleton timestamps
-        matching_segments: List of matching segment pairs
-        wrist_idx: Index of wrist joint
-        
-    Returns:
-        List of aligned data pairs for each matching segment
-    """
-    aligned_segments = []
-    
-    for (i_start, i_end), (s_start, s_end) in matching_segments:
-        # Extract segment data
-        i_mask = (imu_timestamps >= i_start) & (imu_timestamps <= i_end)
-        s_mask = (skel_timestamps >= s_start) & (skel_timestamps <= s_end)
-        
-        imu_segment = imu_data[i_mask]
-        imu_segment_ts = imu_timestamps[i_mask]
-        
-        skel_segment = skel_data[s_mask]
-        skel_segment_ts = skel_timestamps[s_mask]
-        
-        if len(imu_segment) < 5 or len(skel_segment) < 5:
-            logger.warning(f"Segment too short to align: IMU={len(imu_segment)}, Skel={len(skel_segment)}")
-            continue
-            
-        # Extract wrist trajectory and calculate velocity
-        wrist_trajectory = extract_wrist_trajectory(skel_segment, wrist_idx)
-        wrist_velocity = calculate_joint_velocity(wrist_trajectory, skel_segment_ts)
-        wrist_velocity_mag = np.linalg.norm(wrist_velocity, axis=1)
-        
-        # Calculate acceleration magnitude for IMU
-        if imu_segment.shape[1] >= 3:
-            accel_mag = np.linalg.norm(imu_segment[:, :3], axis=1)
-        else:
-            accel_mag = imu_segment[:, 0]
-        
-        # Normalize signals for DTW
-        norm_accel = (accel_mag - np.mean(accel_mag)) / (np.std(accel_mag) + 1e-6)
-        norm_vel = (wrist_velocity_mag - np.mean(wrist_velocity_mag)) / (np.std(wrist_velocity_mag) + 1e-6)
-        
-        # Apply DTW
-        try:
-            path = dtw.warping_path(norm_accel, norm_vel)
-            
-            # Extract aligned indices
-            imu_idx, skel_idx = zip(*path)
-            
-            # Remove duplicates while preserving order
-            imu_unique_idx = []
-            skel_unique_idx = []
-            seen_imu = set()
-            seen_skel = set()
-            
-            for i, s in zip(imu_idx, skel_idx):
-                if i not in seen_imu:
-                    imu_unique_idx.append(i)
-                    seen_imu.add(i)
-                if s not in seen_skel:
-                    skel_unique_idx.append(s)
-                    seen_skel.add(s)
-            
-            # Create aligned arrays
-            aligned_imu = imu_segment[imu_unique_idx]
-            aligned_imu_ts = imu_segment_ts[imu_unique_idx]
-            
-            aligned_skel = skel_segment[skel_unique_idx]
-            aligned_skel_ts = skel_segment_ts[skel_unique_idx]
-            
-            aligned_segments.append({
-                'imu_data': aligned_imu,
-                'imu_timestamps': aligned_imu_ts,
-                'skel_data': aligned_skel,
-                'skel_timestamps': aligned_skel_ts,
-                'start_time': min(aligned_imu_ts[0], aligned_skel_ts[0]),
-                'end_time': max(aligned_imu_ts[-1], aligned_skel_ts[-1])
-            })
-            
-        except Exception as e:
-            logger.error(f"DTW alignment failed: {e}")
-            continue
-    
-    return aligned_segments
-
-def extract_orientation_from_skeleton(skel_data, timestamps=None, fps=30.0, wrist_idx=9):
-    """
-    Extract orientation from skeleton wrist trajectory.
-    
-    Args:
-        skel_data: Skeleton data with joint positions
-        timestamps: Optional timestamps for skeleton data
-        fps: Frame rate for skeleton data (used if timestamps not provided)
-        wrist_idx: Index of wrist joint
-        
-    Returns:
-        Tuple of (timestamps, orientations)
-    """
-    if timestamps is None:
-        timestamps = create_skeleton_timestamps(skel_data, fps)
-    
-    # Extract wrist trajectory
-    wrist_trajectory = extract_wrist_trajectory(skel_data, wrist_idx)
-    
-    # Calculate velocity and acceleration
-    wrist_velocity = calculate_joint_velocity(wrist_trajectory, timestamps)
-    
-    # Calculate acceleration
-    wrist_accel = np.zeros_like(wrist_velocity)
-    for i in range(1, len(timestamps)):
-        dt = timestamps[i] - timestamps[i-1]
-        if dt > 0:
-            wrist_accel[i] = (wrist_velocity[i] - wrist_velocity[i-1]) / dt
-    
-    # Estimate orientation using velocity direction
-    orientations = np.zeros((len(skel_data), 3))  # roll, pitch, yaw
-    
-    for i in range(len(skel_data)):
-        # Only calculate orientation if there's sufficient movement
-        vel_mag = np.linalg.norm(wrist_velocity[i])
-        if vel_mag > 0.1:  # Threshold for meaningful movement
-            # Normalize velocity
-            vel_dir = wrist_velocity[i] / vel_mag
-            
-            # Calculate orientation (simplified approach)
-            # Pitch (up/down angle)
-            pitch = np.arcsin(-vel_dir[1])  # y-axis is typically up
-            
-            # Yaw (left/right angle)
-            yaw = np.arctan2(vel_dir[0], vel_dir[2])
-            
-            # Roll is harder to estimate from position only
-            # Here we're using acceleration direction perpendicular to velocity
-            if i > 0 and np.linalg.norm(wrist_accel[i]) > 0.1:
-                # Project acceleration onto plane perpendicular to velocity
-                acc_perp = wrist_accel[i] - vel_dir * np.dot(wrist_accel[i], vel_dir)
-                acc_perp_mag = np.linalg.norm(acc_perp)
-                
-                if acc_perp_mag > 0.1:
-                    # Roll around velocity axis
-                    acc_perp_norm = acc_perp / acc_perp_mag
-                    roll = np.arctan2(np.dot(acc_perp_norm, np.cross([0, 1, 0], vel_dir)), 
-                                      np.dot(acc_perp_norm, [0, 1, 0]))
-                else:
-                    roll = orientations[i-1, 0]  # Maintain previous roll
-            else:
-                roll = orientations[i-1, 0] if i > 0 else 0.0
-                
-            orientations[i] = [roll, pitch, yaw]
-        elif i > 0:
-            # If no movement, maintain previous orientation
-            orientations[i] = orientations[i-1]
-    
-    return timestamps, orientations
-
 def enhanced_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps=30.0, 
                              wrist_idx=9, return_all=False):
     """
@@ -360,33 +156,70 @@ def enhanced_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps
     if imu_timestamps is None:
         imu_timestamps = np.arange(len(imu_data)) / 50.0  # Assuming 50Hz IMU
     
-    skel_timestamps = create_skeleton_timestamps(skel_data, skel_fps)
+    skel_timestamps = np.arange(len(skel_data)) / skel_fps
     
     # 2. Detect activity segments
-    imu_segments = detect_activity_segments(imu_data, threshold=1.5, 
-                                           timestamps=imu_timestamps)
+    try:
+        imu_segments = detect_activity_segments(imu_data, threshold=1.5, 
+                                            timestamps=imu_timestamps)
+        
+        skel_segments = detect_activity_segments(skel_data, threshold=0.05,
+                                            timestamps=skel_timestamps)
+        
+        logger.info(f"Detected {len(imu_segments)} IMU segments and {len(skel_segments)} skeleton segments")
+    except Exception as e:
+        logger.warning(f"Segment detection failed: {e}")
+        traceback.print_exc()
+        # Basic fallback
+        imu_segments = [(imu_timestamps[0], imu_timestamps[-1])]
+        skel_segments = [(skel_timestamps[0], skel_timestamps[-1])]
     
-    skel_segments = detect_activity_segments(skel_data, threshold=0.05,
-                                           timestamps=skel_timestamps)
-    
-    logger.info(f"Detected {len(imu_segments)} IMU segments and {len(skel_segments)} skeleton segments")
-    
-    # 3. Find corresponding segments
-    matching_segments = find_corresponding_segments(imu_segments, skel_segments)
-    
-    logger.info(f"Found {len(matching_segments)} matching segments between modalities")
-    
-    if not matching_segments:
-        logger.warning("No matching segments found - using basic alignment")
-        # Fall back to basic alignment (taking the minimum length)
-        common_length = min(len(imu_data), len(skel_data))
-        aligned_imu = imu_data[:common_length]
-        aligned_skel = skel_data[:common_length]
-        aligned_ts = imu_timestamps[:common_length]
+    # 3. Try DTW alignment if segments align
+    try:
+        from dtaidistance import dtw
+        
+        # Extract wrist trajectory for skeleton
+        wrist_trajectory = extract_wrist_trajectory(skel_data, wrist_idx)
+        wrist_velocity = calculate_joint_velocity(wrist_trajectory, skel_timestamps)
+        wrist_velocity_mag = np.linalg.norm(wrist_velocity, axis=1)
+        
+        # Calculate IMU magnitude
+        imu_feat_dim = min(3, imu_data.shape[1])
+        imu_mag = np.linalg.norm(imu_data[:, :imu_feat_dim], axis=1)
+        
+        # Normalize for DTW
+        norm_imu = (imu_mag - np.mean(imu_mag)) / (np.std(imu_mag) + 1e-6)
+        norm_vel = (wrist_velocity_mag - np.mean(wrist_velocity_mag)) / (np.std(wrist_velocity_mag) + 1e-6)
+        
+        # Apply DTW
+        path = dtw.warping_path(norm_imu, norm_vel)
+        
+        # Extract aligned indices
+        imu_idx, skel_idx = zip(*path)
+        
+        # Remove duplicates while preserving order
+        imu_unique = []
+        skel_unique = []
+        seen_imu = set()
+        seen_skel = set()
+        
+        for i, s in zip(imu_idx, skel_idx):
+            if i not in seen_imu:
+                imu_unique.append(i)
+                seen_imu.add(i)
+            if s not in seen_skel:
+                skel_unique.append(s)
+                seen_skel.add(s)
+        
+        # Create aligned arrays
+        aligned_imu = imu_data[imu_unique]
+        aligned_skel = skel_data[skel_unique]
+        aligned_ts = imu_timestamps[imu_unique]
         
         # Extract reference orientation from skeleton
-        ref_timestamps, ref_orientations = extract_orientation_from_skeleton(
-            aligned_skel, aligned_ts, wrist_idx=wrist_idx
+        from utils.imu_fusion import extract_orientation_from_skeleton
+        reference_orientations = extract_orientation_from_skeleton(
+            aligned_skel, wrist_idx=wrist_idx
         )
         
         if return_all:
@@ -394,66 +227,99 @@ def enhanced_align_modalities(imu_data, skel_data, imu_timestamps=None, skel_fps
                 'aligned_imu': aligned_imu,
                 'aligned_skel': aligned_skel,
                 'aligned_timestamps': aligned_ts,
-                'reference_timestamps': ref_timestamps,
-                'reference_orientations': ref_orientations,
-                'success': False
+                'reference_orientations': reference_orientations,
+                'success': True
             }
         else:
-            return aligned_imu, aligned_skel, aligned_ts, ref_orientations
+            return aligned_imu, aligned_skel, aligned_ts, reference_orientations
+            
+    except Exception as e:
+        logger.warning(f"DTW alignment failed: {e}, falling back to interpolation")
+        traceback.print_exc()
     
-    # 4. Align segments with DTW
-    aligned_segments = align_segments_with_dtw(
-        imu_data, skel_data, imu_timestamps, skel_timestamps, 
-        matching_segments, wrist_idx
-    )
-    
-    if not aligned_segments:
-        logger.warning("Segment alignment failed - using basic alignment")
-        # Fall back to basic alignment
-        common_length = min(len(imu_data), len(skel_data))
-        aligned_imu = imu_data[:common_length]
-        aligned_skel = skel_data[:common_length]
-        aligned_ts = imu_timestamps[:common_length]
+    # 4. Try interpolation if DTW fails
+    try:
+        # Find common time range
+        t_min = max(imu_timestamps[0], skel_timestamps[0])
+        t_max = min(imu_timestamps[-1], skel_timestamps[-1])
+        
+        if t_max <= t_min:
+            logger.warning("No overlapping time range for modalities")
+            if return_all:
+                return {
+                    'aligned_imu': np.zeros((0, imu_data.shape[1])),
+                    'aligned_skel': np.zeros((0, skel_data.shape[1])),
+                    'aligned_timestamps': np.zeros(0),
+                    'reference_orientations': np.zeros((0, 3)),
+                    'success': False
+                }
+            else:
+                return np.zeros((0, imu_data.shape[1])), np.zeros((0, skel_data.shape[1])), np.zeros(0), np.zeros((0, 3))
+        
+        # Filter to common range
+        imu_mask = (imu_timestamps >= t_min) & (imu_timestamps <= t_max)
+        filtered_imu = imu_data[imu_mask]
+        filtered_ts = imu_timestamps[imu_mask]
+        
+        # Interpolate skeleton to IMU timestamps
+        skel_interp = interp1d(
+            skel_timestamps,
+            skel_data,
+            axis=0,
+            bounds_error=False,
+            fill_value="extrapolate"
+        )
+        
+        interp_skel = skel_interp(filtered_ts)
         
         # Extract reference orientation from skeleton
-        ref_timestamps, ref_orientations = extract_orientation_from_skeleton(
-            aligned_skel, aligned_ts, wrist_idx=wrist_idx
+        from utils.imu_fusion import extract_orientation_from_skeleton
+        reference_orientations = extract_orientation_from_skeleton(
+            interp_skel, wrist_idx=wrist_idx
         )
         
         if return_all:
             return {
-                'aligned_imu': aligned_imu,
-                'aligned_skel': aligned_skel,
-                'aligned_timestamps': aligned_ts,
-                'reference_timestamps': ref_timestamps,
-                'reference_orientations': ref_orientations,
-                'success': False
+                'aligned_imu': filtered_imu,
+                'aligned_skel': interp_skel,
+                'aligned_timestamps': filtered_ts,
+                'reference_orientations': reference_orientations,
+                'success': True
             }
         else:
-            return aligned_imu, aligned_skel, aligned_ts, ref_orientations
+            return filtered_imu, interp_skel, filtered_ts, reference_orientations
     
-    # 5. Combine aligned segments
-    # For simplicity, we'll use the largest segment
-    largest_segment = max(aligned_segments, key=lambda x: len(x['imu_data']))
+    except Exception as e:
+        logger.warning(f"Interpolation alignment failed: {e}, falling back to basic alignment")
+        traceback.print_exc()
     
-    aligned_imu = largest_segment['imu_data']
-    aligned_skel = largest_segment['skel_data']
-    aligned_ts = largest_segment['imu_timestamps']
+    # 5. Basic alignment as last resort
+    min_len = min(len(imu_data), len(skel_data))
+    aligned_imu = imu_data[:min_len]
+    aligned_skel = skel_data[:min_len]
     
-    # 6. Extract reference orientation from skeleton
-    ref_timestamps, ref_orientations = extract_orientation_from_skeleton(
-        aligned_skel, largest_segment['skel_timestamps'], wrist_idx=wrist_idx
-    )
+    if imu_timestamps is not None:
+        aligned_ts = imu_timestamps[:min_len]
+    else:
+        aligned_ts = np.arange(min_len) / 50.0  # Assuming 50Hz
+    
+    # Extract reference orientation
+    try:
+        from utils.imu_fusion import extract_orientation_from_skeleton
+        reference_orientations = extract_orientation_from_skeleton(
+            aligned_skel, wrist_idx=wrist_idx
+        )
+    except Exception as e:
+        logger.warning(f"Failed to extract orientations: {e}")
+        reference_orientations = np.zeros((min_len, 3))
     
     if return_all:
         return {
             'aligned_imu': aligned_imu,
             'aligned_skel': aligned_skel,
             'aligned_timestamps': aligned_ts,
-            'reference_timestamps': ref_timestamps,
-            'reference_orientations': ref_orientations,
-            'aligned_segments': aligned_segments,
-            'success': True
+            'reference_orientations': reference_orientations,
+            'success': True if min_len > 10 else False
         }
     else:
-        return aligned_imu, aligned_skel, aligned_ts, ref_orientations
+        return aligned_imu, aligned_skel, aligned_ts, reference_orientations

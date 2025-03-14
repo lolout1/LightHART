@@ -1,8 +1,14 @@
-# utils/dataset.py
+"""
+Dataset preparation and processing for SmartFallMM.
+Updated to support enhanced Kalman filters and fusion methods.
+"""
 
 import os
 from typing import List, Dict
-from utils.loader import DatasetBuilder
+import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ModalityFile:
     def __init__(self, subject_id, action_id, sequence_number, file_path):
@@ -106,32 +112,82 @@ class SmartFallMM:
         self.load_files()
         self.match_trials()
 
-SmartFallMM.pipe_line = SmartFallMM.pipe_line  # attach method for convenience
-
 def prepare_smartfallmm(arg):
     """
     Build SmartFallMM dataset from local dir => 'data/smartfallmm', 
-    run pipe_line => add modalities, sensors => match => return DatasetBuilder
+    run pipe_line => add modalities, sensors => match => return appropriate builder
+    
+    Args:
+        arg: Configuration arguments with dataset_args
+        
+    Returns:
+        Dataset builder (EnhancedDatasetBuilder if imu_fusion is specified)
     """
     import os
-    from utils.loader import DatasetBuilder
     root_dir = os.path.join(os.getcwd(), 'data/smartfallmm')
 
     sf = SmartFallMM(root_dir)
-    # e.g. arg.dataset_args = { 'age_group': ['young'], 'modalities': ['accelerometer','skeleton'], 'sensors':['watch'], ... }
     sf.pipe_line(
         age_group=arg.dataset_args.get('age_group', ['young']),
         modalities=arg.dataset_args.get('modalities', ['accelerometer']),
         sensors=arg.dataset_args.get('sensors', ['watch'])
     )
-    builder = DatasetBuilder(
-        dataset=sf,
-        mode=arg.dataset_args.get('mode','variable_time'),
-        max_length=arg.dataset_args.get('max_length',64),
-        task=arg.dataset_args.get('task','fd'),
-        window_size_sec=arg.dataset_args.get('window_size_sec',4.0),
-        stride_sec=arg.dataset_args.get('stride_sec',0.5),
-        time2vec_dim=arg.dataset_args.get('time2vec_dim',8)
-    )
+    
+    # Check if we should use enhanced builder with IMU fusion
+    imu_fusion = arg.dataset_args.get('imu_fusion', None)
+    
+    if imu_fusion in ['standard', 'ekf', 'ukf']:
+        # Use enhanced builder with Kalman filter fusion
+        from utils.enhanced_dataset_builder import EnhancedDatasetBuilder
+        builder = EnhancedDatasetBuilder(
+            dataset=sf,
+            mode=arg.dataset_args.get('mode', 'variable_time'),
+            max_length=arg.dataset_args.get('max_length', 128),
+            task=arg.dataset_args.get('task', 'fd'),
+            window_size_sec=arg.dataset_args.get('window_size_sec', 4.0),
+            stride_sec=arg.dataset_args.get('stride_sec', 0.5),
+            imu_fusion=imu_fusion,
+            align_method=arg.dataset_args.get('align_method', 'dtw'),
+            wrist_idx=arg.dataset_args.get('wrist_idx', 9),
+            calibrate_filter=arg.dataset_args.get('calibrate_filter', True),
+            drift_correction_weight=arg.dataset_args.get('drift_correction_weight', 0.3),
+            fall_specific_features=arg.dataset_args.get('fall_specific_features', True),
+            skel_error_strategy=arg.dataset_args.get('skel_error_strategy', 'best_effort'),
+            use_cache=arg.dataset_args.get('use_cache', True),
+            cache_dir=arg.dataset_args.get('cache_dir', './.cache_enhanced')
+        )
+    else:
+        # Use original DatasetBuilder
+        from utils.loader import DatasetBuilder
+        builder = DatasetBuilder(
+            dataset=sf,
+            mode=arg.dataset_args.get('mode', 'variable_time'),
+            max_length=arg.dataset_args.get('max_length', 128),
+            task=arg.dataset_args.get('task', 'fd'),
+            window_size_sec=arg.dataset_args.get('window_size_sec', 4.0),
+            stride_sec=arg.dataset_args.get('stride_sec', 0.5),
+            time2vec_dim=arg.dataset_args.get('time2vec_dim', 8)
+        )
+    
     return builder
 
+def split_by_subjects(builder, subjects, fuse=False):
+    """
+    Build dataset for specified subjects.
+    
+    Args:
+        builder: Dataset builder (EnhancedDatasetBuilder or DatasetBuilder)
+        subjects: List of subject IDs to include
+        fuse: Whether to fuse multiple modalities
+        
+    Returns:
+        Dictionary with processed data
+    """
+    data = builder.make_dataset(subjects)
+    
+    if fuse:
+        # Check if we have multiple inertial modalities to fuse
+        from utils.enhanced_imu_fusion import fuse_inertial_modalities
+        data = fuse_inertial_modalities(data)
+    
+    return data

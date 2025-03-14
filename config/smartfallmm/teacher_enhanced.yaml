@@ -14,16 +14,15 @@ dataset_args:
   sensors: ['watch']
   window_size_sec: 4.0
   stride_sec: 1.0
-  imu_fusion: 'ekf'  # Enhanced EKF for fall detection
-  align_method: 'enhanced'  # Enhanced alignment for different start/stop times
-  wrist_idx: 9  # Index of wrist joint for alignment
+  imu_fusion: 'ekf'  # Options: 'standard', 'ekf', 'ukf'
+  align_method: 'dtw'
+  wrist_idx: 9
   calibrate_filter: true
-  drift_correction_weight: 0.3  # How much to rely on skeleton for drift correction
-  fall_specific_features: true  # Enable fall-specific features
-  skel_error_strategy: 'best_effort'  # Try to use partial data even with errors
+  drift_correction_weight: 0.3
+  fall_specific_features: true
+  skel_error_strategy: 'best_effort'
   use_cache: true
   cache_dir: './.cache_enhanced'
-
 # Teacher model specification
 model_args:
   num_joints: 32
