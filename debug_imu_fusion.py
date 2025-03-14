@@ -28,6 +28,7 @@ import traceback
 from collections import defaultdict
 import glob
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -43,13 +44,24 @@ from utils.processor.base import (
     match_trials
 )
 
-# Import Kalman filter implementations
+# Import standard Kalman filter implementations
 from utils.imu_fusion import (
     StandardKalmanIMU,
     ExtendedKalmanIMU,
     UnscentedKalmanIMU,
     extract_orientation_from_skeleton
 )
+
+def str2bool(v):
+    """Convert string to boolean."""
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def find_sensor_files(base_dir, subject_list, action_list=None):
     """
@@ -722,7 +734,7 @@ def main():
                         help="Comma-separated list of subject IDs to test.")
     parser.add_argument("--actions", type=str, default=None,
                         help="Comma-separated list of action IDs to test or None => all.")
-    parser.add_argument("--filters", type=str, default="ekf",
+    parser.add_argument("--filters", type=str, default="standard,ekf,ukf",
                         help="Comma-separated list of filters to test: standard,ekf,ukf")
     parser.add_argument("--max_trials", type=int, default=5,
                         help="Maximum number of trials to debug.")
