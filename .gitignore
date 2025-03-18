@@ -1,0 +1,9 @@
+# Ignore directories
+results_hybrid/
+results_comparison/
+fused/
+debug_logs/
+
+# Ignore all files with the .out extension
+*.out
+

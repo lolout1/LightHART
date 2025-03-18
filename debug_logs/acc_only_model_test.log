@@ -1,8 +1,0 @@
-Traceback (most recent call last):
-  File "/mmfs1/home/sww35/test2/LightHART/main.py", line 597, in <module>
-    trainer = Trainer(arg)
-  File "/mmfs1/home/sww35/test2/LightHART/main.py", line 176, in __init__
-    num_params = self.count_parameters(self.model)
-  File "/mmfs1/home/sww35/test2/LightHART/main.py", line 192, in count_parameters
-    for param in model.parameters():
-AttributeError: 'collections.OrderedDict' object has no attribute 'parameters'
