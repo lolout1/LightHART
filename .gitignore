@@ -6,4 +6,4 @@ debug_logs/
 
 # Ignore all files with the .out extension
 *.out
-
+*.log
