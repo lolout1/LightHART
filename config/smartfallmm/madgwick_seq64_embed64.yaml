@@ -1,7 +1,6 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Include all subjects for better generalization
 subjects: [29,30,31,33,45,46,34,37,39,38,43,35,36,44,34,32]
 
 model_args:
@@ -10,23 +9,24 @@ model_args:
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
-  acc_frames: 128
+  acc_frames: 64
   mocap_frames: 64
-  num_heads: 12
+  num_heads: 8
   fusion_type: 'concat'
-  dropout: 0.2
+  dropout: 0.3
   use_batch_norm: true
+  feature_dim: 128  # Explicitly set feature dimension to ensure compatibility
 
 dataset_args:
   mode: 'sliding_window'
-  max_length: 128
+  max_length: 64
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'ukf'
+    filter_type: 'madgwick'
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true
@@ -36,6 +36,7 @@ batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
 num_epoch: 60
+patience: 15
 
 # dataloader
 feeder: Feeder.Make_Dataset.UTD_mm
@@ -61,8 +62,8 @@ kfold:
   enabled: true
   num_folds: 5
   fold_assignments:
-    - [43, 35, 36]  # Fold 1: ~38.3% falls
-    - [44, 34, 32]  # Fold 2: ~39.7% falls
-    - [45, 37, 38]  # Fold 3: ~44.8% falls
-    - [46, 29, 31]  # Fold 4: ~41.4% falls
-    - [30, 39]      # Fold 5: ~43.3% falls
+    - [43, 35, 36]  # Fold 1: 38.3% falls
+    - [44, 34, 32]  # Fold 2: 39.7% falls
+    - [45, 37, 38]  # Fold 3: 44.8% falls
+    - [46, 29, 31]  # Fold 4: 41.4% falls
+    - [30, 39]      # Fold 5: 43.3% falls

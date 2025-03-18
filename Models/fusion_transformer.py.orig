@@ -23,7 +23,6 @@ class FusionTransModel(nn.Module):
                 fusion_type='concat',
                 dropout=0.3,
                 use_batch_norm=True,
-                feature_dim=None,
                 **kwargs):
         """
         Optimized transformer model for IMU fusion with linear acceleration and quaternion.
@@ -38,7 +37,6 @@ class FusionTransModel(nn.Module):
             fusion_type: How to combine different sensor data ('concat', 'attention', 'acc_only')
             dropout: Dropout rate
             use_batch_norm: Whether to use batch normalization
-            feature_dim: Optional explicit feature dimension (computed automatically if None)
         """
         super().__init__()
         print(f"Initializing FusionTransModel with fusion_type={fusion_type}")
@@ -73,10 +71,7 @@ class FusionTransModel(nn.Module):
         # Determine feature dimension based on fusion type
         if fusion_type == 'concat':
             # We concatenate linear acceleration and quaternion embeddings
-            if feature_dim is None:
-                feature_dim = embed_dim * 2
-            else:
-                print(f"Using explicit feature dimension: {feature_dim}")
+            feature_dim = embed_dim * 2
         elif fusion_type == 'attention':
             # We use attention to combine the embeddings
             feature_dim = embed_dim
@@ -119,7 +114,7 @@ class FusionTransModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(feature_dim, 64),
             nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(64, num_classes)
         )
@@ -142,10 +137,6 @@ class FusionTransModel(nn.Module):
         
         # Expand fusion features to match sequence length
         expanded_features = fusion_features.unsqueeze(1).expand(-1, acc_features.size(1), -1)
-        
-        # Log shapes for debugging
-        total_feature_dim = acc_features.size(2) + expanded_features.size(2)
-        print(f"Feature dimensions - acc: {acc_features.size(2)}, fusion: {expanded_features.size(2)}, total: {total_feature_dim}")
         
         # Combine features
         features = torch.cat([acc_features, expanded_features], dim=2)
