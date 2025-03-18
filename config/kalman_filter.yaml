@@ -2,7 +2,7 @@ model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
 # Include all subjects for better generalization
-subjects: [29, 30, 31, 33, 45, 46]
+subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
 
 model_args:
   num_layers: 3

@@ -34,14 +34,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import threading
 
-# Import IMU fusion module
+# Import IMU fusion module for thread pool management
 from utils.imu_fusion import (
     process_imu_data, 
-    process_multiple_files_parallel,
-    get_file_thread_pool,
-    cleanup_thread_pools,
-    MAX_FILES_PARALLEL,
-    THREADS_PER_FILE
+    ThreadPoolExecutor as IMUThreadPoolExecutor
 )
 
 # Configure logging
@@ -456,7 +452,7 @@ def align_sensors_with_hybrid_interpolation(acc_data: pd.DataFrame, gyro_data: p
         logger.debug(f"Gyro magnitude range: {gyro_mag.min():.2f}-{gyro_mag.max():.2f}rad/s")
 
         # Process in parallel using thread pool
-        thread_pool = ThreadPoolExecutor(max_workers=THREADS_PER_FILE)
+        thread_pool = ThreadPoolExecutor(max_workers=6)
         futures = []
 
         # Submit interpolation tasks
@@ -496,10 +492,12 @@ def align_sensors_with_hybrid_interpolation(acc_data: pd.DataFrame, gyro_data: p
         elapsed_time = time.time() - start_time
         logger.info(f"Hybrid interpolation complete: {num_samples} aligned samples in {elapsed_time:.2f}s")
 
-        # Plot alignment results if debug level is high
-        if logger.level <= logging.DEBUG:
+        # Visualize alignment for debugging
+        try:
             visualize_alignment(acc_times, acc_values, gyro_times, gyro_values,
-                               common_times, aligned_acc, aligned_gyro)
+                            common_times, aligned_acc, aligned_gyro)
+        except Exception as e:
+            logger.warning(f"Failed to create alignment visualization: {e}")
 
         return aligned_acc, aligned_gyro, common_times
 
@@ -530,6 +528,8 @@ def visualize_alignment(acc_times, acc_values, gyro_times, gyro_values,
         # Create filename with timestamp
         filename = f"alignment_{int(time.time())}.png"
 
+        # Create a new figure to avoid renderer issues
+        plt.close('all')
         fig, axes = plt.subplots(3, 2, figsize=(15, 10))
 
         # Plot accelerometer X axis
@@ -565,12 +565,96 @@ def visualize_alignment(acc_times, acc_values, gyro_times, gyro_values,
         axes[2, 1].set_title('Gyroscope Z-axis')
 
         plt.tight_layout()
+        
+        # Ensure the figure is drawn before saving
+        fig.canvas.draw()
         plt.savefig(os.path.join(viz_dir, filename))
         plt.close(fig)
 
         logger.debug(f"Alignment visualization saved to {os.path.join(viz_dir, filename)}")
     except Exception as e:
         logger.warning(f"Failed to create alignment visualization: {e}")
+        plt.close('all')  # Clean up any open figures
+
+
+def visualize_skl_acc_alignment(skeleton_mag, acc_mag, skeleton_indices, inertial_indices):
+    """
+    Visualizes alignment between skeleton and accelerometer data.
+
+    Args:
+        skeleton_mag: Magnitude values from skeleton data
+        acc_mag: Magnitude values from accelerometer data
+        skeleton_indices: Indices selected from skeleton data after alignment
+        inertial_indices: Indices selected from accelerometer data after alignment
+    """
+    try:
+        # Create directory for visualizations
+        viz_dir = os.path.join(log_dir, "alignment_viz")
+        os.makedirs(viz_dir, exist_ok=True)
+
+        # Create filename with timestamp
+        filename = f"skl_acc_alignment_{int(time.time())}.png"
+
+        # Clean up previous plots
+        plt.close('all')
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+
+        # Plot magnitude signals before alignment
+        ax1.plot(skeleton_mag, 'b-', label='Skeleton')
+        ax1.plot(acc_mag, 'r-', label='Accelerometer')
+        ax1.set_title('Signals before alignment')
+        ax1.legend()
+
+        # Plot aligned signals
+        ax2.plot(skeleton_mag[list(skeleton_indices)], 'b-', label='Aligned Skeleton')
+        ax2.plot(acc_mag[list(inertial_indices)], 'r-', label='Aligned Accelerometer')
+        ax2.set_title('Signals after alignment')
+        ax2.legend()
+
+        # Draw the figure to avoid empty plot issues
+        fig.canvas.draw()
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(viz_dir, filename))
+        plt.close(fig)
+
+        logger.debug(f"Skeleton-Accelerometer alignment visualization saved to {os.path.join(viz_dir, filename)}")
+    except Exception as e:
+        logger.warning(f"Failed to create skeleton-accelerometer alignment visualization: {e}")
+        plt.close('all')
+
+
+def create_dataframe_with_timestamps(data, start_time=0, sample_rate=None):
+    """
+    Creates a DataFrame with synthetic timestamps when actual timestamps are not available.
+
+    Args:
+        data: Sensor data array
+        start_time: Start time in seconds
+        sample_rate: Estimated sample rate (if None, assumes evenly spaced samples)
+
+    Returns:
+        DataFrame with timestamp column and sensor data
+    """
+    num_samples = data.shape[0]
+
+    if sample_rate is None:
+        # Create evenly spaced timestamps (assuming 30Hz if not specified)
+        timestamps = np.linspace(start_time, start_time + num_samples/30, num_samples)
+    else:
+        # Create timestamps based on sample rate
+        timestamps = np.arange(num_samples) / sample_rate + start_time
+
+    # Create a DataFrame with timestamp and data columns
+    df = pd.DataFrame()
+    df['timestamp'] = timestamps
+
+    # Add the data columns
+    for i in range(data.shape[1]):
+        df[f'axis_{i}'] = data[:, i]
+
+    return df
 
 
 def filter_data_by_ids(data: np.ndarray, ids: List[int]) -> np.ndarray:
@@ -619,79 +703,6 @@ def filter_repeated_ids(path: List[Tuple[int, int]]) -> Tuple[set, set]:
     logger.debug(f"Filtered to {len(seen_first)} unique first indices and {len(seen_second)} unique second indices")
 
     return seen_first, seen_second
-
-
-def visualize_skl_acc_alignment(skeleton_mag, acc_mag, skeleton_indices, inertial_indices):
-    """
-    Visualizes alignment between skeleton and accelerometer data.
-
-    Args:
-        skeleton_mag: Magnitude values from skeleton data
-        acc_mag: Magnitude values from accelerometer data
-        skeleton_indices: Indices selected from skeleton data after alignment
-        inertial_indices: Indices selected from accelerometer data after alignment
-    """
-    try:
-        # Create directory for visualizations
-        viz_dir = os.path.join(log_dir, "alignment_viz")
-        os.makedirs(viz_dir, exist_ok=True)
-
-        # Create filename with timestamp
-        filename = f"skl_acc_alignment_{int(time.time())}.png"
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-
-        # Plot magnitude signals before alignment
-        ax1.plot(skeleton_mag, 'b-', label='Skeleton')
-        ax1.plot(acc_mag, 'r-', label='Accelerometer')
-        ax1.set_title('Signals before alignment')
-        ax1.legend()
-
-        # Plot aligned signals
-        ax2.plot(skeleton_mag[list(skeleton_indices)], 'b-', label='Aligned Skeleton')
-        ax2.plot(acc_mag[list(inertial_indices)], 'r-', label='Aligned Accelerometer')
-        ax2.set_title('Signals after alignment')
-        ax2.legend()
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(viz_dir, filename))
-        plt.close(fig)
-
-        logger.debug(f"Skeleton-Accelerometer alignment visualization saved to {os.path.join(viz_dir, filename)}")
-    except Exception as e:
-        logger.warning(f"Failed to create skeleton-accelerometer alignment visualization: {e}")
-
-
-def create_dataframe_with_timestamps(data, start_time=0, sample_rate=None):
-    """
-    Creates a DataFrame with synthetic timestamps when actual timestamps are not available.
-
-    Args:
-        data: Sensor data array
-        start_time: Start time in seconds
-        sample_rate: Estimated sample rate (if None, assumes evenly spaced samples)
-
-    Returns:
-        DataFrame with timestamp column and sensor data
-    """
-    num_samples = data.shape[0]
-
-    if sample_rate is None:
-        # Create evenly spaced timestamps (assuming 30Hz if not specified)
-        timestamps = np.linspace(start_time, start_time + num_samples/30, num_samples)
-    else:
-        # Create timestamps based on sample rate
-        timestamps = np.arange(num_samples) / sample_rate + start_time
-
-    # Create a DataFrame with timestamp and data columns
-    df = pd.DataFrame()
-    df['timestamp'] = timestamps
-
-    # Add the data columns
-    for i in range(data.shape[1]):
-        df[f'axis_{i}'] = data[:, i]
-
-    return df
 
 
 def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
@@ -808,7 +819,7 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         # Visualize alignment if at debug level
         if logger.level <= logging.DEBUG:
             visualize_skl_acc_alignment(skeleton_frob_norm, inertial_frob_norm,
-                                       skeleton_idx, inertial_ids)
+                                      skeleton_idx, inertial_ids)
 
     except Exception as e:
         logger.error(f"DTW alignment error: {str(e)}")
@@ -817,103 +828,6 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     logger.debug(f"Alignment completed in {elapsed_time:.2f}s")
 
     return data
-
-
-def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
-                            peaks: Union[List[int], np.ndarray], label: int,
-                            fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
-    """
-    Creates windows centered around detected peaks with optional fusion processing.
-
-    Args:
-        data: Dictionary of sensor data arrays
-        window_size: Size of each window
-        peaks: List of peak indices to center windows on
-        label: Label for this activity
-        fuse: Whether to apply sensor fusion
-        filter_type: Type of fusion filter to use
-
-    Returns:
-        Dictionary of windowed data arrays
-    """
-    start_time = time.time()
-    logger.info(f"Creating selective windows: peaks={len(peaks)}, fusion={fuse}, filter_type={filter_type}")
-
-    windowed_data = defaultdict(list)
-
-    # Check for required modalities
-    has_gyro = 'gyroscope' in data and data['gyroscope'] is not None and len(data['gyroscope']) > 0
-    if fuse and not has_gyro:
-        logger.warning("Fusion requested but gyroscope data not available")
-        fuse = False
-
-    # Create windows around peaks with parallel processing
-    window_tasks = []
-    file_id = id(data)  # Generate unique ID for this data
-    
-    # Get the thread pool for this file
-    thread_pool = get_processing_thread_pool(file_id)
-
-    # Submit window extraction tasks
-    for peak_idx, peak in enumerate(peaks):
-        # Calculate window boundaries
-        start = max(0, peak - window_size // 2)
-        end = min(len(data['accelerometer']), start + window_size)
-
-        # Skip if window is too small
-        if end - start < window_size:
-            logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size})")
-            continue
-
-        # Submit task
-        window_tasks.append((
-            peak_idx,
-            peak,
-            thread_pool.submit(
-                _extract_window,
-                data,
-                start,
-                end,
-                window_size,
-                fuse,
-                filter_type
-            )
-        ))
-
-    # Collect results
-    windows_created = 0
-    with tqdm(total=len(window_tasks), desc="Processing windows") as pbar:
-        for peak_idx, peak, future in window_tasks:
-            try:
-                window_data = future.result()
-                
-                # Add this window's data to the result dictionary
-                for modality, modality_window in window_data.items():
-                    if modality_window is not None:
-                        windowed_data[modality].append(modality_window)
-                
-                windows_created += 1
-            except Exception as e:
-                logger.error(f"Error processing window at peak {peak}: {str(e)}")
-            finally:
-                pbar.update(1)
-
-    # Convert lists of arrays to arrays
-    for modality in windowed_data:
-        if modality != 'labels' and len(windowed_data[modality]) > 0:
-            try:
-                windowed_data[modality] = np.array(windowed_data[modality])
-                logger.debug(f"Converted {modality} windows to array with shape {windowed_data[modality].shape}")
-            except Exception as e:
-                logger.error(f"Error converting {modality} windows to array: {str(e)}")
-
-    # Add labels
-    windowed_data['labels'] = np.repeat(label, windows_created)
-
-    elapsed_time = time.time() - start_time
-    logger.info(f"Created {windows_created} windows in {elapsed_time:.2f}s")
-
-    return windowed_data
 
 
 def _extract_window(data, start, end, window_size, fuse, filter_type):
@@ -1010,6 +924,354 @@ def _extract_window(data, start, end, window_size, fuse, filter_type):
             logger.error(f"Error in fusion processing: {str(e)}")
     
     return window_data
+
+
+def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
+                            peaks: Union[List[int], np.ndarray], label: int,
+                            fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
+    """
+    Creates windows centered around detected peaks with optional fusion processing.
+
+    Args:
+        data: Dictionary of sensor data arrays
+        window_size: Size of each window
+        peaks: List of peak indices to center windows on
+        label: Label for this activity
+        fuse: Whether to apply sensor fusion
+        filter_type: Type of fusion filter to use
+
+    Returns:
+        Dictionary of windowed data arrays
+    """
+    start_time = time.time()
+    logger.info(f"Creating selective windows: peaks={len(peaks)}, fusion={fuse}, filter_type={filter_type}")
+
+    windowed_data = defaultdict(list)
+
+    # Check for required modalities
+    has_gyro = 'gyroscope' in data and data['gyroscope'] is not None and len(data['gyroscope']) > 0
+    if fuse and not has_gyro:
+        logger.warning("Fusion requested but gyroscope data not available")
+        fuse = False
+
+    # Create local thread pool for windows
+    max_workers = min(8, len(peaks)) if len(peaks) > 0 else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as thread_pool:
+        # Create windows around peaks with parallel processing
+        futures = []
+    
+        # Submit window extraction tasks
+        for peak_idx, peak in enumerate(peaks):
+            # Calculate window boundaries
+            start = max(0, peak - window_size // 2)
+            end = min(len(data['accelerometer']), start + window_size)
+    
+            # Skip if window is too small
+            if end - start < window_size:
+                logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size})")
+                continue
+    
+            # Submit task
+            futures.append((
+                peak_idx,
+                peak,
+                thread_pool.submit(
+                    _extract_window,
+                    data,
+                    start,
+                    end,
+                    window_size,
+                    fuse,
+                    filter_type
+                )
+            ))
+    
+        # Collect results with progress bar if there are many windows
+        windows_created = 0
+        collection_iterator = tqdm(futures, desc="Processing windows") if len(futures) > 5 else futures
+        
+        for peak_idx, peak, future in collection_iterator:
+            try:
+                window_data = future.result()
+                
+                # Add this window's data to the result dictionary
+                for modality, modality_window in window_data.items():
+                    if modality_window is not None:
+                        windowed_data[modality].append(modality_window)
+                
+                windows_created += 1
+            except Exception as e:
+                logger.error(f"Error processing window at peak {peak}: {str(e)}")
+
+    # Convert lists of arrays to arrays
+    for modality in windowed_data:
+        if modality != 'labels' and len(windowed_data[modality]) > 0:
+            try:
+                windowed_data[modality] = np.array(windowed_data[modality])
+                logger.debug(f"Converted {modality} windows to array with shape {windowed_data[modality].shape}")
+            except Exception as e:
+                logger.error(f"Error converting {modality} windows to array: {str(e)}")
+
+    # Add labels
+    windowed_data['labels'] = np.repeat(label, windows_created)
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Created {windows_created} windows in {elapsed_time:.2f}s")
+
+    return windowed_data
+
+
+class ModalityFile: 
+    '''
+    Represents an individual file in a modality, containing the subject ID, action ID, sequence number, and file path
+
+    Attributes: 
+    subject_id (int) : ID of the subject performing the action
+    action_id (int) : ID of the action being performed
+    sequence_number (int) : Sequence/trial number
+    file_path (str) : Path to the data file
+    '''
+
+    def __init__(self, subject_id: int, action_id: int, sequence_number: int, file_path: str) -> None: 
+        self.subject_id = subject_id
+        self.action_id = action_id
+        self.sequence_number = sequence_number
+        self.file_path = file_path
+
+    def __repr__(self) -> str : 
+        return (
+            f"ModalityFile(subject_id  = {self.subject_id}, action_id={self.action_id}, sequence_number={self.sequence_number}, file_path = '{self.file_path}')"
+        )
+
+
+class Modality:
+    '''
+    Represents a modality (e.g., RGB, Depth) containing a list of ModalityFile objects.
+
+    Attributes:
+        name (str): Name of the modality.
+        files (List[ModalityFile]): List of files belonging to this modality.
+    '''
+
+    def __init__(self, name : str) -> None:
+        self.name = name 
+        self.files : List[ModalityFile] = []
+    
+    def add_file(self, subject_id: int , action_id: int, sequence_number: int, file_path: str) -> None: 
+        '''
+        Adds a file to the modality
+
+        Args: 
+            subject_id (int): ID of the subject.
+            action_id (int): ID of the action.
+            sequence_number (int): Sequence number of the trial.
+            file_path (str): Path to the file.
+        '''
+        modality_file = ModalityFile(subject_id, action_id, sequence_number, file_path)
+        self.files.append(modality_file)
+    
+    def __repr__(self) -> str:
+        return f"Modality(name='{self.name}', files={self.files})"
+    
+
+class MatchedTrial: 
+    """
+    Represents a matched trial containing files from different modalities for the same trial.
+
+    Attributes:
+        subject_id (int): ID of the subject.
+        action_id (int): ID of the action.
+        sequence_number (int): Sequence number of the trial.
+        files (Dict[str, str]): Dictionary mapping modality names to file paths.
+    """
+    def __init__(self, subject_id: int, action_id: int, sequence_number: int) -> None:
+        self.subject_id  = subject_id
+        self.action_id = action_id
+        self.sequence_number = sequence_number
+        self.files: Dict[str, List[str, ]] = {}
+    
+    def add_file(self, modality_name: str, file_path: str) -> None:
+        '''
+        Adds a file to the matched trial for a specific modality
+
+        Args:
+            modality_name (str) : Name of the modality
+            file_path(str) : Path to the file
+        '''
+        self.files[modality_name] = file_path
+    
+    def __repr__(self) -> str:
+        return f"MatchedTrial(subject_id={self.subject_id}, action_id={self.action_id}, sequence_number={self.sequence_number}, files={self.files})"
+
+
+class SmartFallMM:
+    """
+    Represents the SmartFallMM dataset, managing the loading of files and matching of trials across modalities and specific sensors.
+
+    Attributes:
+        root_dir (str): Root directory of the SmartFallMM dataset.
+        age_groups (Dict[str, Dict[str, Modality]]): Dictionary containing 'old' and 'young' groups, each having a dictionary of modality names to Modality objects.
+        matched_trials (List[MatchedTrial]): List of matched trials containing files from different modalities.
+        selected_sensors (Dict[str, str]): Dictionary storing selected sensors for modalities like 'accelerometer' and 'gyroscope'. Skeleton data is loaded as is.
+        fusion_options (Dict): Optional configuration for IMU fusion (filter type, etc.)
+    """
+
+    def __init__(self, root_dir: str, fusion_options: Optional[Dict] = None) -> None:
+        self.root_dir = root_dir
+        self.age_groups: Dict[str, Dict[str, Modality]] = {
+            "old": {},
+            "young": {}
+        }
+        self.matched_trials: List[MatchedTrial] = []
+        self.selected_sensors: Dict[str, str] = {}  # Stores the selected sensor for each modality (e.g., accelerometer)
+        self.fusion_options = fusion_options or {}  # Store fusion configuration
+
+    def add_modality(self, age_group: str, modality_name: str) -> None:
+        """
+        Adds a modality to the dataset for a specific age group.
+
+        Args:
+            age_group (str): Either 'old' or 'young'.
+            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
+        """
+        if age_group not in self.age_groups:
+            raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
+        
+        self.age_groups[age_group][modality_name] = Modality(modality_name)
+
+    def select_sensor(self, modality_name: str, sensor_name: str = None) -> None:
+        """
+        Selects a specific sensor for a given modality if applicable. Only files from this sensor will be loaded for modalities like 'accelerometer' or 'gyroscope'.
+        For modalities like 'skeleton', no sensor is needed.
+
+        Args:
+            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
+            sensor_name (str): Name of the sensor (e.g., phone, watch, meta_wrist, meta_hip). None for 'skeleton'.
+        """
+        if modality_name == "skeleton":
+            # Skeleton modality doesn't have sensor-specific data
+            self.selected_sensors[modality_name] = None
+        else:
+            if sensor_name is None:
+                raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
+            self.selected_sensors[modality_name] = sensor_name
+
+    def load_files(self) -> None:
+        """
+        Loads files from the dataset based on selected sensors and age groups.
+        Skeleton data is loaded without sensor selection.
+        """
+        for age_group, modalities in self.age_groups.items():
+            for modality_name, modality in modalities.items():
+                # Handle skeleton data (no sensor required)
+                if modality_name == "skeleton":
+                    modality_dir = os.path.join(self.root_dir, age_group, modality_name)
+                else:
+                    # Only load data from the selected sensor if it exists
+                    if modality_name in self.selected_sensors:
+                        sensor_name = self.selected_sensors[modality_name]
+                        modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
+                    else:
+                        continue
+
+                # Load the files
+                for root, _, files in os.walk(modality_dir):
+                    for file in files:
+                        try:
+                            if file.endswith(('.csv')):
+                                # Extract information based on the filename
+                                subject_id = int(file[1:3])  # Assuming S001 format for subject
+                                action_id = int(file[4:6])  # Assuming A001 format for action
+                                sequence_number = int(file[7:9])  # Assuming T001 format for trial
+                                file_path = os.path.join(root, file)
+                                modality.add_file(subject_id, action_id, sequence_number, file_path)
+                        except Exception as e:
+                            logger.error(f"Error processing file {file}: {e}")
+
+    def match_trials(self) -> None:
+        """
+        Matches files from different modalities based on subject ID, action ID, and sequence number.
+        Only trials that have matching files in all modalities will be kept in matched_trials.
+        """
+        trial_dict = {}
+
+        # Step 1: Group files by (subject_id, action_id, sequence_number)
+        for age_group, modalities in self.age_groups.items():
+            for modality_name, modality in modalities.items():
+                for modality_file in modality.files:
+                    key = (modality_file.subject_id, modality_file.action_id, modality_file.sequence_number)
+
+                    if key not in trial_dict:
+                        trial_dict[key] = {}
+
+                    # Add the file under its modality name
+                    trial_dict[key][modality_name] = modality_file.file_path
+
+        # Step 2: Filter out incomplete trials
+        required_modalities = list(self.age_groups['young'].keys())  # Assuming all age groups have the same modalities
+
+        for key, files_dict in trial_dict.items():
+            # Check if all required modalities are present for this trial
+            if all(modality in files_dict for modality in required_modalities):
+                subject_id, action_id, sequence_number = key
+                matched_trial = MatchedTrial(subject_id, action_id, sequence_number)
+
+                for modality_name, file_path in files_dict.items():
+                    matched_trial.add_file(modality_name, file_path)
+
+                self.matched_trials.append(matched_trial)
+
+    def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
+        """
+        Finds or creates a MatchedTrial for a given subject ID, action ID, and sequence number.
+
+        Args:
+            subject_id (int): ID of the subject.
+            action_id (int): ID of the action.
+            sequence_number (int): Sequence number of the trial.
+
+        Returns:
+            MatchedTrial: The matched trial object.
+        """
+        for trial in self.matched_trials:
+            if (trial.subject_id == subject_id and trial.action_id == action_id
+                    and trial.sequence_number == sequence_number):
+                return trial
+        new_trial = MatchedTrial(subject_id, action_id, sequence_number)
+        self.matched_trials.append(new_trial)
+        return new_trial
+
+    def pipe_line(self, age_group: List[str], modalities: List[str], sensors: List[str]):
+        '''
+        A pipeline to load the data 
+        
+        Args:
+            age_group: List of age groups ('young', 'old')
+            modalities: List of modalities ('accelerometer', 'gyroscope', 'skeleton')
+            sensors: List of sensors ('phone', 'watch', 'meta_wrist', 'meta_hip')
+        '''
+        for age in age_group: 
+            for modality in modalities:
+                self.add_modality(age, modality)
+                if modality == 'skeleton':
+                    self.select_sensor('skeleton')
+                else: 
+                    for sensor in sensors:
+                        self.select_sensor(modality, sensor)
+
+        # Load files for the selected sensors and skeleton data)
+        self.load_files()
+
+        # Match trials across the modalities
+        self.match_trials()
+        
+        logger.info(f"Loaded {len(self.matched_trials)} matched trials")
+        logger.info(f"Modalities: {modalities}")
+        logger.info(f"Sensors: {sensors}")
+        logger.info(f"Age groups: {age_group}")
+        
+        if hasattr(self, 'fusion_options') and self.fusion_options.get('filter_type'):
+            logger.info(f"Using fusion with filter type: {self.fusion_options['filter_type']}")
 
 
 class DatasetBuilder:
@@ -1202,7 +1464,6 @@ class DatasetBuilder:
     def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick', visualize: bool = False):
         '''
         Creates a dataset from the sensor data files for the specified subjects.
-        Uses parallel processing to handle multiple files concurrently.
 
         Args:
             subjects: List of subject IDs to include
@@ -1210,119 +1471,22 @@ class DatasetBuilder:
             filter_type: Type of fusion filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
             visualize: Whether to generate visualizations
         '''
-        self.print_log(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
+        logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
 
         start_time = time.time()
         self.data = defaultdict(list)
         self.fuse = fuse
 
-        # Group trials by subject for better parallel processing
-        subject_trials = {subject: [] for subject in subjects}
-        for trial in self.dataset.matched_trials:
-            if trial.subject_id in subjects:
-                subject_trials[trial.subject_id].append(trial)
-
-        # Initialize result tracking
-        count = 0
-        processed_count = 0
-        skipped_count = 0
-        trial_results = []
-
-        # Process each subject's trials in parallel
-        file_pool = get_file_thread_pool()
-        futures = []
-
-        # Submit each subject's trials for processing
-        for subject_id, trials in subject_trials.items():
-            if not trials:
-                continue  # Skip empty trial lists
+        # Use ThreadPoolExecutor for parallel processing
+        with ThreadPoolExecutor(max_workers=min(8, len(self.dataset.matched_trials))) as executor:
+            # Create a dictionary to track futures for each trial
+            future_to_trial = {}
             
-            # Submit this subject's trials for processing in a separate thread
-            futures.append((
-                subject_id,
-                file_pool.submit(
-                    self._process_subject_trials,
-                    subject_id,
-                    trials,
-                    fuse,
-                    filter_type,
-                    visualize
-                )
-            ))
-
-        # Collect results with progress reporting
-        with tqdm(total=len(futures), desc="Processing subjects") as pbar:
-            for subject_id, future in futures:
-                try:
-                    subject_data, subject_stats = future.result()
-                    
-                    # Update statistics
-                    count += subject_stats['count']
-                    processed_count += subject_stats['processed']
-                    skipped_count += subject_stats['skipped']
-                    
-                    # Extend trial results
-                    trial_results.extend(subject_data)
-                    
-                    self.print_log(f"Subject {subject_id} processing complete: "
-                                  f"{subject_stats['processed']}/{subject_stats['count']} trials processed, "
-                                  f"{subject_stats['skipped']} skipped")
-                except Exception as e:
-                    self.print_log(f"Error processing subject {subject_id}: {str(e)}")
-                    skipped_count += len(subject_trials[subject_id])
-                finally:
-                    pbar.update(1)
-
-        # Concatenate all trial data
-        for key in self.data:
-            values = [result[key] for result in trial_results if key in result and result[key] is not None]
-            if values:
-                try:
-                    if all(isinstance(x, np.ndarray) for x in values):
-                        self.data[key] = np.concatenate(values, axis=0)
-                        self.print_log(f"Concatenated {key} data: shape={self.data[key].shape}")
-                    else:
-                        self.print_log(f"Cannot concatenate {key} data - not all elements are arrays")
-                except Exception as e:
-                    self.print_log(f"Error concatenating {key} data: {str(e)}")
-
-        elapsed_time = time.time() - start_time
-        self.print_log(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
-
-    def _process_subject_trials(self, subject_id, trials, fuse, filter_type, visualize):
-        """
-        Process all trials for a given subject.
-        
-        Args:
-            subject_id: ID of the subject
-            trials: List of trials for this subject
-            fuse: Whether to apply sensor fusion
-            filter_type: Type of filter to use
-            visualize: Whether to generate visualizations
-            
-        Returns:
-            Tuple of (list of trial data, statistics dictionary)
-        """
-        # Initialize statistics
-        stats = {
-            'count': len(trials),
-            'processed': 0,
-            'skipped': 0
-        }
-        
-        # Create list to hold processed trial data
-        trial_results = []
-        
-        # Process trials in parallel using thread pool
-        # We control parallelism based on number of files
-        batch_size = max(1, min(len(trials), MAX_FILES_PARALLEL // 2))  # Process in smaller batches
-        
-        # Process all trials in batches
-        for i in range(0, len(trials), batch_size):
-            batch_trials = trials[i:i+batch_size]
-            
-            futures = []
-            for trial in batch_trials:
+            # Submit tasks for processing each trial
+            for trial in self.dataset.matched_trials:
+                if trial.subject_id not in subjects:
+                    continue
+                
                 # Determine label based on task
                 if self.task == 'fd':  # Fall detection
                     label = int(trial.action_id > 9)
@@ -1331,168 +1495,82 @@ class DatasetBuilder:
                 else:  # Activity recognition
                     label = trial.action_id - 1
                 
-                # Submit trial for processing
-                futures.append((
-                    trial,
-                    ThreadPoolExecutor(max_workers=1).submit(  # Use single thread per trial for stability
-                        self._process_single_trial, 
-                        trial, 
-                        label, 
-                        fuse, 
-                        filter_type,
-                        visualize
-                    )
-                ))
+                future = executor.submit(self._process_trial, trial, label, fuse, filter_type, visualize)
+                future_to_trial[future] = trial
             
-            # Collect batch results
-            for trial, future in futures:
+            # Collect results with progress tracking
+            count = 0
+            processed_count = 0
+            skipped_count = 0
+            
+            for future in tqdm(as_completed(future_to_trial), total=len(future_to_trial), desc="Processing trials"):
+                trial = future_to_trial[future]
+                count += 1
+                
                 try:
                     trial_data = future.result()
-                    if trial_data and self._len_check(trial_data):
-                        trial_results.append(trial_data)
-                        stats['processed'] += 1
+                    if trial_data is not None and self._len_check(trial_data):
+                        self._add_trial_data(trial_data)
+                        processed_count += 1
                     else:
-                        stats['skipped'] += 1
+                        skipped_count += 1
                 except Exception as e:
-                    self.print_log(f"Error processing trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number}: {str(e)}")
-                    stats['skipped'] += 1
-        
-        return trial_results, stats
+                    logger.error(f"Error processing trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number}: {str(e)}")
+                    skipped_count += 1
 
-    def _process_single_trial(self, trial, label, fuse, filter_type, visualize):
-        """Process a single trial with detailed error handling."""
+        # Concatenate data from all trials
+        for key in self.data:
+            values = self.data[key]
+            if all(isinstance(x, np.ndarray) for x in values):
+                try:
+                    self.data[key] = np.concatenate(values, axis=0)
+                    logger.info(f"Concatenated {key} data with shape {self.data[key].shape}")
+                except Exception as e:
+                    logger.error(f"Error concatenating {key} data: {str(e)}")
+            else:
+                logger.warning(f"Cannot concatenate {key} data - mixed types")
+
+        elapsed_time = time.time() - start_time
+        logger.info(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
+
+    def _process_trial(self, trial, label, fuse, filter_type, visualize):
+        """
+        Process a single trial with robust error handling.
+
+        Args:
+            trial: Trial object containing modality file paths
+            label: Class label for this trial
+            fuse: Whether to use sensor fusion
+            filter_type: Type of filter to use
+            visualize: Whether to generate visualizations
+
+        Returns:
+            Processed trial data or None if processing failed
+        """
         try:
             # Create dictionary to hold trial data
-            trial_data = defaultdict(np.ndarray)
+            trial_data = {}
             
             # Load data from each modality
-            executed = True
             for modality, file_path in trial.files.items():
                 try:
                     unimodal_data = self.load_file(file_path)
                     trial_data[modality] = unimodal_data
-                    logger.debug(f"Loaded {modality} data with shape {unimodal_data.shape}")
                 except Exception as e:
-                    executed = False
-                    raise RuntimeError(f"Error loading {modality} from {file_path}: {str(e)}")
-            
-            if not executed:
-                return None
+                    logger.error(f"Error loading {modality} from {file_path}: {str(e)}")
+                    return None
             
             # Align skeleton and inertial data
             trial_data = align_sequence(trial_data)
             
             # Process the aligned data
-            trial_data = self.process(trial_data, label, fuse, filter_type, visualize)
+            processed_data = self.process(trial_data, label, fuse, filter_type, visualize)
             
-            return trial_data
+            return processed_data
         
         except Exception as e:
-            # Detailed error logging but don't reraise to continue with other trials
-            self.print_log(f"Trial processing failed: {str(e)}")
+            logger.error(f"Trial processing failed: {str(e)}")
             return None
-
-    def print_log(self, string: str, print_time=True) -> None:
-        '''Log a message to console and log file'''
-        print(string)
-        logger.info(string)
-        
-    def _visualize_dataset(self):
-        '''
-        Creates visualizations of the dataset characteristics.
-        '''
-        logger.info("Creating dataset visualizations")
-
-        try:
-            # Create visualization directory
-            viz_dir = "dataset_visualizations"
-            os.makedirs(viz_dir, exist_ok=True)
-
-            # 1. Label distribution
-            if 'labels' in self.data:
-                fig, ax = plt.subplots(figsize=(10, 6))
-                labels, counts = np.unique(self.data['labels'], return_counts=True)
-                ax.bar(labels, counts)
-                ax.set_title('Label Distribution')
-                ax.set_xlabel('Label')
-                ax.set_ylabel('Count')
-                fig.savefig(os.path.join(viz_dir, 'label_distribution.png'))
-                plt.close(fig)
-                logger.debug(f"Created label distribution visualization with {len(labels)} classes")
-
-            # 2. Acceleration magnitude plots (sample from each class)
-            if 'accelerometer' in self.data and 'labels' in self.data:
-                labels = np.unique(self.data['labels'])
-                for label in labels:
-                    # Get indices for this label
-                    indices = np.where(self.data['labels'] == label)[0]
-                    if len(indices) == 0:
-                        continue
-
-                    # Select up to 5 random samples
-                    sample_indices = np.random.choice(indices, min(5, len(indices)), replace=False)
-
-                    for i, idx in enumerate(sample_indices):
-                        fig, ax = plt.subplots(figsize=(12, 6))
-                        acc_data = self.data['accelerometer'][idx]
-                        acc_mag = np.sqrt(np.sum(acc_data**2, axis=1))
-                        ax.plot(acc_mag)
-                        ax.set_title(f'Acceleration Magnitude - Label {label} (Sample {i+1})')
-                        ax.set_xlabel('Time')
-                        ax.set_ylabel('Magnitude')
-                        fig.savefig(os.path.join(viz_dir, f'acc_mag_label{label}_sample{i+1}.png'))
-                        plt.close(fig)
-                logger.debug("Created acceleration magnitude visualizations")
-
-            # 3. Fusion features visualization if available
-            if 'quaternion' in self.data and 'labels' in self.data:
-                labels = np.unique(self.data['labels'])
-                for label in labels:
-                    # Get indices for this label
-                    indices = np.where(self.data['labels'] == label)[0]
-                    if len(indices) == 0:
-                        continue
-
-                    # Select one random sample
-                    idx = np.random.choice(indices)
-
-                    # Plot quaternion components
-                    quat_data = self.data['quaternion'][idx]
-                    fig, ax = plt.subplots(figsize=(12, 6))
-                    ax.plot(quat_data[:, 0], label='w')
-                    ax.plot(quat_data[:, 1], label='x')
-                    ax.plot(quat_data[:, 2], label='y')
-                    ax.plot(quat_data[:, 3], label='z')
-                    ax.set_title(f'Quaternion Components - Label {label}')
-                    ax.set_xlabel('Time')
-                    ax.set_ylabel('Value')
-                    ax.legend()
-                    fig.savefig(os.path.join(viz_dir, f'quaternion_label{label}.png'))
-                    plt.close(fig)
-
-                    # Convert to Euler angles
-                    euler_angles = []
-                    for q in quat_data:
-                        r = Rotation.from_quat([q[1], q[2], q[3], q[0]])  # x,y,z,w format
-                        euler_angles.append(r.as_euler('xyz', degrees=True))
-                    euler_angles = np.array(euler_angles)
-
-                    # Plot Euler angles
-                    fig, ax = plt.subplots(figsize=(12, 6))
-                    ax.plot(euler_angles[:, 0], label='Roll')
-                    ax.plot(euler_angles[:, 1], label='Pitch')
-                    ax.plot(euler_angles[:, 2], label='Yaw')
-                    ax.set_title(f'Euler Angles - Label {label}')
-                    ax.set_xlabel('Time')
-                    ax.set_ylabel('Degrees')
-                    ax.legend()
-                    fig.savefig(os.path.join(viz_dir, f'euler_angles_label{label}.png'))
-                    plt.close(fig)
-                logger.debug("Created quaternion and Euler angle visualizations")
-
-            logger.info(f"Dataset visualizations saved to {viz_dir}")
-        except Exception as e:
-            logger.error(f"Error creating visualizations: {str(e)}")
 
     def normalization(self) -> Dict[str, np.ndarray]:
         '''
@@ -1536,3 +1614,83 @@ class DatasetBuilder:
         logger.info(f"Normalization complete in {elapsed_time:.2f}s")
 
         return self.data
+
+
+def prepare_smartfallmm(arg) -> DatasetBuilder: 
+    '''
+    Function for dataset preparation
+    
+    Args:
+        arg: Configuration object with dataset_args
+        
+    Returns:
+        DatasetBuilder object ready for creating datasets
+    '''
+    # Check if fusion options are present in the configuration
+    fusion_options = arg.dataset_args.get('fusion_options', {})
+    
+    # Create dataset object with optional fusion configuration
+    sm_dataset = SmartFallMM(
+        root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'),
+        fusion_options=fusion_options
+    )
+    
+    # Setup the dataset pipeline
+    sm_dataset.pipe_line(
+        age_group=arg.dataset_args['age_group'],
+        modalities=arg.dataset_args['modalities'],
+        sensors=arg.dataset_args['sensors']
+    )
+    
+    # Create the dataset builder
+    builder = DatasetBuilder(
+        sm_dataset, 
+        arg.dataset_args['mode'], 
+        arg.dataset_args['max_length'],
+        arg.dataset_args['task'],
+        fusion_options=fusion_options
+    )
+    
+    return builder
+
+
+def split_by_subjects(builder, subjects, fuse, filter_type='madgwick', visualize=False) -> Dict[str, np.ndarray]:
+    '''
+    Function to filter data by expected subjects and apply fusion if needed
+    
+    Args:
+        builder: DatasetBuilder object
+        subjects: List of subject IDs to include
+        fuse: Basic flag for fusion (True/False)
+        filter_type: Type of filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
+        visualize: Whether to generate visualizations
+        
+    Returns:
+        Dictionary of normalized dataset components
+    '''
+    # Get fusion options if available
+    fusion_options = getattr(builder, 'fusion_options', {})
+    
+    # Check if detailed fusion configuration is available
+    if fusion_options and fusion_options.get('enabled', False):
+        # Use the specified filter type (or default to madgwick)
+        filter_type_config = fusion_options.get('filter_type', 'madgwick')
+        visualize_config = fusion_options.get('visualize', False)
+        
+        # Override with supplied parameters if provided
+        filter_type = filter_type or filter_type_config
+        visualize = visualize or visualize_config
+        
+        logger.info(f"Applying IMU fusion with filter type: {filter_type}")
+        logger.info(f"Visualization enabled: {visualize}")
+        
+        # Create dataset with enhanced fusion options
+        builder.make_dataset(subjects, True, filter_type=filter_type, visualize=visualize)
+    else:
+        # Use the basic fusion flag
+        builder.make_dataset(subjects, fuse, filter_type=filter_type, visualize=visualize)
+    
+    # Apply normalization
+    norm_data = builder.normalization()
+    
+    return norm_data

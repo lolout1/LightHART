@@ -1,4 +1,3 @@
-# utils/imu_fusion.py
 '''
 IMU Fusion Module for Enhanced Orientation Estimation
 
