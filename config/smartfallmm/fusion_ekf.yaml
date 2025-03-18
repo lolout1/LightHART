@@ -6,17 +6,17 @@ subjects: [29,30,31,33,45,46,34,37,39,38,43,35,36,44,34,32]
 
 model_args:
   num_layers: 3
-  embed_dim: 32
+  embed_dim: 48
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 4
+  num_heads: 8
   fusion_type: 'concat'
-  dropout: 0.3
+  dropout: 0.25
   use_batch_norm: true
-  feature_dim: 64  # Explicitly set to avoid dimension mismatch
+  feature_dim: 96  # Explicitly set to avoid dimension mismatch
 
 dataset_args:
   mode: 'sliding_window'
@@ -27,7 +27,7 @@ dataset_args:
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'madgwick'  # Madgwick Filter (baseline)
+    filter_type: 'ekf'  # Extended Kalman Filter
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true

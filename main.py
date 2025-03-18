@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Fall Detection Training Pipeline with Kalman Filter Variants
 
@@ -44,7 +45,13 @@ import warnings
 
 # Local imports
 from utils.dataset import prepare_smartfallmm, split_by_subjects
-from utils.imu_fusion import cleanup_resources
+from utils.imu_fusion import cleanup_resources, update_thread_configuration
+from utils.filter_comparison import (
+    compare_filter_accuracy,
+    visualize_filter_comparison,
+    compare_filter_features,
+    visualize_feature_comparison
+)
 
 # Register cleanup function to ensure proper resource management on exit
 import atexit
@@ -92,7 +99,7 @@ def get_args():
         Configured ArgumentParser object
     '''
     parser = argparse.ArgumentParser(description='Fall Detection and Human Activity Recognition')
-    parser.add_argument('--config', default='./config/smartfallmm/fusion_madgwick.yaml',
+    parser.add_argument('--config', default='./config/smartfallmm/fusion_ekf.yaml',
                         help='Path to the configuration file')
     parser.add_argument('--dataset', type=str, default='smartfallmm',
                         help='Dataset name to use')
@@ -186,9 +193,14 @@ def get_args():
                         help='Whether to use k-fold cross-validation')
     parser.add_argument('--num-folds', type=int, default=5,
                         help='Number of folds for cross-validation')
+    
+    # Filter comparison
+    parser.add_argument('--compare-filters', type=str2bool, default=False,
+                        help='Whether to compare different filter types')
+    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'ekf'], 
+                        help='Filter types to compare')
 
     return parser
-
 
 def init_seed(seed):
     '''
@@ -205,7 +217,6 @@ def init_seed(seed):
     torch.backends.cudnn.deterministic = False
     # Enable cudnn benchmarking for performance
     torch.backends.cudnn.benchmark = True
-
 
 def import_class(import_str):
     '''
@@ -227,7 +238,6 @@ def import_class(import_str):
     except AttributeError:
         raise ImportError(f'Class {class_str} cannot be found ({traceback.format_exception(*sys.exc_info())})')
 
-
 def setup_gpu_environment(args):
     """
     Configure GPUs for processing.
@@ -236,7 +246,7 @@ def setup_gpu_environment(args):
         args: Command line arguments with device specifications
     
     Returns:
-        List of available GPU devices
+        Tuple of (list of available GPU devices, bool indicating if AMP should be used)
     """
     if torch.cuda.is_available():
         num_gpus = torch.cuda.device_count()
@@ -286,7 +296,6 @@ def setup_gpu_environment(args):
         logger.warning("PyTorch CUDA not available, using CPU")
         return [], False
 
-
 def configure_parallel_processing(args):
     """
     Configure parallel processing based on command-line arguments.
@@ -295,9 +304,7 @@ def configure_parallel_processing(args):
         args: Command-line arguments with parallel-threads parameter
     """
     if hasattr(args, 'parallel_threads') and args.parallel_threads > 0:
-        # Import the necessary function to update thread configuration
-        from utils.imu_fusion import update_thread_configuration
-        
+        # Set up optimal thread allocation
         new_total = args.parallel_threads
         
         if new_total < 4:
@@ -315,7 +322,6 @@ def configure_parallel_processing(args):
         
         logger.info(f"Using {max_files} parallel files with {threads_per_file} threads per file")
         logger.info(f"Total parallel threads: {max_files * threads_per_file}")
-
 
 class Trainer:
     '''
@@ -335,6 +341,8 @@ class Trainer:
         self.arg = arg
         self.train_loss_summary = []
         self.val_loss_summary = []
+        self.train_metrics_history = []
+        self.val_metrics_history = []
         self.best_f1 = 0
         self.best_loss = float('inf')
         self.best_accuracy = 0
@@ -352,6 +360,7 @@ class Trainer:
         self.model_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}.pt'
         self.patience_counter = 0
         self.scaler = None  # For mixed precision training
+        self.fold_metrics = []
         
         # Get sensor modalities for fusion
         self.inertial_modality = [modality for modality in arg.dataset_args['modalities']
@@ -366,7 +375,8 @@ class Trainer:
         # Create working directory
         if not os.path.exists(self.arg.work_dir):
             os.makedirs(self.arg.work_dir)
-            self.save_config(arg.config, arg.work_dir)
+            if arg.config:
+                self.save_config(arg.config, arg.work_dir)
 
         # Set up GPU environment
         self.available_gpus, self.use_amp = setup_gpu_environment(arg)
@@ -375,7 +385,7 @@ class Trainer:
         
         # Create gradient scaler for AMP if needed
         if self.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler() if torch.__version__ >= '1.6.0' else None
             self.print_log("Using Automatic Mixed Precision (AMP) training")
         
         # Load model
@@ -464,7 +474,44 @@ class Trainer:
         Model = import_class(model_path)
         self.print_log(f"Loading model: {model_path}")
         self.print_log(f"Model arguments: {model_args}")
-        model = Model(**model_args).to(device)
+        
+        # Ensure feature_dim is set correctly to avoid dimension mismatches
+        if 'feature_dim' not in model_args and 'embed_dim' in model_args:
+            if model_args.get('fusion_type', 'concat') == 'concat':
+                model_args['feature_dim'] = model_args['embed_dim'] * 2
+            else:
+                model_args['feature_dim'] = model_args['embed_dim']
+            self.print_log(f"Auto-setting feature_dim to {model_args['feature_dim']}")
+        
+        # Ensure num_heads divides feature_dim evenly
+        if 'num_heads' in model_args and 'feature_dim' in model_args:
+            if model_args['feature_dim'] % model_args['num_heads'] != 0:
+                old_heads = model_args['num_heads']
+                # Find closest divisor
+                for heads in [old_heads-1, old_heads-2, old_heads+1, old_heads+2]:
+                    if heads > 0 and model_args['feature_dim'] % heads == 0:
+                        model_args['num_heads'] = heads
+                        self.print_log(f"Adjusted num_heads from {old_heads} to {heads} to ensure divisibility with feature_dim={model_args['feature_dim']}")
+                        break
+        
+        try:
+            model = Model(**model_args).to(device)
+        except Exception as e:
+            self.print_log(f"Error instantiating model: {e}")
+            self.print_log(f"Attempting to fix dimension issue and retry...")
+            
+            # Last resort: Adjust feature_dim to be divisible by num_heads
+            if 'feature_dim' in model_args and 'num_heads' in model_args:
+                heads = model_args['num_heads']
+                feature_dim = model_args['feature_dim']
+                new_feature_dim = (feature_dim // heads) * heads
+                if new_feature_dim != feature_dim:
+                    model_args['feature_dim'] = new_feature_dim
+                    self.print_log(f"Adjusted feature_dim from {feature_dim} to {new_feature_dim} to ensure divisibility with num_heads={heads}")
+            
+            # Try again with adjusted parameters
+            model = Model(**model_args).to(device)
+        
         return model
 
     def load_weights(self):
@@ -487,16 +534,26 @@ class Trainer:
             model = torch.load(self.arg.weights, map_location=device)
             self.print_log("Loaded complete model")
             return model
-        except Exception:
+        except Exception as e:
             # If that fails, try loading as state dict
             try:
                 Model = import_class(self.arg.model)
                 model = Model(**self.arg.model_args).to(device)
-                model.load_state_dict(torch.load(self.arg.weights, map_location=device))
-                self.print_log("Loaded model weights from state dictionary")
+                state_dict = torch.load(self.arg.weights, map_location=device)
+                
+                # Handle different state dict formats
+                if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+                    # Load from checkpoint dict
+                    model.load_state_dict(state_dict['model_state_dict'])
+                    self.print_log("Loaded model weights from checkpoint dictionary")
+                else:
+                    # Load direct state dict
+                    model.load_state_dict(state_dict)
+                    self.print_log("Loaded model weights from state dictionary")
+                
                 return model
-            except Exception as e:
-                raise ValueError(f"Failed to load weights: {str(e)}")
+            except Exception as load_err:
+                raise ValueError(f"Failed to load weights: {str(load_err)}\nOriginal error: {str(e)}")
 
     def load_loss(self):
         '''
@@ -599,7 +656,29 @@ class Trainer:
         Returns:
             List of (train_subjects, val_subjects) tuples for each fold
         """
-        # Define fixed fold assignments based on the specified pattern
+        # Try to get fold assignments from config file
+        if (hasattr(self.arg, 'kfold') and isinstance(self.arg.kfold, dict) and 
+            'fold_assignments' in self.arg.kfold):
+            fold_assignments = self.arg.kfold.get('fold_assignments', [])
+            
+            if len(fold_assignments) == num_folds:
+                self.print_log(f"Using {num_folds} fold assignments from config file")
+                
+                # Create folds with configured assignments
+                folds = []
+                for i, val_subjects in enumerate(fold_assignments, 1):
+                    # Training subjects are all subjects not in validation
+                    train_subjects = [s for s in subjects if s not in val_subjects]
+                    folds.append((train_subjects, val_subjects))
+                    
+                    # Log fold information
+                    self.print_log(f"\nFold {i} assignments:")
+                    self.print_log(f"Validation subjects ({len(val_subjects)}): {val_subjects}")
+                    self.print_log(f"Training subjects ({len(train_subjects)}): {train_subjects}")
+                
+                return folds
+        
+        # Default fixed fold assignments if not in config
         fold_assignments = [
             ([43, 35, 36], "Fold 1: 38.3% falls"),
             ([44, 34, 32], "Fold 2: 39.7% falls"),
@@ -611,14 +690,21 @@ class Trainer:
         # Create folds with fixed assignments
         folds = []
         for val_subjects, fold_desc in fold_assignments:
+            # Filter validation subjects to only include those in the requested subjects
+            valid_val_subjects = [s for s in val_subjects if s in subjects]
+            
+            # Skip this fold if no valid validation subjects
+            if not valid_val_subjects:
+                continue
+                
             # Training subjects are all subjects not in validation
-            train_subjects = [s for s in subjects if s not in val_subjects]
-            folds.append((train_subjects, val_subjects))
+            train_subjects = [s for s in subjects if s not in valid_val_subjects]
+            folds.append((train_subjects, valid_val_subjects))
             
             # Log fold information
             fold_num = len(folds)
             self.print_log(f"\nCreated {fold_desc}")
-            self.print_log(f"Validation subjects ({len(val_subjects)}): {val_subjects}")
+            self.print_log(f"Validation subjects ({len(valid_val_subjects)}): {valid_val_subjects}")
             self.print_log(f"Training subjects ({len(train_subjects)}): {train_subjects}")
     
         return folds
@@ -638,9 +724,16 @@ class Trainer:
         plt.xlabel('Labels')
         plt.ylabel('Count')
         plt.title(f'{mode.capitalize()} Label Distribution')
+        plt.grid(True, alpha=0.3)
         plt.savefig(f'{work_dir}/{mode}_label_distribution.png')
         plt.close()
         self.print_log(f"Created {mode} label distribution visualization with classes {values}")
+        
+        # Print distribution percentages
+        total = np.sum(count)
+        percentages = (count / total) * 100
+        for i, (val, cnt, pct) in enumerate(zip(values, count, percentages)):
+            self.print_log(f"  Class {val}: {cnt} samples ({pct:.1f}%)")
 
     def load_data(self, train_subjects=None, val_subjects=None):
         '''
@@ -668,8 +761,25 @@ class Trainer:
             val_subjects = val_subjects or self.val_subject or self.arg.subjects
             
             self.print_log(f"Splitting data for subjects: train={train_subjects}, val={val_subjects}")
-            self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
-            self.norm_val = split_by_subjects(builder, val_subjects, self.fuse)
+            
+            try:
+                self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
+                self.norm_val = split_by_subjects(builder, val_subjects, self.fuse)
+
+                # Check if data is valid
+                if not self.norm_train or not self.norm_val:
+                    self.print_log("ERROR: Split produced empty datasets")
+                    return False
+                
+                # Check for empty modalities
+                for dataset_name, dataset in [("training", self.norm_train), ("validation", self.norm_val)]:
+                    for key, value in dataset.items():
+                        if key != 'labels' and (len(value) == 0 or value is None):
+                            self.print_log(f"WARNING: Empty {key} in {dataset_name} data")
+            except Exception as e:
+                self.print_log(f"ERROR: Failed to split data: {e}")
+                self.print_log(traceback.format_exc())
+                return False
 
             # Check if validation data is valid
             if not self.norm_val or all(len(v) == 0 for k, v in self.norm_val.items() if k != 'labels'):
@@ -677,49 +787,73 @@ class Trainer:
                 return False
 
             # Create training data loader
-            self.data_loader['train'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.train_feeder_args, dataset=self.norm_train),
-                batch_size=self.arg.batch_size,
-                shuffle=True,
-                num_workers=self.arg.num_worker,
-                pin_memory=True
-            )
-            self.print_log(f"Training data loaded with {len(self.data_loader['train'])} batches")
+            try:
+                self.data_loader['train'] = torch.utils.data.DataLoader(
+                    dataset=Feeder(**self.arg.train_feeder_args, dataset=self.norm_train),
+                    batch_size=self.arg.batch_size,
+                    shuffle=True,
+                    num_workers=self.arg.num_worker,
+                    pin_memory=True,
+                    drop_last=self.arg.train_feeder_args.get('drop_last', False),
+                    persistent_workers=True if self.arg.num_worker > 0 else False
+                )
+                self.print_log(f"Training data loaded with {len(self.data_loader['train'])} batches")
+            except Exception as e:
+                self.print_log(f"ERROR: Failed to create training data loader: {e}")
+                self.print_log(traceback.format_exc())
+                return False
 
             # Visualize training data distribution
             self.distribution_viz(self.norm_train['labels'], self.arg.work_dir, 'train')
 
             # Create validation data loader
-            self.data_loader['val'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_val),
-                batch_size=self.arg.batch_size,
-                shuffle=False,
-                num_workers=self.arg.num_worker,
-                pin_memory=True
-            )
-            self.print_log(f"Validation data loaded with {len(self.data_loader['val'])} batches")
+            try:
+                self.data_loader['val'] = torch.utils.data.DataLoader(
+                    dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_val),
+                    batch_size=self.arg.batch_size,
+                    shuffle=False,
+                    num_workers=self.arg.num_worker,
+                    pin_memory=True,
+                    drop_last=self.arg.val_feeder_args.get('drop_last', False)
+                )
+                self.print_log(f"Validation data loaded with {len(self.data_loader['val'])} batches")
+            except Exception as e:
+                self.print_log(f"ERROR: Failed to create validation data loader: {e}")
+                self.print_log(traceback.format_exc())
+                return False
 
             # Visualize validation data distribution
             self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
 
             # Prepare test data using validation subjects
             self.print_log(f"Preparing test data for subjects {val_subjects}")
-            self.norm_test = split_by_subjects(builder, val_subjects, self.fuse)
+            try:
+                self.norm_test = split_by_subjects(builder, val_subjects, self.fuse)
 
-            # Check if test data is valid
-            if not self.norm_test or all(len(v) == 0 for k, v in self.norm_test.items() if k != 'labels'):
-                self.print_log("ERROR: Test data has empty values")
+                # Check if test data is valid
+                if not self.norm_test or all(len(v) == 0 for k, v in self.norm_test.items() if k != 'labels'):
+                    self.print_log("ERROR: Test data has empty values")
+                    return False
+            except Exception as e:
+                self.print_log(f"ERROR: Failed to prepare test data: {e}")
+                self.print_log(traceback.format_exc())
                 return False
 
             # Create test data loader
-            self.data_loader['test'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
-                batch_size=self.arg.test_batch_size,
-                shuffle=False,
-                num_workers=self.arg.num_worker,
-                pin_memory=True
-            )
-            self.print_log(f"Test data loaded with {len(self.data_loader['test'])} batches")
+            try:
+                self.data_loader['test'] = torch.utils.data.DataLoader(
+                    dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
+                    batch_size=self.arg.test_batch_size,
+                    shuffle=False,
+                    num_workers=self.arg.num_worker,
+                    pin_memory=True,
+                    drop_last=self.arg.test_feeder_args.get('drop_last', False)
+                )
+                self.print_log(f"Test data loaded with {len(self.data_loader['test'])} batches")
+            except Exception as e:
+                self.print_log(f"ERROR: Failed to create test data loader: {e}")
+                self.print_log(traceback.format_exc())
+                return False
 
             # Log dataset sizes and modalities
             self.print_log(f"Training data modalities: {list(self.norm_train.keys())}")
@@ -730,23 +864,32 @@ class Trainer:
         else:
             # Testing phase
             self.print_log(f"Preparing test data for subjects {self.arg.subjects}")
-            builder = prepare_smartfallmm(self.arg)
-            self.norm_test = split_by_subjects(builder, self.arg.subjects, self.fuse)
+            try:
+                builder = prepare_smartfallmm(self.arg)
+                self.norm_test = split_by_subjects(builder, self.arg.subjects, self.fuse)
 
-            if not self.norm_test or all(len(v) == 0 for k, v in self.norm_test.items() if k != 'labels'):
-                self.print_log("ERROR: Test data has empty values")
+                if not self.norm_test or all(len(v) == 0 for k, v in self.norm_test.items() if k != 'labels'):
+                    self.print_log("ERROR: Test data has empty values")
+                    return False
+                
+                self.data_loader['test'] = torch.utils.data.DataLoader(
+                    dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
+                    batch_size=self.arg.test_batch_size,
+                    shuffle=False,
+                    num_workers=self.arg.num_worker,
+                    pin_memory=True,
+                    drop_last=self.arg.test_feeder_args.get('drop_last', False)
+                )
+                self.print_log(f"Test data loaded with {len(self.data_loader['test'])} batches")
+                
+                # Visualize test data distribution
+                self.distribution_viz(self.norm_test['labels'], self.arg.work_dir, 'test')
+
+                return True
+            except Exception as e:
+                self.print_log(f"ERROR: Failed to load test data: {e}")
+                self.print_log(traceback.format_exc())
                 return False
-
-            self.data_loader['test'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
-                batch_size=self.arg.test_batch_size,
-                shuffle=False,
-                num_workers=self.arg.num_worker,
-                pin_memory=True
-            )
-            self.print_log(f"Test data loaded with {len(self.data_loader['test'])} batches")
-
-            return True
 
     def record_time(self):
         '''
@@ -765,9 +908,9 @@ class Trainer:
         Returns:
             Elapsed time in seconds
         '''
-        split_time = time.time() - self.cur_time
+        split_time_val = time.time() - self.cur_time
         self.record_time()
-        return split_time
+        return split_time_val
 
     def print_log(self, string: str, print_time=True) -> None:
         '''
@@ -795,15 +938,33 @@ class Trainer:
             val_loss: List of validation loss values
             fold: Optional fold number for k-fold cross-validation
         '''
+        if not train_loss or not val_loss:
+            self.print_log("WARNING: Missing loss data for visualization")
+            return
+            
         epochs = range(len(train_loss))
         plt.figure(figsize=(12, 8))
-        plt.plot(epochs, train_loss, 'b-', label="Training Loss")
-        plt.plot(epochs, val_loss, 'r-', label="Validation Loss")
+        plt.plot(epochs, train_loss, 'b-', label="Training Loss", marker='o', markersize=4, linewidth=2)
+        plt.plot(epochs, val_loss, 'r-', label="Validation Loss", marker='s', markersize=4, linewidth=2)
         plt.title('Training vs Validation Loss')
         plt.legend()
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
+        
+        # Add min/max values as annotations
+        min_train_idx = np.argmin(train_loss)
+        min_val_idx = np.argmin(val_loss)
+        plt.annotate(f'Min: {train_loss[min_train_idx]:.4f}', 
+                    xy=(min_train_idx, train_loss[min_train_idx]),
+                    xytext=(min_train_idx+0.5, train_loss[min_train_idx]*1.1),
+                    arrowprops=dict(facecolor='blue', shrink=0.05),
+                    color='blue')
+        plt.annotate(f'Min: {val_loss[min_val_idx]:.4f}', 
+                    xy=(min_val_idx, val_loss[min_val_idx]),
+                    xytext=(min_val_idx+0.5, val_loss[min_val_idx]*1.1),
+                    arrowprops=dict(facecolor='red', shrink=0.05),
+                    color='red')
         
         save_path = f'{self.arg.work_dir}/train_vs_val_loss.png'
         if fold is not None:
@@ -838,13 +999,27 @@ class Trainer:
             train_values = [m.get(metric, 0) for m in train_metrics]
             val_values = [m.get(metric, 0) for m in val_metrics]
             
-            plt.plot(epochs, train_values, 'b-', label=f'Train {metric}')
-            plt.plot(epochs, val_values, 'r-', label=f'Val {metric}')
+            plt.plot(epochs, train_values, 'b-', label=f'Train {metric}', marker='o', markersize=3)
+            plt.plot(epochs, val_values, 'r-', label=f'Val {metric}', marker='s', markersize=3)
             plt.title(f'{metric.capitalize()} vs Epochs')
             plt.xlabel('Epochs')
             plt.ylabel(metric.capitalize())
             plt.legend()
-            plt.grid(True)
+            plt.grid(True, alpha=0.3)
+            
+            # Add max value annotations
+            max_train_idx = np.argmax(train_values)
+            max_val_idx = np.argmax(val_values)
+            plt.annotate(f'Max: {train_values[max_train_idx]:.4f}', 
+                        xy=(max_train_idx, train_values[max_train_idx]),
+                        xytext=(max_train_idx+0.5, min(train_values[max_train_idx]*1.05, 1.0)),
+                        arrowprops=dict(facecolor='blue', shrink=0.05, alpha=0.7),
+                        color='blue')
+            plt.annotate(f'Max: {val_values[max_val_idx]:.4f}', 
+                        xy=(max_val_idx, val_values[max_val_idx]),
+                        xytext=(max_val_idx+0.5, min(val_values[max_val_idx]*1.05, 1.0)),
+                        arrowprops=dict(facecolor='red', shrink=0.05, alpha=0.7),
+                        color='red')
         
         plt.tight_layout()
         
@@ -867,51 +1042,57 @@ class Trainer:
             y_true: True class labels
             fold: Optional fold number for k-fold cross-validation
         '''
-        cm = confusion_matrix(y_true, y_pred)
-        plt.figure(figsize=(10, 8))
-        plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-        plt.colorbar()
+        try:
+            cm = confusion_matrix(y_true, y_pred)
+            plt.figure(figsize=(10, 8))
+            plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+            plt.colorbar()
 
-        # Set axis labels and title
-        class_labels = ["Non-Fall", "Fall"]
-        tick_marks = np.arange(len(class_labels))
-        plt.xticks(tick_marks, class_labels)
-        plt.yticks(tick_marks, class_labels)
-        plt.xlabel("Predicted Label")
-        plt.ylabel("True Label")
-        plt.title("Confusion Matrix")
+            # Set axis labels and title
+            class_labels = ["Non-Fall", "Fall"]
+            tick_marks = np.arange(len(class_labels))
+            plt.xticks(tick_marks, class_labels)
+            plt.yticks(tick_marks, class_labels)
+            plt.xlabel("Predicted Label")
+            plt.ylabel("True Label")
+            plt.title("Confusion Matrix")
 
-        # Add text annotations
-        thresh = cm.max() / 2
-        for i, j in np.ndindex(cm.shape):
-            plt.text(j, i, cm[i, j],
-                    horizontalalignment="center",
-                    color="white" if cm[i, j] > thresh else "black")
+            # Add text annotations
+            thresh = cm.max() / 2
+            for i, j in np.ndindex(cm.shape):
+                plt.text(j, i, cm[i, j],
+                        horizontalalignment="center",
+                        color="white" if cm[i, j] > thresh else "black")
 
-        plt.tight_layout()
-        
-        save_path = f'{self.arg.work_dir}/confusion_matrix.png'
-        if fold is not None:
-            fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
-            os.makedirs(fold_dir, exist_ok=True)
-            save_path = f'{fold_dir}/confusion_matrix.png'
+            plt.tight_layout()
             
-        plt.savefig(save_path)
-        plt.close()
-        self.print_log(f"Created confusion matrix visualization at {save_path}")
-        
-        # Calculate additional metrics
-        tn, fp, fn, tp = cm.ravel()
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-        sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
-        
-        self.print_log(f"Confusion Matrix Statistics:")
-        self.print_log(f"  True Negatives: {tn}")
-        self.print_log(f"  False Positives: {fp}")
-        self.print_log(f"  False Negatives: {fn}")
-        self.print_log(f"  True Positives: {tp}")
-        self.print_log(f"  Specificity: {specificity:.4f}")
-        self.print_log(f"  Sensitivity: {sensitivity:.4f}")
+            save_path = f'{self.arg.work_dir}/confusion_matrix.png'
+            if fold is not None:
+                fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
+                os.makedirs(fold_dir, exist_ok=True)
+                save_path = f'{fold_dir}/confusion_matrix.png'
+                
+            plt.savefig(save_path)
+            plt.close()
+            self.print_log(f"Created confusion matrix visualization at {save_path}")
+            
+            # Calculate additional metrics
+            tn, fp, fn, tp = cm.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+            balanced_accuracy = (sensitivity + specificity) / 2
+            
+            self.print_log(f"Confusion Matrix Statistics:")
+            self.print_log(f"  True Negatives: {tn}")
+            self.print_log(f"  False Positives: {fp}")
+            self.print_log(f"  False Negatives: {fn}")
+            self.print_log(f"  True Positives: {tp}")
+            self.print_log(f"  Specificity: {specificity:.4f}")
+            self.print_log(f"  Sensitivity: {sensitivity:.4f}")
+            self.print_log(f"  Balanced Accuracy: {balanced_accuracy:.4f}")
+        except Exception as e:
+            self.print_log(f"ERROR: Failed to create confusion matrix: {e}")
+            self.print_log(traceback.format_exc())
 
     def compute_metrics(self, outputs, targets):
         """
@@ -935,13 +1116,13 @@ class Trainer:
                 predictions = torch.argmax(outputs, dim=1)
             else:
                 # Binary classification case
-                predictions = (torch.sigmoid(outputs) > 0.5).float()
+                predictions = (torch.sigmoid(outputs.view(-1)) > 0.5).float()
         else:
             # Handle numpy inputs
             if len(outputs.shape) > 1 and outputs.shape[1] > 1:
                 predictions = np.argmax(outputs, axis=1)
             else:
-                predictions = (1 / (1 + np.exp(-outputs)) > 0.5).astype(float)
+                predictions = (1 / (1 + np.exp(-outputs.reshape(-1))) > 0.5).astype(float)
         
         # Convert to numpy for sklearn metrics
         predictions_np = predictions.numpy() if isinstance(predictions, torch.Tensor) else predictions
@@ -957,8 +1138,8 @@ class Trainer:
                 precision, recall, f1, _ = precision_recall_fscore_support(
                     targets_np, predictions_np, average='binary', zero_division=0
                 )
-            except Exception:
-                # Fallback if there's an issue
+            except Exception as e:
+                self.print_log(f"Warning: Error computing precision_recall_fscore: {e}")
                 precision = recall = f1 = 0.0
                 
         # Compute confusion matrix
@@ -966,10 +1147,13 @@ class Trainer:
             tn, fp, fn, tp = confusion_matrix(targets_np, predictions_np, labels=[0, 1]).ravel()
             false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
             miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
-        except Exception:
-            # Fallback if there's an issue with confusion matrix
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+            balanced_accuracy = (sensitivity + specificity) / 2
+        except Exception as e:
+            self.print_log(f"Warning: Error computing confusion matrix: {e}")
             tn = fp = fn = tp = 0
-            false_alarm_rate = miss_rate = 0.0
+            false_alarm_rate = miss_rate = specificity = sensitivity = balanced_accuracy = 0.0
         
         return {
             'accuracy': accuracy,
@@ -981,7 +1165,10 @@ class Trainer:
             'fp': fp,
             'fn': fn,
             'false_alarm_rate': false_alarm_rate,
-            'miss_rate': miss_rate
+            'miss_rate': miss_rate,
+            'specificity': specificity,
+            'sensitivity': sensitivity,
+            'balanced_accuracy': balanced_accuracy
         }
 
     def train(self, epoch, fold=None):
@@ -1020,67 +1207,42 @@ class Trainer:
             with torch.no_grad():
                 # Get the appropriate data modalities
                 data_dict = {}
-                
-                # Always include accelerometer data if available
                 if 'accelerometer' in inputs:
                     data_dict['accelerometer'] = inputs['accelerometer'].to(device).float()
-                
-                # Add any other modalities that are available
                 for modality in ['gyroscope', 'skeleton', 'quaternion', 'linear_acceleration', 'fusion_features']:
                     if modality in inputs:
                         data_dict[modality] = inputs[modality].to(device).float()
-                
                 targets = targets.to(device).float()
 
-            # Record data loading time
             timer['dataloader'] += self.split_time()
 
-            # Forward pass and loss calculation
             self.optimizer.zero_grad()
 
-            # Use AMP if available
-            if self.use_amp:
+            if self.use_amp and self.scaler is not None:
                 with torch.cuda.amp.autocast():
                     outputs = self.model(data_dict)
                     loss = self.criterion(outputs, targets)
-                
-                # Scale gradients and optimize
                 self.scaler.scale(loss).backward()
-                
-                # Gradient clipping if enabled
                 if hasattr(self.arg, 'grad_clip') and self.arg.grad_clip > 0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.arg.grad_clip)
-                
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                # Standard forward and backward pass
                 outputs = self.model(data_dict)
                 loss = self.criterion(outputs, targets)
-                
-                # Backward pass and optimize
                 loss.backward()
-                
-                # Gradient clipping if enabled
                 if hasattr(self.arg, 'grad_clip') and self.arg.grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.arg.grad_clip)
-                    
                 self.optimizer.step()
 
-            # Record model training time
             timer['model'] += self.split_time()
 
-            # Compute metrics
             batch_metrics = self.compute_metrics(outputs, targets)
-            
-            # Update accumulated metrics
             for k, v in batch_metrics.items():
                 train_metrics[k] += v * batch_size
-            
             train_metrics['loss'] += loss.item() * batch_size
 
-            # Update progress bar
             process.set_postfix({
                 'loss': f"{train_metrics['loss']/total_samples:.4f}",
                 'acc': f"{100.0*train_metrics['accuracy']/total_samples:.2f}%",
@@ -1089,17 +1251,14 @@ class Trainer:
             
             timer['stats'] += self.split_time()
             
-        # Calculate final metrics
         for k in train_metrics:
             train_metrics[k] /= total_samples
 
-        # Calculate timing proportions
         proportion = {
             k: f'{int(round(v * 100 / sum(timer.values()))):02d}%'
             for k, v in timer.items()
         }
 
-        # Log results
         self.print_log(
             f'Epoch {epoch+1}/{self.arg.num_epoch} - '
             f"Training - Loss: {train_metrics['loss']:.4f}, "
@@ -1111,11 +1270,13 @@ class Trainer:
         self.print_log(f'Time consumption: [Data]{proportion["dataloader"]}, '
                       f'[Network]{proportion["model"]}, [Stats]{proportion["stats"]}')
 
-        # Store training metrics
         self.train_metrics = train_metrics
+        self.train_metrics_history.append(train_metrics.copy())
+        self.train_loss_summary.append(train_metrics['loss'])
 
-        # Evaluate on validation set
         val_metrics = self.eval(epoch, loader_name='val', fold=fold)
+        self.val_metrics_history.append(val_metrics.copy())
+        self.val_loss_summary.append(val_metrics['loss'])
 
         return val_metrics['loss']
 
@@ -1135,22 +1296,19 @@ class Trainer:
         use_cuda = torch.cuda.is_available()
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
 
-        # Open results file if specified
         if result_file is not None:
             f_r = open(result_file, 'w', encoding='utf-8')
 
-        # Set model to evaluation mode
         self.model.eval()
         self.print_log(f'Evaluating on {loader_name} set (Epoch {epoch+1})')
 
-        # Initialize tracking variables
         val_metrics = defaultdict(float)
         total_samples = 0
         batch_count = 0
         all_predictions = []
         all_targets = []
+        all_outputs = []
 
-        # Evaluation loop with progress bar
         process = tqdm(self.data_loader[loader_name], desc=f"Epoch {epoch+1} ({loader_name.capitalize()})")
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
@@ -1158,22 +1316,15 @@ class Trainer:
                 batch_size = targets.size(0)
                 total_samples += batch_size
                 
-                # Move data to device
                 data_dict = {}
-                
-                # Always include accelerometer data if available
                 if 'accelerometer' in inputs:
                     data_dict['accelerometer'] = inputs['accelerometer'].to(device).float()
-                
-                # Add any other modalities that are available
                 for modality in ['gyroscope', 'skeleton', 'quaternion', 'linear_acceleration', 'fusion_features']:
                     if modality in inputs:
                         data_dict[modality] = inputs[modality].to(device).float()
-                
                 targets = targets.to(device).float()
 
-                # Forward pass
-                if self.use_amp:
+                if self.use_amp and self.scaler is not None:
                     with torch.cuda.amp.autocast():
                         outputs = self.model(data_dict)
                         loss = self.criterion(outputs, targets)
@@ -1181,45 +1332,36 @@ class Trainer:
                     outputs = self.model(data_dict)
                     loss = self.criterion(outputs, targets)
 
-                # Compute metrics for this batch
                 batch_metrics = self.compute_metrics(outputs, targets)
-                
-                # Update accumulated metrics
                 for k, v in batch_metrics.items():
                     val_metrics[k] += v * batch_size
                 
                 val_metrics['loss'] += loss.item() * batch_size
                 
-                # Store predictions and targets for confusion matrix
                 predictions = torch.sigmoid(outputs.view(-1)) > 0.5 if outputs.numel() == targets.numel() else torch.argmax(outputs, dim=1)
                 all_predictions.extend(predictions.cpu().numpy())
                 all_targets.extend(targets.cpu().numpy())
+                all_outputs.extend(outputs.view(-1).cpu().numpy())
                 
-                # Update progress bar
                 process.set_postfix({
                     'loss': f"{val_metrics['loss']/total_samples:.4f}",
                     'acc': f"{100.0*val_metrics['accuracy']/total_samples:.2f}%",
                     'f1': f"{val_metrics['f1']/batch_count:.4f}"
                 })
                 
-                # Write detailed results to file if provided
                 if result_file is not None and f_r is not None:
                     for i, (pred, target) in enumerate(zip(predictions.cpu(), targets.cpu())):
                         f_r.write(f"{int(pred.item())} ==> {int(target.item())}\n")
 
-        # Close results file if opened
         if result_file is not None and f_r is not None:
             f_r.close()
 
-        # Calculate final metrics
         for k in val_metrics:
             val_metrics[k] /= total_samples
             
-        # Create confusion matrix visualization
         if all_predictions and all_targets:
             self.cm_viz(all_predictions, all_targets, fold)
 
-        # Log results
         self.print_log(
             f'{loader_name.capitalize()} metrics: Loss={val_metrics["loss"]:.4f}, '
             f'Accuracy={val_metrics["accuracy"]:.4f}, '
@@ -1227,10 +1369,10 @@ class Trainer:
             f'Precision={val_metrics["precision"]:.4f}, '
             f'Recall={val_metrics["recall"]:.4f}, '
             f'FAR={val_metrics["false_alarm_rate"]:.4f}, '
-            f'MR={val_metrics["miss_rate"]:.4f}'
+            f'MR={val_metrics["miss_rate"]:.4f}, '
+            f'Balanced Acc={val_metrics["balanced_accuracy"]:.4f}'
         )
 
-        # Save validation metrics to file
         if loader_name in ['val', 'test']:
             metrics_file = f'{self.arg.work_dir}/{loader_name}_result.txt'
             if fold is not None:
@@ -1239,39 +1381,34 @@ class Trainer:
                 metrics_file = f'{fold_dir}/{loader_name}_result.txt'
                 
             with open(metrics_file, 'w') as f:
-                f.write(f"accuracy {val_metrics['accuracy']:.4f}\n")
-                f.write(f"f1_score {val_metrics['f1']:.4f}\n")
-                f.write(f"precision {val_metrics['precision']:.4f}\n")
-                f.write(f"recall {val_metrics['recall']:.4f}\n")
-                f.write(f"false_alarm_rate {val_metrics['false_alarm_rate']:.4f}\n")
-                f.write(f"miss_rate {val_metrics['miss_rate']:.4f}\n")
+                f.write(f"accuracy {val_metrics['accuracy']:.6f}\n")
+                f.write(f"f1_score {val_metrics['f1']:.6f}\n")
+                f.write(f"precision {val_metrics['precision']:.6f}\n")
+                f.write(f"recall {val_metrics['recall']:.6f}\n")
+                f.write(f"false_alarm_rate {val_metrics['false_alarm_rate']:.6f}\n")
+                f.write(f"miss_rate {val_metrics['miss_rate']:.6f}\n")
+                f.write(f"balanced_accuracy {val_metrics['balanced_accuracy']:.6f}\n")
 
-        # Save best model if in validation phase
         if loader_name == 'val':
             if val_metrics['f1'] > self.best_f1:
                 self.best_f1 = val_metrics['f1']
                 self.best_accuracy = val_metrics['accuracy']
                 self.patience_counter = 0
-                
-                # Save the model weights
                 self.save_best_model(epoch, val_metrics, fold)
-                self.print_log(f'New best model saved: F1={val_metrics["f1"]:.4f}')
+                self.print_log(f'New best model saved: F1={val_metrics["f1"]:.4f}, Acc={val_metrics["accuracy"]:.4f}')
             else:
                 self.patience_counter += 1
                 self.print_log(f'No improvement for {self.patience_counter} epochs (patience: {self.arg.patience})')
                 
-            # Update learning rate scheduler if applicable
             if self.scheduler is not None:
                 if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                     self.scheduler.step(val_metrics['loss'])
                 else:
                     self.scheduler.step()
         else:
-            # For test set, store the results
             self.test_accuracy = val_metrics['accuracy']
             self.test_f1 = val_metrics['f1']
 
-        # Store the validation metrics for this epoch
         self.val_metrics = val_metrics
         
         return val_metrics
@@ -1285,7 +1422,6 @@ class Trainer:
             metrics: Dictionary of validation metrics
             fold: Optional fold number for k-fold cross-validation
         """
-        # Determine save path
         if fold is not None:
             fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
             os.makedirs(fold_dir, exist_ok=True)
@@ -1293,7 +1429,6 @@ class Trainer:
         else:
             save_path = self.model_path
         
-        # Save model state
         state_dict = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict() if not isinstance(self.model, nn.DataParallel) 
@@ -1305,15 +1440,23 @@ class Trainer:
             'metrics': metrics
         }
         
-        torch.save(state_dict, save_path)
-        self.print_log(f"Best model saved to {save_path}")
-        
-        # Also save a copy with metrics in the filename for reference
-        model_copy_path = os.path.join(
-            os.path.dirname(save_path),
-            f"{os.path.basename(save_path).split('.')[0]}_f1_{metrics['f1']:.4f}_epoch_{epoch}.pt"
-        )
-        torch.save(state_dict, model_copy_path)
+        try:
+            torch.save(state_dict, save_path)
+            self.print_log(f"Best model saved to {save_path}")
+            model_copy_path = os.path.join(
+                os.path.dirname(save_path),
+                f"{os.path.basename(save_path).split('.')[0]}_f1_{metrics['f1']:.4f}_acc_{metrics['accuracy']:.4f}_epoch_{epoch}.pt"
+            )
+            torch.save(state_dict, model_copy_path)
+        except Exception as e:
+            self.print_log(f"Error saving model: {e}")
+            self.print_log(f"Trying alternative approach...")
+            try:
+                model_state = self.model.state_dict() if not isinstance(self.model, nn.DataParallel) else self.model.module.state_dict()
+                torch.save(model_state, save_path)
+                self.print_log(f"Model state dict saved to {save_path}")
+            except Exception as e2:
+                self.print_log(f"Failed to save model: {e2}")
 
     def train_fold(self, fold_idx, train_subjects, val_subjects):
         """
@@ -1334,7 +1477,6 @@ class Trainer:
         self.print_log(f"Training subjects: {train_subjects}")
         self.print_log(f"Validation subjects: {val_subjects}")
         
-        # Reset model and optimizer for this fold
         self.model = self.load_model(self.arg.model, self.arg.model_args)
         
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
@@ -1345,52 +1487,181 @@ class Trainer:
             
         self.load_optimizer()
         
-        # Reset best metrics and patience counter
         self.best_f1 = 0
         self.best_accuracy = 0
         self.best_loss = float('inf')
         self.patience_counter = 0
         
-        # Load data for this fold
-        self.load_data(train_subjects, val_subjects)
-        
-        # Initialize tracking lists
         self.train_loss_summary = []
         self.val_loss_summary = []
-        train_metrics_history = []
-        val_metrics_history = []
+        self.train_metrics_history = []
+        self.val_metrics_history = []
         
-        # Train for specified number of epochs
+        loaded = self.load_data(train_subjects, val_subjects)
+        if not loaded:
+            self.print_log(f"Error loading data for fold {fold_idx}, skipping")
+            return {'fold': fold_idx, 'f1': 0, 'accuracy': 0, 'epochs_trained': 0, 'error': True}
+        
         for epoch in range(self.arg.num_epoch):
             val_loss = self.train(epoch, fold=fold_idx)
             
-            # Store metrics history
-            train_metrics_history.append(self.train_metrics)
-            val_metrics_history.append(self.val_metrics)
-            
-            self.train_loss_summary.append(self.train_metrics['loss'])
-            self.val_loss_summary.append(val_loss)
-            
-            # Check for early stopping
             if self.patience_counter >= self.arg.patience:
                 self.print_log(f"Early stopping triggered at epoch {epoch}")
                 break
                 
-        # Create visualizations for this fold
         self.loss_viz(self.train_loss_summary, self.val_loss_summary, fold=fold_idx)
-        self.metrics_viz(train_metrics_history, val_metrics_history, fold=fold_idx)
+        self.metrics_viz(self.train_metrics_history, self.val_metrics_history, fold=fold_idx)
         
-        # Return the best metrics for this fold
+        test_metrics = self.eval(0, loader_name='test', fold=fold_idx, 
+                               result_file=os.path.join(fold_dir, "test_predictions.txt"))
+        
         best_metrics = {
             'fold': fold_idx,
             'f1': self.best_f1,
             'accuracy': self.best_accuracy,
-            'epochs_trained': len(self.train_loss_summary)
+            'balanced_accuracy': test_metrics['balanced_accuracy'],
+            'precision': test_metrics['precision'],
+            'recall': test_metrics['recall'],
+            'false_alarm_rate': test_metrics['false_alarm_rate'],
+            'miss_rate': test_metrics['miss_rate'],
+            'epochs_trained': len(self.train_loss_summary),
+            'test_f1': test_metrics['f1']
         }
         
-        self.print_log(f"Fold {fold_idx} completed with best F1: {self.best_f1:.4f}")
+        self.print_log(f"Fold {fold_idx} completed with best validation F1: {self.best_f1:.4f}")
+        self.print_log(f"Test set F1: {test_metrics['f1']:.4f}")
         
         return best_metrics
+
+    def compare_filters(self, fold=None):
+        """
+        Compare performance of EKF vs Madgwick filters on validation data
+        
+        Args:
+            fold: Optional fold number for cross-validation
+        """
+        self.print_log("\nComparing Extended Kalman Filter (EKF) and Madgwick Filter Performance")
+        
+        results = {}
+        
+        if hasattr(self.arg, 'filter_types') and self.arg.filter_types:
+            filter_types = self.arg.filter_types
+        else:
+            filter_types = ['madgwick', 'ekf']
+            
+        self.print_log(f"Comparing filter types: {filter_types}")
+        
+        if hasattr(self.data_loader, 'test') and self.data_loader['test'] is not None:
+            try:
+                for batch_idx, (inputs, targets, idx) in enumerate(self.data_loader['test']):
+                    if 'accelerometer' in inputs and 'gyroscope' in inputs:
+                        acc_sample = inputs['accelerometer'][0].numpy()
+                        gyro_sample = inputs['gyroscope'][0].numpy()
+                        
+                        filter_accuracy = compare_filter_accuracy(acc_sample, gyro_sample)
+                        
+                        filter_vis_dir = os.path.join(self.arg.work_dir, "filter_comparison")
+                        os.makedirs(filter_vis_dir, exist_ok=True)
+                        visualize_filter_comparison(filter_accuracy, filter_vis_dir)
+                        
+                        feature_results = compare_filter_features(acc_sample, gyro_sample)
+                        visualize_feature_comparison(feature_results, filter_vis_dir)
+                        
+                        self.print_log(f"Direct filter comparison visualizations saved to {filter_vis_dir}")
+                        break
+            except Exception as e:
+                self.print_log(f"Error in direct filter comparison: {e}")
+        
+        for filter_type in filter_types:
+            if 'fusion_options' not in self.arg.dataset_args:
+                self.arg.dataset_args['fusion_options'] = {}
+            self.arg.dataset_args['fusion_options']['enabled'] = True
+            self.arg.dataset_args['fusion_options']['filter_type'] = filter_type
+            
+            self.print_log(f"\nTesting with {filter_type} filter")
+            self.load_data()
+            
+            metrics = self.eval(0, loader_name='test', fold=fold)
+            
+            results[filter_type] = {
+                'accuracy': metrics['accuracy'],
+                'f1': metrics['f1'],
+                'precision': metrics['precision'],
+                'recall': metrics['recall'],
+                'false_alarm_rate': metrics['false_alarm_rate'],
+                'miss_rate': metrics['miss_rate'],
+                'balanced_accuracy': metrics.get('balanced_accuracy', (metrics['precision'] + metrics['recall'])/2)
+            }
+        
+        self.print_log("\nFilter Performance Comparison:")
+        self.print_log(f"{'Metric':<15} " + " ".join([f"{ft:<10}" for ft in filter_types]))
+        self.print_log("-" * (15 + 10 * len(filter_types)))
+        
+        best_filter = max(results.items(), key=lambda x: x[1]['f1'])[0]
+        
+        for metric in ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy']:
+            metric_values = [results[ft][metric] for ft in filter_types]
+            best_idx = np.argmax(metric_values)
+            
+            metric_str = f"{metric.capitalize():<15} "
+            for i, val in enumerate(metric_values):
+                if i == best_idx:
+                    metric_str += f"\033[1m{val:.4f}\033[0m    "
+                else:
+                    metric_str += f"{val:.4f}    "
+            
+            self.print_log(metric_str)
+        
+        plt.figure(figsize=(12, 8))
+        metrics_list = ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy']
+        x = np.arange(len(metrics_list))
+        width = 0.8 / len(filter_types)
+        
+        for i, filter_type in enumerate(filter_types):
+            values = [results[filter_type][m] for m in metrics_list]
+            offset = width * i - width * (len(filter_types) - 1) / 2
+            plt.bar(x + offset, values, width, label=f'{filter_type.upper()} Filter')
+        
+        plt.xlabel('Metrics')
+        plt.ylabel('Values')
+        plt.title('Performance Comparison by Filter Type')
+        plt.xticks(x, [m.capitalize() for m in metrics_list])
+        plt.legend()
+        plt.grid(axis='y', alpha=0.3)
+        
+        filter_dir = os.path.join(self.arg.work_dir, "filter_comparison")
+        os.makedirs(filter_dir, exist_ok=True)
+        plt.savefig(os.path.join(filter_dir, "filter_performance.png"))
+        plt.close()
+        
+        best_f1_improvement = 0
+        second_best = ""
+        
+        if len(filter_types) > 1:
+            f1_values = [results[ft]['f1'] for ft in filter_types]
+            sorted_indices = np.argsort(f1_values)[::-1]
+            
+            best_filter = filter_types[sorted_indices[0]]
+            second_best = filter_types[sorted_indices[1]]
+            best_f1_improvement = (results[best_filter]['f1'] - results[second_best]['f1']) / results[second_best]['f1'] * 100
+            
+            self.print_log(f"\n{best_filter.upper()} Filter performed better with {best_f1_improvement:.2f}% higher F1 score than {second_best.upper()}")
+        
+        with open(os.path.join(filter_dir, "comparison_results.txt"), 'w') as f:
+            f.write(f"Filter Comparison Results\n")
+            f.write(f"=======================\n\n")
+            f.write(f"{'Metric':<15} " + " ".join([f"{ft:<10}" for ft in filter_types]) + "\n")
+            f.write("-" * (15 + 10 * len(filter_types)) + "\n")
+            for metric in ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy', 'false_alarm_rate', 'miss_rate']:
+                metric_values = [results[ft][metric] for ft in filter_types]
+                metric_str = f"{metric.capitalize():<15} " + " ".join([f"{val:.4f}    " for val in metric_values])
+                f.write(metric_str + "\n")
+            if len(filter_types) > 1:
+                f.write(f"\nBest filter: {best_filter.upper()} with {best_f1_improvement:.2f}% higher F1 score than {second_best.upper()}")
+            else:
+                f.write(f"\nOnly tested {filter_types[0].upper()} filter")
+        
+        return results
 
     def kfold_cross_validation(self):
         """
@@ -1401,40 +1672,46 @@ class Trainer:
         """
         self.print_log(f"\n{'='*20} K-Fold Cross-Validation {'='*20}")
         
-        # Create folds
         folds = self.create_folds(self.arg.subjects, self.num_folds)
         all_fold_metrics = []
         
-        # Train and evaluate on each fold
         for fold_idx, (train_subjects, val_subjects) in enumerate(folds, 1):
             fold_metrics = self.train_fold(fold_idx, train_subjects, val_subjects)
             all_fold_metrics.append(fold_metrics)
             
-        # Calculate average metrics
-        avg_f1 = np.mean([m['f1'] for m in all_fold_metrics])
-        avg_accuracy = np.mean([m['accuracy'] for m in all_fold_metrics])
-        avg_epochs = np.mean([m['epochs_trained'] for m in all_fold_metrics])
+        avg_metrics = {}
+        metric_keys = ['f1', 'accuracy', 'precision', 'recall', 'false_alarm_rate', 
+                       'miss_rate', 'balanced_accuracy', 'test_f1', 'epochs_trained']
+        
+        for key in metric_keys:
+            values = [m.get(key, 0) for m in all_fold_metrics if not m.get('error', False)]
+            if values:
+                avg_metrics[key] = sum(values) / len(values)
+                std_metrics = np.std(values)
+                avg_metrics[f'{key}_std'] = std_metrics
+            else:
+                avg_metrics[key] = 0
+                avg_metrics[f'{key}_std'] = 0
         
         self.print_log(f"\n{'='*20} Cross-Validation Results {'='*20}")
-        self.print_log(f"Average F1 Score: {avg_f1:.4f}")
-        self.print_log(f"Average Accuracy: {avg_accuracy:.4f}")
-        self.print_log(f"Average Epochs: {avg_epochs:.1f}")
+        for key in ['accuracy', 'f1', 'balanced_accuracy', 'precision', 'recall']:
+            if key in avg_metrics:
+                self.print_log(f"Average {key.capitalize()}: {avg_metrics[key]:.4f} ± {avg_metrics[f'{key}_std']:.4f}")
         
-        # Save summary of fold results
+        self.print_log(f"Average Epochs: {avg_metrics['epochs_trained']:.1f}")
+        
         summary = {
             'fold_metrics': all_fold_metrics,
-            'average_metrics': {
-                'f1': avg_f1,
-                'accuracy': avg_accuracy,
-                'epochs': avg_epochs
-            }
+            'average_metrics': avg_metrics
         }
         
         with open(os.path.join(self.arg.work_dir, 'cv_summary.json'), 'w') as f:
             json.dump(summary, f, indent=4)
             
-        # Create combined visualization
         self.create_cv_summary_plot(all_fold_metrics)
+        
+        if hasattr(self.arg, 'compare_filters') and self.arg.compare_filters:
+            self.compare_filters()
         
         return summary
 
@@ -1445,54 +1722,66 @@ class Trainer:
         Args:
             fold_metrics: List of metrics dictionaries for each fold
         """
-        plt.figure(figsize=(12, 6))
+        valid_metrics = [m for m in fold_metrics if not m.get('error', False)]
         
-        # Extract data
-        folds = [m['fold'] for m in fold_metrics]
-        f1_scores = [m['f1'] for m in fold_metrics]
-        accuracies = [m['accuracy'] for m in fold_metrics]
+        if not valid_metrics:
+            self.print_log("No valid fold metrics available for visualization")
+            return
+            
+        plt.figure(figsize=(12, 8))
         
-        # Create bar plot
+        folds = [m['fold'] for m in valid_metrics]
+        f1_scores = [m['f1'] for m in valid_metrics]
+        accuracies = [m['accuracy'] for m in valid_metrics]
+        balanced_accs = [m.get('balanced_accuracy', 0) for m in valid_metrics]
+        test_f1s = [m.get('test_f1', 0) for m in valid_metrics]
+        
         x = np.arange(len(folds))
-        width = 0.35
+        width = 0.2
         
         ax = plt.subplot(111)
-        bars1 = ax.bar(x - width/2, f1_scores, width, label='F1 Score')
-        bars2 = ax.bar(x + width/2, accuracies, width, label='Accuracy')
+        bars1 = ax.bar(x - width*1.5, f1_scores, width, label='Val F1 Score')
+        bars2 = ax.bar(x - width/2, test_f1s, width, label='Test F1 Score')
+        bars3 = ax.bar(x + width/2, accuracies, width, label='Accuracy')
+        bars4 = ax.bar(x + width*1.5, balanced_accs, width, label='Balanced Acc')
         
-        # Add labels and title
         ax.set_xlabel('Fold')
         ax.set_ylabel('Score')
         ax.set_title('Cross-Validation Results by Fold')
         ax.set_xticks(x)
         ax.set_xticklabels([f'Fold {f}' for f in folds])
         ax.legend()
+        plt.grid(axis='y', alpha=0.3)
         
-        # Add value labels on bars
         def add_labels(bars):
             for bar in bars:
                 height = bar.get_height()
                 ax.annotate(f'{height:.4f}',
                           xy=(bar.get_x() + bar.get_width() / 2, height),
-                          xytext=(0, 3),  # 3 points vertical offset
+                          xytext=(0, 3),
                           textcoords="offset points",
-                          ha='center', va='bottom')
+                          ha='center', va='bottom',
+                          fontsize=8)
                 
         add_labels(bars1)
         add_labels(bars2)
+        add_labels(bars3)
+        add_labels(bars4)
         
-        # Add average line
         avg_f1 = np.mean(f1_scores)
+        avg_test_f1 = np.mean(test_f1s)
         avg_acc = np.mean(accuracies)
+        avg_balanced = np.mean(balanced_accs)
         
-        ax.axhline(y=avg_f1, color='b', linestyle='--', alpha=0.7, label=f'Avg F1: {avg_f1:.4f}')
-        ax.axhline(y=avg_acc, color='orange', linestyle='--', alpha=0.7, label=f'Avg Acc: {avg_acc:.4f}')
+        ax.axhline(y=avg_f1, color='C0', linestyle='--', alpha=0.7, label=f'Avg Val F1: {avg_f1:.4f}')
+        ax.axhline(y=avg_test_f1, color='C1', linestyle='--', alpha=0.7, label=f'Avg Test F1: {avg_test_f1:.4f}')
+        ax.axhline(y=avg_acc, color='C2', linestyle='--', alpha=0.7, label=f'Avg Acc: {avg_acc:.4f}')
+        ax.axhline(y=avg_balanced, color='C3', linestyle='--', alpha=0.7, label=f'Avg Bal Acc: {avg_balanced:.4f}')
         
-        # Update legend
-        ax.legend()
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.15), ncol=4)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(self.arg.work_dir, 'cv_summary.png'))
+        plt.savefig(os.path.join(self.arg.work_dir, 'cv_summary.png'), bbox_inches='tight')
         plt.close()
         
         self.print_log(f"Created cross-validation summary plot")
@@ -1508,8 +1797,6 @@ class Trainer:
         
         if best_fold_idx:
             self.print_log(f"Using configuration from fold {best_fold_idx} as reference")
-            
-            # Load the best fold model to get the optimal number of epochs
             fold_dir = os.path.join(self.arg.work_dir, f'fold_{best_fold_idx}')
             best_model_path = os.path.join(fold_dir, f"{self.arg.model_saved_name}.pt")
             
@@ -1517,7 +1804,7 @@ class Trainer:
                 best_state = torch.load(best_model_path)
                 best_epoch = best_state['epoch']
                 self.print_log(f"Best fold reached optimal performance at epoch {best_epoch}")
-                num_epochs = best_epoch + 1  # +1 because epochs are 0-indexed
+                num_epochs = best_epoch + 1
             else:
                 self.print_log(f"Best fold model not found, using default epochs")
                 num_epochs = self.arg.num_epoch
@@ -1526,7 +1813,6 @@ class Trainer:
         
         self.print_log(f"Training final model for {num_epochs} epochs")
         
-        # Reset model and optimizer
         self.model = self.load_model(self.arg.model, self.arg.model_args)
         
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
@@ -1537,21 +1823,28 @@ class Trainer:
             
         self.load_optimizer()
         
-        # Reset best metrics
         self.best_f1 = 0
         self.best_accuracy = 0
         self.best_loss = float('inf')
         self.patience_counter = 0
         
-        # Load data with all subjects
+        self.train_loss_summary = []
+        self.val_loss_summary = []
+        self.train_metrics_history = []
+        self.val_metrics_history = []
+        
         all_subjects = self.arg.subjects
         self.load_data(all_subjects, all_subjects)
         
-        # Train for the determined number of epochs
         for epoch in range(num_epochs):
-            self.train(epoch)
+            val_loss = self.train(epoch)
+            if self.patience_counter >= self.arg.patience:
+                self.print_log(f"Early stopping triggered at epoch {epoch}")
+                break
+        
+        self.loss_viz(self.train_loss_summary, self.val_loss_summary)
+        self.metrics_viz(self.train_metrics_history, self.val_metrics_history)
             
-        # Save the final model
         final_state = {
             'epoch': num_epochs - 1,
             'model_state_dict': self.model.state_dict() if not isinstance(self.model, nn.DataParallel) 
@@ -1566,7 +1859,6 @@ class Trainer:
         
         self.print_log(f"Final model saved to {final_path}")
         
-        # Evaluate on test data
         test_metrics = self.eval(num_epochs - 1, loader_name='test')
         
         self.print_log(f"\n{'='*20} Final Model Results {'='*20}")
@@ -1574,6 +1866,7 @@ class Trainer:
         self.print_log(f"Test Accuracy: {test_metrics['accuracy']:.4f}")
         self.print_log(f"Test Precision: {test_metrics['precision']:.4f}")
         self.print_log(f"Test Recall: {test_metrics['recall']:.4f}")
+        self.print_log(f"Balanced Accuracy: {test_metrics['balanced_accuracy']:.4f}")
 
     def create_df(self, columns=['test_subject', 'train_subjects', 'accuracy', 'f1_score']):
         '''
@@ -1597,62 +1890,56 @@ class Trainer:
         '''
         if self.arg.phase == 'train':
             try:
-                # Configure parallel processing
                 configure_parallel_processing(self.arg)
-                
-                # Initialize for training
                 self.print_log(f'Parameters:\n{str(vars(self.arg))}\n')
                 
-                # K-fold cross-validation if enabled
                 if self.use_kfold:
                     cv_results = self.kfold_cross_validation()
                     
-                    # Find the best fold
-                    best_fold = max(cv_results['fold_metrics'], key=lambda x: x['f1'])
-                    best_fold_idx = best_fold['fold']
-                    
-                    self.print_log(f"Best performing fold: {best_fold_idx} with F1 score: {best_fold['f1']:.4f}")
-                    
-                    # Train final model using all subjects
-                    self.train_final_model(best_fold_idx)
+                    valid_folds = [m for m in cv_results['fold_metrics'] if not m.get('error', False)]
+                    if valid_folds:
+                        best_fold = max(valid_folds, key=lambda x: x['f1'])
+                        best_fold_idx = best_fold['fold']
+                        
+                        self.print_log(f"Best performing fold: {best_fold_idx} with F1 score: {best_fold['f1']:.4f}")
+                        
+                        self.train_final_model(best_fold_idx)
+                    else:
+                        self.print_log("No valid folds completed, cannot train final model")
                 else:
-                    # Standard training with a single split
                     self.train_subjects = self.arg.subjects
                     self.val_subject = self.arg.subjects
                     
-                    # Load data
                     if not self.load_data():
                         self.print_log("Error loading data, aborting training")
                         return
                     
-                    # Load optimizer
                     self.load_optimizer()
                     
-                    # Train for specified number of epochs
                     for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
                         val_loss = self.train(epoch)
-                        
-                        # Check for early stopping
                         if self.patience_counter >= self.arg.patience:
                             self.print_log(f"Early stopping triggered at epoch {epoch}")
                             break
                     
-                    # Create visualizations
                     if len(self.train_loss_summary) > 0 and len(self.val_loss_summary) > 0:
                         self.loss_viz(self.train_loss_summary, self.val_loss_summary)
                     
-                    # Final evaluation
+                    if len(self.train_metrics_history) > 0 and len(self.val_metrics_history) > 0:
+                        self.metrics_viz(self.train_metrics_history, self.val_metrics_history)
+                    
                     self.print_log(f"\n{'='*20} Final Evaluation {'='*20}")
                     self.eval(0, loader_name='test')
+
+                if hasattr(self.arg, 'compare_filters') and self.arg.compare_filters:
+                    self.compare_filters()
 
             except Exception as e:
                 self.print_log(f"Error during training: {e}")
                 self.print_log(traceback.format_exc())
-                # Clean up resources
                 cleanup_resources()
         
         else:
-            # Testing phase
             try:
                 if not self.load_data():
                     self.print_log("Error loading test data")
@@ -1666,39 +1953,30 @@ class Trainer:
                 self.print_log(f"Error during testing: {e}")
                 self.print_log(traceback.format_exc())
             finally:
-                # Clean up resources
                 cleanup_resources()
 
-
 if __name__ == "__main__":
-    # Parse command line arguments
     parser = get_args()
     args = parser.parse_args()
 
-    # Load configuration from file if provided
     if args.config is not None:
         with open(args.config, 'r', encoding='utf-8') as f:
             default_arg = yaml.safe_load(f)
 
-        # Validate config keys
         key = vars(args).keys()
         for k in default_arg.keys():
             if k not in key:
                 print(f'WARNING: Unrecognized configuration parameter: {k}')
 
-        # Update args with values from config file
         parser.set_defaults(**default_arg)
         args = parser.parse_args()
 
-    # Initialize random seeds
     init_seed(args.seed)
-
-    # Create and start trainer
     trainer = Trainer(args)
     try:
         trainer.start()
     except KeyboardInterrupt:
         print("Training interrupted by user")
     finally:
-        # Ensure cleanup even on exceptions
         cleanup_resources()
+
