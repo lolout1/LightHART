@@ -1,7 +1,6 @@
 # Models/fusion_transformer.py
 import torch
 from torch import nn
-from typing import Dict, Optional, Union, Tuple, Any
 import torch.nn.functional as F
 from einops import rearrange
 import math
@@ -13,30 +12,32 @@ logger = logging.getLogger("model")
 
 class FusionTransModel(nn.Module):
     def __init__(self,
-                acc_frames=128,
+                acc_frames=64,
+                mocap_frames=64,
                 num_classes=2,
                 num_heads=4,
                 acc_coords=3,
                 quat_coords=4,
                 num_layers=2,
-                embed_dim=24,
+                embed_dim=32,
                 fusion_type='concat',
                 dropout=0.3,
                 use_batch_norm=True,
                 feature_dim=None,
                 **kwargs):
         """
-        Optimized transformer model for IMU fusion with linear acceleration and quaternion.
+        Transformer model optimized for IMU fusion with robust handling of different sequence lengths.
         
         Args:
             acc_frames: Number of frames in acceleration data
+            mocap_frames: Number of frames in mocap/skeleton data
             num_classes: Number of output classes
             num_heads: Number of attention heads
-            acc_coords: Number of linear acceleration coordinates (3)
+            acc_coords: Number of acceleration coordinates (3)
             quat_coords: Number of quaternion coordinates (4)
             num_layers: Number of transformer layers
             embed_dim: Embedding dimension for features
-            fusion_type: How to combine different sensor data ('concat', 'attention', 'acc_only')
+            fusion_type: How to combine different sensor data ('concat', 'attention', 'weighted')
             dropout: Dropout rate
             use_batch_norm: Whether to use batch normalization
             feature_dim: Optional explicit feature dimension (computed automatically if None)
@@ -44,12 +45,15 @@ class FusionTransModel(nn.Module):
         super().__init__()
         logger.info(f"Initializing FusionTransModel with fusion_type={fusion_type}")
         self.fusion_type = fusion_type
-        self.seq_len = acc_frames
+        self.acc_frames = acc_frames
+        self.mocap_frames = mocap_frames
         self.embed_dim = embed_dim
-        self.acc_only = fusion_type == 'acc_only'
         
-        # Linear acceleration encoder (the data is already linear acceleration)
-        self.linear_acc_encoder = nn.Sequential(
+        # Ensure sequence lengths are consistent
+        self.seq_len = self.acc_frames  # Use accelerometer frames as reference
+        
+        # Accelerometer encoder
+        self.acc_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU(),
@@ -59,90 +63,207 @@ class FusionTransModel(nn.Module):
             nn.GELU()
         )
 
-        # Quaternion orientation encoder if not using accelerometer only
-        if not self.acc_only:
-            self.quat_encoder = nn.Sequential(
-                nn.Conv1d(quat_coords, embed_dim, kernel_size=3, padding='same'),
-                nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-                nn.GELU(),
-                nn.Dropout(dropout/2),
-                nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding='same'),
-                nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-                nn.GELU()
-            )
+        # Gyroscope encoder
+        self.gyro_encoder = nn.Sequential(
+            nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
+            nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
+            nn.GELU(),
+            nn.Dropout(dropout/2),
+            nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding='same'),
+            nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
+            nn.GELU()
+        )
 
-        # Determine feature dimension based on fusion type
+        # Quaternion encoder
+        self.quat_encoder = nn.Sequential(
+            nn.Conv1d(quat_coords, embed_dim, kernel_size=3, padding='same'),
+            nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
+            nn.GELU(),
+            nn.Dropout(dropout/2),
+            nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding='same'),
+            nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
+            nn.GELU()
+        )
+
+        # Sequence length adapters for each modality
+        self.acc_adapter = nn.Linear(acc_frames, self.seq_len)
+        self.gyro_adapter = nn.Linear(acc_frames, self.seq_len)
+        self.quat_adapter = nn.Linear(acc_frames, self.seq_len)
+
+        # Feature dimension calculations based on fusion type
         if fusion_type == 'concat':
-            # We concatenate linear acceleration and quaternion embeddings
-            if feature_dim is None:
-                feature_dim = embed_dim * 2
-            else:
-                logger.info(f"Using explicit feature dimension: {feature_dim}")
+            # All three modalities concatenated
+            self.feature_dim = embed_dim * 3
         elif fusion_type == 'attention':
-            # We use attention to combine the embeddings
-            feature_dim = embed_dim
-            self.fusion_attention = nn.MultiheadAttention(
+            # Feature dimension stays the same with attention fusion
+            self.feature_dim = embed_dim
+            # Cross-attention for fusion
+            self.cross_attention = nn.MultiheadAttention(
                 embed_dim=embed_dim,
                 num_heads=num_heads,
-                dropout=dropout
+                dropout=dropout,
+                batch_first=True
             )
-        elif fusion_type == 'acc_only':
-            # Use only accelerometer data
-            feature_dim = embed_dim
+        elif fusion_type == 'weighted':
+            # Weighted combination of features
+            self.feature_dim = embed_dim
+            # Learned weights for each modality
+            self.modality_weights = nn.Parameter(torch.ones(3) / 3)
         else:
             # Default to concatenation
-            feature_dim = embed_dim * 2
             logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'concat'")
             self.fusion_type = 'concat'
+            self.feature_dim = embed_dim * 3
 
-        self.feature_dim = feature_dim
-        
-        # Feature projector for handling fusion features
-        self.fusion_feature_projector = nn.Linear(43, embed_dim)  # 43 is typical fusion feature dimension
-        self.feature_projector = nn.Linear(embed_dim * 2, feature_dim)  # For mismatched dimensions
+        # Override feature_dim if explicitly provided
+        if feature_dim is not None:
+            self.feature_dim = feature_dim
+            logger.info(f"Using provided feature_dim: {feature_dim}")
 
-        # Positional embedding for transformer
-        self.position_embedding = nn.Parameter(torch.randn(1, self.seq_len, feature_dim) * 0.02)
+        # Feature projector for fusion features
+        self.fusion_feature_projector = nn.Linear(43, embed_dim)
         
         # Transformer encoder
         encoder_layers = nn.TransformerEncoderLayer(
-            d_model=feature_dim,
+            d_model=self.feature_dim,
             nhead=num_heads,
-            dim_feedforward=feature_dim*4,
+            dim_feedforward=self.feature_dim*4,
             dropout=dropout,
             activation='gelu',
             batch_first=True,
-            norm_first=True  # Use pre-norm for better stability
+            norm_first=True
         )
         self.transformer = nn.TransformerEncoder(
             encoder_layer=encoder_layers,
             num_layers=num_layers,
-            norm=nn.LayerNorm(feature_dim)
+            norm=nn.LayerNorm(self.feature_dim)
         )
 
         # Classification head with regularization
         self.classifier = nn.Sequential(
-            nn.Linear(feature_dim, 64),
+            nn.Linear(self.feature_dim, 64),
             nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(64, num_classes)
         )
 
-    def forward_fusion(self, acc_data, fusion_features):
+    def _adapt_sequence_length(self, x, adapter):
+        """Adapt sequence length to the standard model sequence length"""
+        # x shape: [batch, channels, seq_len]
+        batch, channels, seq_len = x.shape
+        
+        if seq_len == self.seq_len:
+            # Already the right length
+            return x
+        
+        # Transpose for the linear adapter
+        x = x.transpose(1, 2)  # [batch, seq_len, channels]
+        # Apply adapter
+        x = adapter(x)  # [batch, self.seq_len, channels]
+        # Transpose back
+        x = x.transpose(1, 2)  # [batch, channels, self.seq_len]
+        
+        return x
+
+    def forward_all_modalities(self, acc_data, gyro_data, quat_data=None):
         """
-        Forward pass using accelerometer data and pre-extracted fusion features.
+        Forward pass with accelerometer, gyroscope, and optional quaternion data
         
         Args:
-            acc_data: Linear acceleration data [batch, seq_len, 3]
+            acc_data: Accelerometer data [batch, seq_len, 3]
+            gyro_data: Gyroscope data [batch, seq_len, 3]
+            quat_data: Optional quaternion data [batch, seq_len, 4]
+            
+        Returns:
+            Class logits
+        """
+        # Process accelerometer data
+        acc_data = rearrange(acc_data, 'b l c -> b c l')
+        acc_features = self.acc_encoder(acc_data)
+        acc_features = self._adapt_sequence_length(acc_features, self.acc_adapter)
+        
+        # Process gyroscope data
+        gyro_data = rearrange(gyro_data, 'b l c -> b c l')
+        gyro_features = self.gyro_encoder(gyro_data)
+        gyro_features = self._adapt_sequence_length(gyro_features, self.gyro_adapter)
+        
+        # Process quaternion data if available
+        if quat_data is not None:
+            quat_data = rearrange(quat_data, 'b l c -> b c l')
+            quat_features = self.quat_encoder(quat_data)
+            quat_features = self._adapt_sequence_length(quat_features, self.quat_adapter)
+        else:
+            # Create zero tensor if quaternion data is not available
+            batch_size = acc_data.shape[0]
+            quat_features = torch.zeros(batch_size, self.embed_dim, self.seq_len, 
+                                         device=acc_data.device)
+        
+        # Perform fusion based on fusion type
+        if self.fusion_type == 'concat':
+            # Concatenate features along feature dimension
+            acc_features = rearrange(acc_features, 'b c l -> b l c')
+            gyro_features = rearrange(gyro_features, 'b c l -> b l c')
+            quat_features = rearrange(quat_features, 'b c l -> b l c')
+            
+            # Concatenate features
+            fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
+            
+        elif self.fusion_type == 'attention':
+            # Use cross-attention for fusion
+            acc_features = rearrange(acc_features, 'b c l -> b l c')
+            gyro_features = rearrange(gyro_features, 'b c l -> b l c')
+            quat_features = rearrange(quat_features, 'b c l -> b l c')
+            
+            # Use accelerometer as query, and concatenated gyro+quat as key/value
+            kv_features = (gyro_features + quat_features) / 2
+            fused_features, _ = self.cross_attention(
+                query=acc_features,
+                key=kv_features,
+                value=kv_features
+            )
+            
+        elif self.fusion_type == 'weighted':
+            # Apply learned weights to each modality
+            weights = F.softmax(self.modality_weights, dim=0)
+            
+            acc_features = rearrange(acc_features, 'b c l -> b l c')
+            gyro_features = rearrange(gyro_features, 'b c l -> b l c')
+            quat_features = rearrange(quat_features, 'b c l -> b l c')
+            
+            # Weighted sum
+            fused_features = (
+                weights[0] * acc_features + 
+                weights[1] * gyro_features + 
+                weights[2] * quat_features
+            )
+        
+        # Apply transformer
+        transformer_output = self.transformer(fused_features)
+        
+        # Global average pooling
+        pooled = torch.mean(transformer_output, dim=1)
+        
+        # Classification
+        logits = self.classifier(pooled)
+        
+        return logits
+
+    def forward_fusion_features(self, acc_data, fusion_features):
+        """
+        Forward pass using accelerometer data and pre-computed fusion features
+        
+        Args:
+            acc_data: Accelerometer data [batch, seq_len, 3]
             fusion_features: Pre-computed fusion features [batch, feature_dim]
             
         Returns:
             Class logits
         """
-        # Process linear acceleration
+        # Process accelerometer data
         acc_data = rearrange(acc_data, 'b l c -> b c l')
-        acc_features = self.linear_acc_encoder(acc_data)
+        acc_features = self.acc_encoder(acc_data)
+        acc_features = self._adapt_sequence_length(acc_features, self.acc_adapter)
         acc_features = rearrange(acc_features, 'b c l -> b l c')
         
         # Process fusion features
@@ -154,79 +275,31 @@ class FusionTransModel(nn.Module):
         # Expand fusion features to match sequence length
         expanded_features = fusion_embed.unsqueeze(1).expand(-1, seq_len, -1)
         
-        # Combine features
-        combined = torch.cat([acc_features, expanded_features], dim=2)
-        
-        # Project to desired feature dimension if needed
-        if combined.size(2) != self.feature_dim:
-            features = self.feature_projector(combined)
-        else:
-            features = combined
-        
-        # Add positional encoding (only use what we need)
-        pos_embed = self.position_embedding[:, :seq_len, :]
-        features = features + pos_embed
-        
-        # Apply transformer encoder
-        transformer_output = self.transformer(features)
-        
-        # Global average pooling
-        pooled = torch.mean(transformer_output, dim=1)
-        
-        # Classification
-        logits = self.classifier(pooled)
-        
-        return logits
-
-    def forward_quaternion(self, linear_acc, quaternion):
-        """
-        Forward pass using linear acceleration and quaternion data.
-        
-        Args:
-            linear_acc: Linear acceleration data [batch, seq_len, 3]
-            quaternion: Quaternion orientation data [batch, seq_len, 4]
-            
-        Returns:
-            Class logits
-        """
-        # Process linear acceleration
-        linear_acc = rearrange(linear_acc, 'b l c -> b c l')
-        linear_acc_features = self.linear_acc_encoder(linear_acc)
-        linear_acc_features = rearrange(linear_acc_features, 'b c l -> b l c')
-        
-        # Process quaternion
-        quaternion = rearrange(quaternion, 'b l c -> b c l')
-        quat_features = self.quat_encoder(quaternion)
-        quat_features = rearrange(quat_features, 'b c l -> b l c')
-        
-        # Combine features based on fusion type
+        # Concatenate features
         if self.fusion_type == 'concat':
-            # Check if we need to project to match dimensions
-            combined = torch.cat([linear_acc_features, quat_features], dim=2)
-            if combined.size(2) != self.feature_dim:
-                features = self.feature_projector(combined)
-            else:
-                features = combined
-        elif self.fusion_type == 'attention':
-            # Use attention to combine acc and quaternion features
-            linear_acc_q = rearrange(linear_acc_features, 'b l c -> l b c')
-            quat_k = rearrange(quat_features, 'b l c -> l b c')
-            quat_v = quat_k
-            attn_output, _ = self.fusion_attention(linear_acc_q, quat_k, quat_v)
-            features = rearrange(attn_output, 'l b c -> b l c')
+            # Create zero tensor for missing modality
+            dummy_features = torch.zeros(batch_size, seq_len, self.embed_dim, 
+                                         device=acc_data.device)
+            
+            # Concatenate all features 
+            fused_features = torch.cat([acc_features, dummy_features, expanded_features], dim=2)
+            
+            # Ensure correct feature dimension
+            if fused_features.size(2) != self.feature_dim:
+                fused_features = fused_features[:, :, :self.feature_dim]
         else:
-            # Default to concatenation
-            features = torch.cat([linear_acc_features, quat_features], dim=2)
-            if features.size(2) != self.feature_dim:
-                features = self.feature_projector(features)
+            # For other fusion types, just use the accelerometer and fusion features
+            fused_features = torch.cat([acc_features, expanded_features], dim=2)
+            
+            # Project to feature dimension if needed
+            if fused_features.size(2) != self.feature_dim:
+                fused_features = nn.functional.linear(
+                    fused_features, 
+                    nn.Parameter(torch.randn(self.feature_dim, fused_features.size(2))).to(fused_features.device)
+                )
         
-        # Add positional encoding - handle variable sequence lengths
-        seq_len = features.size(1)
-        pos_embed = self.position_embedding[:, :seq_len, :]
-        features = features + pos_embed
-        
-        # Apply transformer encoder
-        transformer_output = self.transformer(features)
+        # Apply transformer
+        transformer_output = self.transformer(fused_features)
         
         # Global average pooling
         pooled = torch.mean(transformer_output, dim=1)
@@ -235,10 +308,10 @@ class FusionTransModel(nn.Module):
         logits = self.classifier(pooled)
         
         return logits
-
-    def forward_accelerometer(self, acc_data):
+    
+    def forward_accelerometer_only(self, acc_data):
         """
-        Forward pass using only accelerometer data.
+        Forward pass using only accelerometer data
         
         Args:
             acc_data: Accelerometer data [batch, seq_len, 3]
@@ -248,16 +321,24 @@ class FusionTransModel(nn.Module):
         """
         # Process accelerometer data
         acc_data = rearrange(acc_data, 'b l c -> b c l')
-        acc_features = self.linear_acc_encoder(acc_data)
+        acc_features = self.acc_encoder(acc_data)
+        acc_features = self._adapt_sequence_length(acc_features, self.acc_adapter)
         acc_features = rearrange(acc_features, 'b c l -> b l c')
         
-        # Add positional encoding
-        seq_len = acc_features.size(1)
-        pos_embed = self.position_embedding[:, :seq_len, :self.embed_dim]
-        features = acc_features + pos_embed[:, :, :acc_features.size(2)]
+        # For accelerometer-only, create dummy features for other modalities
+        batch_size, seq_len, _ = acc_features.shape
+        dummy_features = torch.zeros(
+            batch_size, 
+            seq_len, 
+            self.feature_dim - self.embed_dim,
+            device=acc_data.device
+        )
+        
+        # Concatenate with dummy features
+        fused_features = torch.cat([acc_features, dummy_features], dim=2)
         
         # Apply transformer
-        transformer_output = self.transformer(features)
+        transformer_output = self.transformer(fused_features)
         
         # Global average pooling
         pooled = torch.mean(transformer_output, dim=1)
@@ -269,10 +350,10 @@ class FusionTransModel(nn.Module):
 
     def forward(self, data):
         """
-        General forward pass with robust handling of different input formats.
+        General forward pass with robust handling of different input formats
         
         Args:
-            data: Either a dictionary with sensor data or direct tensor input
+            data: Dictionary with sensor data or direct tensor input
             
         Returns:
             Class logits
@@ -280,41 +361,41 @@ class FusionTransModel(nn.Module):
         try:
             # Handle dictionary input
             if isinstance(data, dict):
-                # Check for pre-computed fusion features
-                if 'fusion_features' in data and data['fusion_features'] is not None:
-                    if 'accelerometer' not in data or data['accelerometer'] is None:
-                        raise ValueError("Missing required input: accelerometer data for fusion")
-                    return self.forward_fusion(data['accelerometer'], data['fusion_features'])
+                # Check what modalities are available
+                has_acc = 'accelerometer' in data and data['accelerometer'] is not None
+                has_gyro = 'gyroscope' in data and data['gyroscope'] is not None
+                has_quaternion = 'quaternion' in data and data['quaternion'] is not None
+                has_fusion_features = 'fusion_features' in data and data['fusion_features'] is not None
                 
-                # Check for quaternion data
-                elif 'quaternion' in data and data['quaternion'] is not None:
-                    # Use linear_acceleration if available, otherwise use accelerometer
-                    acc_data = data.get('linear_acceleration', data.get('accelerometer'))
-                    if acc_data is None:
-                        raise ValueError("Missing required input: accelerometer or linear_acceleration")
-                    return self.forward_quaternion(acc_data, data['quaternion'])
-                
-                # Check for gyroscope data
-                elif 'gyroscope' in data and data['gyroscope'] is not None and not self.acc_only:
-                    # Use linear_acceleration if available, otherwise use accelerometer
-                    acc_data = data.get('linear_acceleration', data.get('accelerometer'))
-                    if acc_data is None:
-                        raise ValueError("Missing required input: accelerometer or linear_acceleration")
-                    # Use same processing as quaternion but with gyro data
-                    return self.forward_quaternion(acc_data, data['gyroscope'])
-                
-                # Fall back to accelerometer-only processing
+                # Select the appropriate forward method based on available data
+                if has_acc and has_gyro and has_quaternion:
+                    # Have all modalities
+                    return self.forward_all_modalities(
+                        data['accelerometer'],
+                        data['gyroscope'],
+                        data['quaternion']
+                    )
+                elif has_acc and has_gyro:
+                    # Have accelerometer and gyroscope but no quaternion
+                    return self.forward_all_modalities(
+                        data['accelerometer'],
+                        data['gyroscope']
+                    )
+                elif has_acc and has_fusion_features:
+                    # Have accelerometer and fusion features
+                    return self.forward_fusion_features(
+                        data['accelerometer'],
+                        data['fusion_features']
+                    )
+                elif has_acc:
+                    # Accelerometer only
+                    return self.forward_accelerometer_only(data['accelerometer'])
                 else:
-                    # Get accelerometer data
-                    acc_data = data.get('accelerometer')
-                    if acc_data is None:
-                        raise ValueError("Missing required input: accelerometer")
-                    
-                    return self.forward_accelerometer(acc_data)
+                    raise ValueError("Input must contain at least accelerometer data")
             
             # Handle direct tensor input (assumed to be accelerometer data)
             else:
-                return self.forward_accelerometer(data)
+                return self.forward_accelerometer_only(data)
                 
         except Exception as e:
             logger.error(f"Error in forward pass: {str(e)}")
