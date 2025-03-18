@@ -13,7 +13,7 @@ model_args:
   acc_frames: 128
   mocap_frames: 64
   num_heads: 8
-  fusion_type: 'acc_only'
+  fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
 
@@ -26,7 +26,7 @@ dataset_args:
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'none'
+    filter_type: 'kalman'
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true
