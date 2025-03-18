@@ -1,0 +1,52 @@
+# config/smartfallmm/fusion.yaml
+model: Models.fusion_transformer.FusionTransModel
+dataset: smartfallmm
+
+# Fall detection subjects
+subjects: [29,30,31,33,45,46,34,37,39,38,43,35,36,44,34,32]
+
+model_args:
+  num_layers: 2
+  embed_dim: 24
+  acc_coords: 3
+  quat_coords: 4
+  num_classes: 2
+  acc_frames: 64
+  mocap_frames: 64
+  num_heads: 4
+  fusion_type: 'concat'  # Options: 'concat', 'attention', 'acc_only'
+  dropout: 0.3
+  use_batch_norm: true
+
+dataset_args: 
+  mode: 'sliding_window'
+  max_length: 64
+  task: 'fd'
+  modalities: ['accelerometer', 'gyroscope']
+  age_group: ['young']
+  sensors: ['watch']
+  fusion_options:
+    enabled: true
+    filter_type: "comp"
+    visualize: false  # Disable visualizations by default to speed up training
+
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 40  # Reduced from 60 to prevent overfitting
+
+# dataloader
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+
+val_feeder_args:
+  batch_size: 16
+
+test_feeder_args: 
+  batch_size: 16
+
+seed: 2 
+optimizer: adam
+base_lr: 0.0005
+weight_decay: 0.001

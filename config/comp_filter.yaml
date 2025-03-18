@@ -1,0 +1,56 @@
+model: Models.fusion_transformer.FusionTransModel
+dataset: smartfallmm
+
+# Include all subjects for better generalization
+subjects: [29, 30, 31, 33, 45, 46]
+
+model_args:
+  num_layers: 2
+  embed_dim: 32
+  acc_coords: 3
+  quat_coords: 4
+  num_classes: 2
+  acc_frames: 128
+  mocap_frames: 64
+  num_heads: 8
+  fusion_type: 'concat'
+  dropout: 0.3
+  use_batch_norm: true
+
+dataset_args:
+  mode: 'sliding_window'
+  max_length: 128
+  task: 'fd'
+  modalities: ['accelerometer', 'gyroscope']
+  age_group: ['young']
+  sensors: ['watch']
+  fusion_options:
+    enabled: true
+    filter_type: 'comp'
+    acc_threshold: 3.0
+    gyro_threshold: 1.0
+    visualize: true
+
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 60
+
+# dataloader
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args:
+  batch_size: 16
+  drop_last: true
+
+val_feeder_args:
+  batch_size: 16
+  drop_last: true
+
+test_feeder_args:
+  batch_size: 16
+  drop_last: true
+
+seed: 42
+optimizer: adam
+base_lr: 0.0005
+weight_decay: 0.001

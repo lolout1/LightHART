@@ -1,0 +1,520 @@
+# Parameters: 189200
+Model size : 0.18 MB
+Parameters: 
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 189200
+# Parameters: 189200
+Model size : 0.18 MB
+Parameters: 
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 189200
+# Parameters: 189200
+Model size : 0.18 MB
+Parameters: 
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 189200
+# Parameters: 189200
+Model size : 0.18 MB
+Parameters: 
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 189200
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Using CrossEntropyLoss for training
+# Parameters: 189200
+Model size: 0.18 MB
+Sensor modalities: ['accelerometer', 'gyroscope']
+Using fusion: True
+Parameters:
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Fold 1: Test subject=29, Validation subject=30
+Train subjects: [31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
+Using data feeder: Feeder.Make_Dataset.UTD_mm
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Using CrossEntropyLoss for training
+# Parameters: 189200
+Model size: 0.18 MB
+Sensor modalities: ['accelerometer', 'gyroscope']
+Using fusion: True
+Parameters:
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [33, 45, 46, 34], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Fold 1: Test subject=33, Validation subject=45
+Train subjects: [46, 34]
+Using data feeder: Feeder.Make_Dataset.UTD_mm
+Training data loaded with 151 batches
+Created train label distribution visualization with classes [0 1]
+Validation data loaded with 2 batches
+Created val label distribution visualization with classes [0 1]
+ERROR: Test data has empty values
+Skipping fold 1 due to data loading issues
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Fold 2: Test subject=45, Validation subject=46
+Train subjects: [33, 34]
+Using data feeder: Feeder.Make_Dataset.UTD_mm
+Training data loaded with 17 batches
+Created train label distribution visualization with classes [0 1]
+Validation data loaded with 135 batches
+Created val label distribution visualization with classes [0 1]
+Test data loaded with 2 batches
+Training data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Validation data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Test data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Using Adam optimizer with lr=0.0005, weight_decay=0.001
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Using CrossEntropyLoss for training
+# Parameters: 193816
+Model size: 0.18 MB
+Sensor modalities: ['accelerometer', 'gyroscope']
+Using fusion: True
+Parameters:
+{'config': './config/smartfallmm/fusion_madgwick.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.fusion_transformer.FusionTransModel', 'device': [0], 'model_args': {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}, 'weights': None, 'model_saved_name': 'fusion_madgwick', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer', 'gyroscope'], 'age_group': ['young'], 'sensors': ['watch'], 'fusion_options': {'enabled': True, 'filter_type': 'madgwick', 'acc_threshold': 3.0, 'gyro_threshold': 1.0, 'visualize': True}}, 'subjects': [33, 45, 46, 34], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/fusion_madgwick', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Fold 1: Test subject=33, Validation subject=45
+Train subjects: [46, 34]
+Using data feeder: Feeder.Make_Dataset.UTD_mm
+Training data loaded with 151 batches
+Created train label distribution visualization with classes [0 1]
+Validation data loaded with 2 batches
+Created val label distribution visualization with classes [0 1]
+ERROR: Test data has empty values
+Skipping fold 1 due to data loading issues
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Fold 2: Test subject=45, Validation subject=46
+Train subjects: [33, 34]
+Using data feeder: Feeder.Make_Dataset.UTD_mm
+Training data loaded with 17 batches
+Created train label distribution visualization with classes [0 1]
+Validation data loaded with 135 batches
+Created val label distribution visualization with classes [0 1]
+Test data loaded with 2 batches
+Training data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Validation data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Test data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Using Adam optimizer with lr=0.0005, weight_decay=0.001
+Epoch 1/40 - Training Loss: 0.0389, Training Acc: 65.41%
+Time consumption: [Data]02%, [Network]98%, [Stats]00%
+Evaluating on val set (Epoch 1)
+Val metrics: Loss=0.0441, Accuracy=47.53%, F1=42.91, Precision=54.82%, Recall=60.90%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 2/40 - Training Loss: 0.0288, Training Acc: 82.71%
+Time consumption: [Data]21%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 2)
+Val metrics: Loss=0.0509, Accuracy=53.16%, F1=48.17, Precision=58.50%, Recall=69.55%
+Epoch 3/40 - Training Loss: 0.0247, Training Acc: 85.34%
+Time consumption: [Data]21%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 3)
+Val metrics: Loss=0.0543, Accuracy=54.47%, F1=49.42, Precision=59.37%, Recall=71.61%
+Epoch 4/40 - Training Loss: 0.0236, Training Acc: 86.09%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 4)
+Val metrics: Loss=0.0651, Accuracy=47.67%, F1=44.36, Precision=58.46%, Recall=68.41%
+Epoch 5/40 - Training Loss: 0.0218, Training Acc: 88.35%
+Time consumption: [Data]21%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 5)
+Val metrics: Loss=0.0592, Accuracy=55.35%, F1=50.39, Precision=60.23%, Recall=73.60%
+Epoch 6/40 - Training Loss: 0.0194, Training Acc: 88.35%
+Time consumption: [Data]21%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 6)
+Val metrics: Loss=0.0612, Accuracy=53.95%, F1=49.32, Precision=59.96%, Recall=72.81%
+Epoch 7/40 - Training Loss: 0.0181, Training Acc: 89.10%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 7)
+Val metrics: Loss=0.0623, Accuracy=55.40%, F1=50.45, Precision=60.31%, Recall=73.79%
+Epoch 8/40 - Training Loss: 0.0182, Training Acc: 91.73%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 8)
+Val metrics: Loss=0.0603, Accuracy=59.58%, F1=53.65, Precision=61.19%, Recall=76.17%
+Epoch 9/40 - Training Loss: 0.0153, Training Acc: 92.48%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 9)
+Val metrics: Loss=0.0625, Accuracy=57.95%, F1=52.41, Precision=60.83%, Recall=75.25%
+Epoch 10/40 - Training Loss: 0.0141, Training Acc: 92.11%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 10)
+Val metrics: Loss=0.0658, Accuracy=58.00%, F1=52.48, Precision=60.91%, Recall=75.44%
+Epoch 11/40 - Training Loss: 0.0138, Training Acc: 91.35%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 11)
+Val metrics: Loss=0.0681, Accuracy=51.12%, F1=47.27, Precision=59.78%, Recall=71.85%
+Epoch 12/40 - Training Loss: 0.0129, Training Acc: 93.61%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 12)
+Val metrics: Loss=0.0576, Accuracy=58.05%, F1=52.55, Precision=61.00%, Recall=75.63%
+Epoch 13/40 - Training Loss: 0.0115, Training Acc: 93.98%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 13)
+Val metrics: Loss=0.0759, Accuracy=55.35%, F1=50.55, Precision=60.61%, Recall=74.42%
+Epoch 14/40 - Training Loss: 0.0151, Training Acc: 91.35%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 14)
+Val metrics: Loss=0.0769, Accuracy=54.19%, F1=49.65, Precision=60.39%, Recall=73.76%
+Epoch 15/40 - Training Loss: 0.0120, Training Acc: 93.23%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 15)
+Val metrics: Loss=0.0908, Accuracy=53.95%, F1=49.48, Precision=60.35%, Recall=73.63%
+Epoch 16/40 - Training Loss: 0.0094, Training Acc: 96.99%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 16)
+Val metrics: Loss=0.0755, Accuracy=58.14%, F1=52.68, Precision=61.17%, Recall=76.01%
+Epoch 17/40 - Training Loss: 0.0088, Training Acc: 95.86%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 17)
+Val metrics: Loss=0.0735, Accuracy=58.14%, F1=52.68, Precision=61.17%, Recall=76.01%
+Epoch 18/40 - Training Loss: 0.0125, Training Acc: 91.73%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 18)
+Val metrics: Loss=0.0772, Accuracy=53.95%, F1=49.48, Precision=60.35%, Recall=73.63%
+Epoch 19/40 - Training Loss: 0.0135, Training Acc: 92.11%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 19)
+Val metrics: Loss=0.0628, Accuracy=66.47%, F1=59.13, Precision=63.16%, Recall=80.59%
+Epoch 20/40 - Training Loss: 0.0130, Training Acc: 93.23%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 20)
+Val metrics: Loss=0.0735, Accuracy=52.51%, F1=48.34, Precision=60.02%, Recall=72.64%
+Epoch 21/40 - Training Loss: 0.0134, Training Acc: 92.11%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 21)
+Val metrics: Loss=0.0878, Accuracy=56.79%, F1=51.68, Precision=60.97%, Recall=75.41%
+Epoch 22/40 - Training Loss: 0.0081, Training Acc: 96.62%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 22)
+Val metrics: Loss=0.0671, Accuracy=67.86%, F1=60.25, Precision=63.58%, Recall=81.38%
+Epoch 23/40 - Training Loss: 0.0075, Training Acc: 96.62%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 23)
+Val metrics: Loss=0.0861, Accuracy=62.33%, F1=55.91, Precision=62.11%, Recall=78.39%
+Epoch 24/40 - Training Loss: 0.0068, Training Acc: 97.37%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 24)
+Val metrics: Loss=0.1012, Accuracy=52.56%, F1=48.40, Precision=60.11%, Recall=72.84%
+Epoch 25/40 - Training Loss: 0.0119, Training Acc: 95.11%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 25)
+Val metrics: Loss=0.0805, Accuracy=60.70%, F1=54.47, Precision=61.37%, Recall=76.64%
+Epoch 26/40 - Training Loss: 0.0116, Training Acc: 93.23%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 26)
+Val metrics: Loss=0.0750, Accuracy=67.67%, F1=59.93, Precision=63.26%, Recall=80.61%
+Epoch 27/40 - Training Loss: 0.0096, Training Acc: 96.24%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 27)
+Val metrics: Loss=0.1004, Accuracy=56.74%, F1=51.62, Precision=60.88%, Recall=75.22%
+Epoch 28/40 - Training Loss: 0.0071, Training Acc: 97.74%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 28)
+Val metrics: Loss=0.0773, Accuracy=67.67%, F1=59.93, Precision=63.26%, Recall=80.61%
+Epoch 29/40 - Training Loss: 0.0091, Training Acc: 93.98%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 29)
+Val metrics: Loss=0.0861, Accuracy=60.70%, F1=54.47, Precision=61.37%, Recall=76.64%
+Epoch 30/40 - Training Loss: 0.0099, Training Acc: 95.49%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 30)
+Val metrics: Loss=0.0807, Accuracy=63.49%, F1=56.44, Precision=61.72%, Recall=77.41%
+Epoch 31/40 - Training Loss: 0.0112, Training Acc: 93.61%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 31)
+Val metrics: Loss=0.1235, Accuracy=53.95%, F1=49.48, Precision=60.35%, Recall=73.63%
+Epoch 32/40 - Training Loss: 0.0081, Training Acc: 96.24%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 32)
+Val metrics: Loss=0.0834, Accuracy=62.09%, F1=55.36, Precision=61.36%, Recall=76.61%
+Epoch 33/40 - Training Loss: 0.0109, Training Acc: 95.49%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 33)
+Val metrics: Loss=0.0967, Accuracy=61.86%, F1=55.18, Precision=61.30%, Recall=76.48%
+Epoch 34/40 - Training Loss: 0.0098, Training Acc: 94.74%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 34)
+Val metrics: Loss=0.0918, Accuracy=66.05%, F1=58.44, Precision=62.43%, Recall=78.86%
+Epoch 35/40 - Training Loss: 0.0070, Training Acc: 95.49%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 35)
+Val metrics: Loss=0.0924, Accuracy=63.49%, F1=56.63, Precision=62.06%, Recall=78.23%
+Epoch 36/40 - Training Loss: 0.0070, Training Acc: 96.99%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 36)
+Val metrics: Loss=0.1107, Accuracy=60.70%, F1=54.47, Precision=61.37%, Recall=76.64%
+Epoch 37/40 - Training Loss: 0.0070, Training Acc: 96.99%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 37)
+Val metrics: Loss=0.1198, Accuracy=56.74%, F1=51.62, Precision=60.88%, Recall=75.22%
+Epoch 38/40 - Training Loss: 0.0061, Training Acc: 97.74%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 38)
+Val metrics: Loss=0.0920, Accuracy=66.05%, F1=58.44, Precision=62.43%, Recall=78.86%
+Epoch 39/40 - Training Loss: 0.0095, Training Acc: 96.24%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 39)
+Val metrics: Loss=0.1043, Accuracy=66.28%, F1=58.82, Precision=62.84%, Recall=79.82%
+Epoch 40/40 - Training Loss: 0.0058, Training Acc: 97.74%
+Time consumption: [Data]20%, [Network]77%, [Stats]03%
+Evaluating on val set (Epoch 40)
+Val metrics: Loss=0.1193, Accuracy=62.33%, F1=55.91, Precision=62.11%, Recall=78.39%
+Training complete for fold 2
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Loaded model weights from results_hybrid/fusion_madgwick/fusion_madgwick.pt
+------ Testing on subject 45 ------
+Evaluating on test set (Epoch 1)
+Test metrics: Loss=0.0352, Accuracy=95.00%, F1=94.99, Precision=95.45%, Recall=95.00%
+Test accuracy: 95.00%
+Test F1 score: 94.99
+Created loss curve visualization
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Fold 3: Test subject=46, Validation subject=34
+Train subjects: [33, 45]
+Using data feeder: Feeder.Make_Dataset.UTD_mm
+Training data loaded with 2 batches
+Created train label distribution visualization with classes [0 1]
+Validation data loaded with 17 batches
+Created val label distribution visualization with classes [0 1]
+Test data loaded with 135 batches
+Training data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Validation data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Test data modalities: ['accelerometer', 'gyroscope', 'aligned_timestamps', 'quaternion', 'linear_acceleration', 'fusion_features', 'labels']
+Using Adam optimizer with lr=0.0005, weight_decay=0.001
+Epoch 1/40 - Training Loss: 0.0747, Training Acc: 45.00%
+Time consumption: [Data]14%, [Network]81%, [Stats]05%
+Evaluating on val set (Epoch 1)
+Val metrics: Loss=0.0479, Accuracy=39.85%, F1=31.68, Precision=31.63%, Recall=41.79%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 2/40 - Training Loss: 0.0862, Training Acc: 45.00%
+Time consumption: [Data]20%, [Network]73%, [Stats]08%
+Evaluating on val set (Epoch 2)
+Val metrics: Loss=0.0473, Accuracy=43.23%, F1=33.67, Precision=36.41%, Recall=45.36%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 3/40 - Training Loss: 0.0574, Training Acc: 50.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 3)
+Val metrics: Loss=0.0471, Accuracy=46.99%, F1=35.32, Precision=46.59%, Recall=49.37%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 4/40 - Training Loss: 0.0640, Training Acc: 70.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 4)
+Val metrics: Loss=0.0466, Accuracy=50.38%, F1=38.22, Precision=74.42%, Recall=52.86%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 5/40 - Training Loss: 0.0540, Training Acc: 60.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 5)
+Val metrics: Loss=0.0462, Accuracy=50.38%, F1=38.22, Precision=74.42%, Recall=52.86%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 6/40 - Training Loss: 0.0647, Training Acc: 75.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 6)
+Val metrics: Loss=0.0458, Accuracy=51.13%, F1=39.65, Precision=74.61%, Recall=53.57%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 7/40 - Training Loss: 0.0394, Training Acc: 85.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 7)
+Val metrics: Loss=0.0449, Accuracy=51.50%, F1=40.36, Precision=74.71%, Recall=53.93%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 8/40 - Training Loss: 0.0425, Training Acc: 90.00%
+Time consumption: [Data]19%, [Network]73%, [Stats]08%
+Evaluating on val set (Epoch 8)
+Val metrics: Loss=0.0440, Accuracy=54.89%, F1=46.37, Precision=75.61%, Recall=57.14%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 9/40 - Training Loss: 0.0456, Training Acc: 75.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 9)
+Val metrics: Loss=0.0434, Accuracy=56.77%, F1=49.48, Precision=76.14%, Recall=58.93%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 10/40 - Training Loss: 0.0496, Training Acc: 75.00%
+Time consumption: [Data]21%, [Network]71%, [Stats]08%
+Evaluating on val set (Epoch 10)
+Val metrics: Loss=0.0425, Accuracy=58.27%, F1=51.87, Precision=76.58%, Recall=60.36%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 11/40 - Training Loss: 0.0367, Training Acc: 85.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 11)
+Val metrics: Loss=0.0414, Accuracy=63.91%, F1=60.12, Precision=78.38%, Recall=65.71%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 12/40 - Training Loss: 0.0307, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 12)
+Val metrics: Loss=0.0409, Accuracy=63.53%, F1=59.81, Precision=77.17%, Recall=65.32%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 13/40 - Training Loss: 0.0379, Training Acc: 95.00%
+Time consumption: [Data]21%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 13)
+Val metrics: Loss=0.0395, Accuracy=66.17%, F1=63.65, Precision=76.61%, Recall=67.74%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 14/40 - Training Loss: 0.0339, Training Acc: 90.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 14)
+Val metrics: Loss=0.0388, Accuracy=67.29%, F1=64.93, Precision=77.91%, Recall=68.85%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 15/40 - Training Loss: 0.0423, Training Acc: 90.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 15)
+Val metrics: Loss=0.0385, Accuracy=67.67%, F1=65.26, Precision=78.87%, Recall=69.25%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 16/40 - Training Loss: 0.0278, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 16)
+Val metrics: Loss=0.0388, Accuracy=67.29%, F1=64.78, Precision=78.71%, Recall=68.89%
+Epoch 17/40 - Training Loss: 0.0278, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 17)
+Val metrics: Loss=0.0384, Accuracy=69.17%, F1=67.15, Precision=79.51%, Recall=70.67%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 18/40 - Training Loss: 0.0374, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 18)
+Val metrics: Loss=0.0375, Accuracy=71.05%, F1=69.45, Precision=80.33%, Recall=72.46%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 19/40 - Training Loss: 0.0313, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 19)
+Val metrics: Loss=0.0368, Accuracy=72.93%, F1=71.68, Precision=81.17%, Recall=74.25%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 20/40 - Training Loss: 0.0345, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 20)
+Val metrics: Loss=0.0351, Accuracy=72.18%, F1=71.40, Precision=77.19%, Recall=73.25%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 21/40 - Training Loss: 0.0372, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 21)
+Val metrics: Loss=0.0360, Accuracy=73.68%, F1=72.72, Precision=80.39%, Recall=74.88%
+Epoch 22/40 - Training Loss: 0.0260, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 22)
+Val metrics: Loss=0.0351, Accuracy=74.06%, F1=73.30, Precision=79.62%, Recall=75.16%
+Epoch 23/40 - Training Loss: 0.0358, Training Acc: 95.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 23)
+Val metrics: Loss=0.0336, Accuracy=75.94%, F1=75.71, Precision=78.34%, Recall=76.67%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 24/40 - Training Loss: 0.0263, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 24)
+Val metrics: Loss=0.0329, Accuracy=75.94%, F1=75.74, Precision=78.08%, Recall=76.63%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 25/40 - Training Loss: 0.0238, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 25)
+Val metrics: Loss=0.0335, Accuracy=76.32%, F1=76.10, Precision=78.60%, Recall=77.02%
+Epoch 26/40 - Training Loss: 0.0299, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 26)
+Val metrics: Loss=0.0343, Accuracy=76.32%, F1=76.07, Precision=78.88%, Recall=77.06%
+Epoch 27/40 - Training Loss: 0.0252, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 27)
+Val metrics: Loss=0.0340, Accuracy=74.81%, F1=74.51, Precision=77.54%, Recall=75.60%
+Epoch 28/40 - Training Loss: 0.0191, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 28)
+Val metrics: Loss=0.0341, Accuracy=75.56%, F1=75.31, Precision=78.07%, Recall=76.31%
+Epoch 29/40 - Training Loss: 0.0279, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 29)
+Val metrics: Loss=0.0345, Accuracy=74.81%, F1=74.47, Precision=77.84%, Recall=75.63%
+Epoch 30/40 - Training Loss: 0.0294, Training Acc: 90.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 30)
+Val metrics: Loss=0.0332, Accuracy=75.94%, F1=75.74, Precision=78.08%, Recall=76.63%
+Epoch 31/40 - Training Loss: 0.0182, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 31)
+Val metrics: Loss=0.0337, Accuracy=75.56%, F1=75.38, Precision=77.56%, Recall=76.23%
+Epoch 32/40 - Training Loss: 0.0189, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 32)
+Val metrics: Loss=0.0327, Accuracy=76.32%, F1=76.19, Precision=77.90%, Recall=76.90%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 33/40 - Training Loss: 0.0209, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 33)
+Val metrics: Loss=0.0325, Accuracy=75.94%, F1=75.80, Precision=77.61%, Recall=76.55%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 34/40 - Training Loss: 0.0210, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 34)
+Val metrics: Loss=0.0328, Accuracy=76.32%, F1=76.19, Precision=77.90%, Recall=76.90%
+Epoch 35/40 - Training Loss: 0.0242, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 35)
+Val metrics: Loss=0.0322, Accuracy=76.69%, F1=76.61, Precision=77.98%, Recall=77.22%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 36/40 - Training Loss: 0.0194, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 36)
+Val metrics: Loss=0.0324, Accuracy=76.32%, F1=76.22, Precision=77.69%, Recall=76.87%
+Epoch 37/40 - Training Loss: 0.0176, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 37)
+Val metrics: Loss=0.0326, Accuracy=76.32%, F1=76.19, Precision=77.90%, Recall=76.90%
+Epoch 38/40 - Training Loss: 0.0222, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 38)
+Val metrics: Loss=0.0317, Accuracy=76.69%, F1=76.61, Precision=77.98%, Recall=77.22%
+Best model saved: improved validation loss, accuracy, and F1 score
+Created confusion matrix visualization
+Epoch 39/40 - Training Loss: 0.0183, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 39)
+Val metrics: Loss=0.0319, Accuracy=77.82%, F1=77.77, Precision=78.87%, Recall=78.29%
+Epoch 40/40 - Training Loss: 0.0140, Training Acc: 100.00%
+Time consumption: [Data]20%, [Network]72%, [Stats]08%
+Evaluating on val set (Epoch 40)
+Val metrics: Loss=0.0326, Accuracy=77.82%, F1=77.75, Precision=79.05%, Recall=78.33%
+Training complete for fold 3
+Loading model: Models.fusion_transformer.FusionTransModel
+Model arguments: {'num_layers': 2, 'embed_dim': 24, 'acc_coords': 3, 'quat_coords': 4, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'fusion_type': 'concat', 'dropout': 0.3, 'use_batch_norm': True}
+Loaded model weights from results_hybrid/fusion_madgwick/fusion_madgwick.pt
+------ Testing on subject 46 ------
+Evaluating on test set (Epoch 1)
+Test metrics: Loss=0.0411, Accuracy=57.44%, F1=50.38, Precision=57.55%, Recall=67.69%
+Test accuracy: 57.44%
+Test F1 score: 50.38
+Created loss curve visualization
+
+===== Cross-Validation Results =====
+Mean accuracy: 76.22% ± 26.56%
+Mean F1 score: 72.69 ± 31.54
+Using CrossEntropyLoss for training

@@ -1,0 +1,8 @@
+[2025-03-15 19:21:46] Starting training script at Sat Mar 15 19:21:46 CDT 2025
+[2025-03-15 19:21:46] CUDA_VISIBLE_DEVICES=0,1
+[2025-03-15 19:21:46] Python version: Python 3.6.8
+[2025-03-15 19:21:46] Running diagnostics...
+[2025-03-15 19:21:46] Checking dependencies...
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'numpy'

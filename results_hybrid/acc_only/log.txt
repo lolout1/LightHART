@@ -1,0 +1,2583 @@
+# Parameters: 292712
+Model size : 0.28 MB
+Parameters: 
+{'config': './config/smartfallmm/acc_only.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.transformer.TransModel', 'device': [0], 'model_args': {'num_layers': 2, 'norm_first': True, 'embed_dim': 24, 'activation': 'gelu', 'acc_coords': 3, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'dropout': 0.3}, 'weights': None, 'model_saved_name': 'acc_only_model', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer'], 'age_group': ['young'], 'sensors': ['watch']}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/acc_only', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 292712
+# Parameters: 292712
+Model size : 0.28 MB
+Parameters: 
+{'config': './config/smartfallmm/acc_only.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.transformer.TransModel', 'device': [0], 'model_args': {'num_layers': 2, 'norm_first': True, 'embed_dim': 24, 'activation': 'gelu', 'acc_coords': 3, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'dropout': 0.3}, 'weights': None, 'model_saved_name': 'acc_only_model', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer'], 'age_group': ['young'], 'sensors': ['watch']}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/acc_only', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 292712
+# Parameters: 292712
+Model size : 0.28 MB
+Parameters: 
+{'config': './config/smartfallmm/acc_only.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.transformer.TransModel', 'device': [0], 'model_args': {'num_layers': 2, 'norm_first': True, 'embed_dim': 24, 'activation': 'gelu', 'acc_coords': 3, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'dropout': 0.3}, 'weights': None, 'model_saved_name': 'acc_only_model', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer'], 'age_group': ['young'], 'sensors': ['watch']}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/acc_only', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 292712
+# Parameters: 292712
+Model size : 0.28 MB
+Parameters: 
+{'config': './config/smartfallmm/acc_only.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.transformer.TransModel', 'device': [0], 'model_args': {'num_layers': 2, 'norm_first': True, 'embed_dim': 24, 'activation': 'gelu', 'acc_coords': 3, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'dropout': 0.3}, 'weights': None, 'model_saved_name': 'acc_only_model', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer'], 'age_group': ['young'], 'sensors': ['watch']}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/acc_only', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 292712
+# Parameters: 292712
+Model size : 0.28 MB
+Parameters: 
+{'config': './config/smartfallmm/acc_only.yaml', 'dataset': 'smartfallmm', 'batch_size': 16, 'test_batch_size': 16, 'val_batch_size': 16, 'num_epoch': 40, 'start_epoch': 0, 'optimizer': 'adam', 'base_lr': 0.0005, 'weight_decay': 0.001, 'model': 'Models.transformer.TransModel', 'device': [0], 'model_args': {'num_layers': 2, 'norm_first': True, 'embed_dim': 24, 'activation': 'gelu', 'acc_coords': 3, 'num_classes': 2, 'acc_frames': 64, 'mocap_frames': 64, 'num_heads': 4, 'dropout': 0.3}, 'weights': None, 'model_saved_name': 'acc_only_model', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'mode': 'sliding_window', 'max_length': 64, 'task': 'fd', 'modalities': ['accelerometer'], 'age_group': ['young'], 'sensors': ['watch']}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 16}, 'val_feeder_args': {'batch_size': 16}, 'test_feeder_args': {'batch_size': 16}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'results_hybrid/acc_only', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 292712
+	Training Loss: 0.025640. Training Acc: 81.335386%
+	Time consumption: [Data]02%, [Network]98%
+Eval epoch: 1
+Val Loss: 0.049829. Val Acc: 63.360882% f1: 63.333055
+Weights Saved
+	Training Loss: 0.021782. Training Acc: 85.116413%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.038709. Val Acc: 71.349862% f1: 70.979645
+Weights Saved
+	Training Loss: 0.020119. Training Acc: 86.280546%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.048127. Val Acc: 63.360882% f1: 63.141581
+	Training Loss: 0.018892. Training Acc: 87.223398%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.048464. Val Acc: 65.564738% f1: 65.497707
+	Training Loss: 0.018071. Training Acc: 88.060419%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.051152. Val Acc: 66.666667% f1: 66.371648
+	Training Loss: 0.017431. Training Acc: 88.454878%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.047618. Val Acc: 69.146006% f1: 69.042398
+	Training Loss: 0.016774. Training Acc: 89.070618%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.060018. Val Acc: 63.911846% f1: 63.095155
+	Training Loss: 0.016108. Training Acc: 89.109101%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.059268. Val Acc: 65.289256% f1: 64.840723
+	Training Loss: 0.015411. Training Acc: 90.003848%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.042726. Val Acc: 68.595041% f1: 68.583359
+	Training Loss: 0.014846. Training Acc: 90.253993%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.051718. Val Acc: 65.840220% f1: 65.481595
+	Training Loss: 0.014282. Training Acc: 90.908216%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.051814. Val Acc: 62.258953% f1: 61.840783
+	Training Loss: 0.013921. Training Acc: 90.908216%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.050902. Val Acc: 66.391185% f1: 66.204212
+	Training Loss: 0.013372. Training Acc: 91.350779%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.047899. Val Acc: 67.768595% f1: 67.689148
+	Training Loss: 0.013136. Training Acc: 91.591303%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.060189. Val Acc: 64.738292% f1: 64.444444
+	Training Loss: 0.012630. Training Acc: 92.139696%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.051277. Val Acc: 68.319559% f1: 68.304165
+	Training Loss: 0.012317. Training Acc: 92.341736%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.048079. Val Acc: 68.044077% f1: 68.014706
+	Training Loss: 0.011828. Training Acc: 92.755436%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.068544. Val Acc: 62.534435% f1: 61.949686
+	Training Loss: 0.011542. Training Acc: 92.630364%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.054633. Val Acc: 72.176309% f1: 72.155177
+	Training Loss: 0.011214. Training Acc: 93.063306%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.057031. Val Acc: 66.391185% f1: 66.360294
+	Training Loss: 0.010850. Training Acc: 93.246104%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.057019. Val Acc: 69.972452% f1: 69.957860
+	Training Loss: 0.010790. Training Acc: 93.582836%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.065142. Val Acc: 68.595041% f1: 68.592896
+	Training Loss: 0.010312. Training Acc: 93.573215%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.076484. Val Acc: 67.217631% f1: 67.073701
+	Training Loss: 0.009793. Training Acc: 94.025399%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.068342. Val Acc: 65.013774% f1: 65.009525
+	Training Loss: 0.009937. Training Acc: 94.063883%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.080016. Val Acc: 64.462810% f1: 64.184481
+	Training Loss: 0.009990. Training Acc: 93.900327%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.071134. Val Acc: 66.115702% f1: 65.940973
+	Training Loss: 0.009108. Training Acc: 94.439099%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.075005. Val Acc: 68.319559% f1: 68.241470
+	Training Loss: 0.008722. Training Acc: 95.016356%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.065600. Val Acc: 70.523416% f1: 70.509092
+	Training Loss: 0.009143. Training Acc: 94.670002%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.070356. Val Acc: 67.768595% f1: 67.602389
+	Training Loss: 0.008902. Training Acc: 94.698865%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.065450. Val Acc: 69.146006% f1: 69.127028
+	Training Loss: 0.008897. Training Acc: 94.698865%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.085226. Val Acc: 64.187328% f1: 63.769117
+	Training Loss: 0.008295. Training Acc: 94.910525%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.068300. Val Acc: 70.523416% f1: 70.491168
+	Training Loss: 0.008293. Training Acc: 94.939388%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.065993. Val Acc: 68.870523% f1: 68.869578
+	Training Loss: 0.007880. Training Acc: 95.295363%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.066690. Val Acc: 68.595041% f1: 68.575724
+	Training Loss: 0.007777. Training Acc: 95.507023%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.094256. Val Acc: 64.462810% f1: 63.980616
+	Training Loss: 0.007781. Training Acc: 95.218395%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.085338. Val Acc: 66.942149% f1: 66.911765
+	Training Loss: 0.007613. Training Acc: 95.545507%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.079319. Val Acc: 67.217631% f1: 67.192733
+	Training Loss: 0.007261. Training Acc: 95.843756%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.084318. Val Acc: 64.462810% f1: 64.453098
+	Training Loss: 0.006996. Training Acc: 95.622475%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.082771. Val Acc: 68.044077% f1: 67.915270
+	Training Loss: 0.007367. Training Acc: 95.612854%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.078924. Val Acc: 67.217631% f1: 67.153817
+	Training Loss: 0.007011. Training Acc: 95.689821%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.090112. Val Acc: 65.564738% f1: 65.358629
+Train Subjects : [31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 29 -------
+Eval epoch: 1
+Test Loss: 0.026949. Test Acc: 79.885057% f1: 79.134546
+Test accuracy for : 79.88505747126436
+Test F-Score: 79.13454620207628
+Model Parameters: 292712
+	Training Loss: 0.029340. Training Acc: 77.576749%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.031192. Val Acc: 74.074074% f1: 71.977892
+Weights Saved
+	Training Loss: 0.023475. Training Acc: 83.350977%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.027900. Val Acc: 79.202279% f1: 77.738682
+Weights Saved
+	Training Loss: 0.020982. Training Acc: 85.429699%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.027604. Val Acc: 77.492877% f1: 76.504232
+Weights Saved
+	Training Loss: 0.019563. Training Acc: 87.046483%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.034073. Val Acc: 74.643875% f1: 73.180113
+	Training Loss: 0.018680. Training Acc: 87.604658%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.031192. Val Acc: 78.062678% f1: 76.796277
+	Training Loss: 0.018126. Training Acc: 87.979983%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.029159. Val Acc: 80.056980% f1: 78.333333
+	Training Loss: 0.017156. Training Acc: 88.624771%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.028992. Val Acc: 79.487179% f1: 76.507771
+	Training Loss: 0.016658. Training Acc: 89.202194%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.029093. Val Acc: 80.341880% f1: 78.958480
+	Training Loss: 0.016136. Training Acc: 89.635261%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.033532. Val Acc: 78.632479% f1: 76.397967
+	Training Loss: 0.015766. Training Acc: 89.721875%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.034690. Val Acc: 81.481481% f1: 80.298778
+	Training Loss: 0.014945. Training Acc: 90.780483%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.035062. Val Acc: 81.196581% f1: 79.571429
+	Training Loss: 0.014577. Training Acc: 90.886344%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.036333. Val Acc: 80.911681% f1: 79.151041
+	Training Loss: 0.014073. Training Acc: 91.194303%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.040141. Val Acc: 76.638177% f1: 74.529204
+	Training Loss: 0.013505. Training Acc: 91.810220%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.032928. Val Acc: 78.632479% f1: 76.981594
+	Training Loss: 0.013169. Training Acc: 92.089308%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.033533. Val Acc: 78.917379% f1: 76.930865
+	Training Loss: 0.012754. Training Acc: 92.406891%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.039540. Val Acc: 79.772080% f1: 78.279892
+	Training Loss: 0.011976. Training Acc: 92.762968%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.034558. Val Acc: 80.341880% f1: 79.427479
+	Training Loss: 0.011528. Training Acc: 93.090174%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.042710. Val Acc: 79.772080% f1: 77.985177
+	Training Loss: 0.011365. Training Acc: 93.003561%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.038616. Val Acc: 79.202279% f1: 77.520726
+	Training Loss: 0.010748. Training Acc: 93.792705%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.039892. Val Acc: 80.056980% f1: 78.619910
+	Training Loss: 0.010213. Training Acc: 94.052545%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.051623. Val Acc: 76.353276% f1: 74.843055
+	Training Loss: 0.010279. Training Acc: 93.850448%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.057091. Val Acc: 77.492877% f1: 76.947250
+	Training Loss: 0.010010. Training Acc: 94.225772%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.044211. Val Acc: 78.917379% f1: 76.667266
+	Training Loss: 0.009839. Training Acc: 94.331633%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.042817. Val Acc: 78.062678% f1: 76.124769
+	Training Loss: 0.009354. Training Acc: 94.350881%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.051887. Val Acc: 78.062678% f1: 76.983607
+	Training Loss: 0.009070. Training Acc: 94.475989%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.055021. Val Acc: 76.923077% f1: 75.140122
+	Training Loss: 0.008825. Training Acc: 94.966798%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.052202. Val Acc: 76.353276% f1: 73.980262
+	Training Loss: 0.008756. Training Acc: 94.812819%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.053523. Val Acc: 79.487179% f1: 78.272233
+	Training Loss: 0.008748. Training Acc: 94.822442%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.053380. Val Acc: 78.347578% f1: 76.930262
+	Training Loss: 0.008642. Training Acc: 95.082283%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.057256. Val Acc: 78.632479% f1: 76.488188
+	Training Loss: 0.007938. Training Acc: 95.351747%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.054882. Val Acc: 78.917379% f1: 77.537360
+	Training Loss: 0.008206. Training Acc: 95.390242%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.054919. Val Acc: 78.062678% f1: 76.796277
+	Training Loss: 0.008148. Training Acc: 95.197767%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.053952. Val Acc: 77.207977% f1: 75.716065
+	Training Loss: 0.007757. Training Acc: 95.332499%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.057445. Val Acc: 79.487179% f1: 78.144458
+	Training Loss: 0.007882. Training Acc: 95.226638%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.063830. Val Acc: 76.923077% f1: 75.449247
+	Training Loss: 0.007565. Training Acc: 95.467231%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.057422. Val Acc: 78.347578% f1: 77.129630
+	Training Loss: 0.007494. Training Acc: 95.842556%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.057086. Val Acc: 79.487179% f1: 78.077724
+	Training Loss: 0.006823. Training Acc: 96.025407%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.076526. Val Acc: 74.643875% f1: 72.859489
+	Training Loss: 0.007348. Training Acc: 95.707824%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.060715. Val Acc: 78.347578% f1: 76.712759
+	Training Loss: 0.007146. Training Acc: 95.755943%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.059878. Val Acc: 75.783476% f1: 74.236864
+Train Subjects : [29, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 30 -------
+Eval epoch: 1
+Test Loss: 0.049064. Test Acc: 65.564738% f1: 65.563693
+Test accuracy for : 65.56473829201101
+Test F-Score: 65.5636929381854
+Model Parameters: 292712
+	Training Loss: 0.030339. Training Acc: 74.918660%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.040337. Val Acc: 67.434211% f1: 56.387033
+Weights Saved
+	Training Loss: 0.023981. Training Acc: 82.976077%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.040627. Val Acc: 66.776316% f1: 65.652023
+	Training Loss: 0.021804. Training Acc: 85.157895%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.040369. Val Acc: 70.723684% f1: 67.250499
+	Training Loss: 0.020300. Training Acc: 86.277512%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.044196. Val Acc: 68.421053% f1: 65.810684
+	Training Loss: 0.019126. Training Acc: 87.167464%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.042786. Val Acc: 70.394737% f1: 67.819337
+	Training Loss: 0.018631. Training Acc: 87.693780%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.037961. Val Acc: 74.013158% f1: 70.179425
+Weights Saved
+	Training Loss: 0.017811. Training Acc: 88.459330%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.038865. Val Acc: 72.039474% f1: 69.152530
+	Training Loss: 0.017278. Training Acc: 88.717703%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.040467. Val Acc: 71.381579% f1: 69.526794
+	Training Loss: 0.016943. Training Acc: 88.736842%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.041817. Val Acc: 74.013158% f1: 69.310587
+	Training Loss: 0.016487. Training Acc: 89.617225%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.039320. Val Acc: 75.986842% f1: 73.950300
+	Training Loss: 0.015995. Training Acc: 89.684211%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.045752. Val Acc: 75.657895% f1: 71.834936
+	Training Loss: 0.015418. Training Acc: 90.076555%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.042258. Val Acc: 76.315789% f1: 73.811917
+	Training Loss: 0.014998. Training Acc: 90.430622%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.049300. Val Acc: 75.000000% f1: 72.598321
+	Training Loss: 0.014715. Training Acc: 90.679426%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.051918. Val Acc: 73.026316% f1: 70.909770
+	Training Loss: 0.013988. Training Acc: 91.406699%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.046999. Val Acc: 75.657895% f1: 72.288741
+	Training Loss: 0.013626. Training Acc: 91.368421%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.043839. Val Acc: 75.986842% f1: 73.138050
+	Training Loss: 0.013544. Training Acc: 91.732057%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.049963. Val Acc: 73.684211% f1: 70.902130
+	Training Loss: 0.013313. Training Acc: 92.019139%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.050632. Val Acc: 73.684211% f1: 69.883099
+	Training Loss: 0.013128. Training Acc: 92.229665%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.050504. Val Acc: 76.644737% f1: 73.481097
+	Training Loss: 0.012607. Training Acc: 92.334928%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.046100. Val Acc: 75.657895% f1: 72.288741
+	Training Loss: 0.011996. Training Acc: 92.622010%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.054712. Val Acc: 72.039474% f1: 69.902743
+	Training Loss: 0.011559. Training Acc: 93.100478%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.055876. Val Acc: 74.671053% f1: 71.240063
+	Training Loss: 0.011700. Training Acc: 92.947368%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.051382. Val Acc: 75.000000% f1: 71.828513
+	Training Loss: 0.011722. Training Acc: 93.052632%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.051971. Val Acc: 75.657895% f1: 71.834936
+	Training Loss: 0.011039. Training Acc: 93.559809%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.054090. Val Acc: 74.671053% f1: 71.666162
+	Training Loss: 0.010876. Training Acc: 93.311005%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.059697. Val Acc: 73.684211% f1: 69.377990
+	Training Loss: 0.010824. Training Acc: 93.617225%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.056930. Val Acc: 74.671053% f1: 71.929825
+	Training Loss: 0.010507. Training Acc: 93.904306%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.060964. Val Acc: 74.013158% f1: 70.179425
+	Training Loss: 0.010348. Training Acc: 94.066986%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.054000. Val Acc: 72.368421% f1: 69.582619
+	Training Loss: 0.010268. Training Acc: 94.143541%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.053407. Val Acc: 74.342105% f1: 71.995465
+	Training Loss: 0.010084. Training Acc: 94.114833%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.062880. Val Acc: 74.342105% f1: 71.500000
+	Training Loss: 0.009764. Training Acc: 94.334928%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.061773. Val Acc: 72.368421% f1: 68.028846
+	Training Loss: 0.009358. Training Acc: 94.803828%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.057862. Val Acc: 72.697368% f1: 68.999029
+	Training Loss: 0.009299. Training Acc: 94.641148%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.073088. Val Acc: 71.052632% f1: 66.506410
+	Training Loss: 0.009483. Training Acc: 94.430622%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.057940. Val Acc: 71.381579% f1: 67.986443
+	Training Loss: 0.008779. Training Acc: 94.956938%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.076522. Val Acc: 70.065789% f1: 65.832994
+	Training Loss: 0.008805. Training Acc: 94.956938%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.062618. Val Acc: 73.355263% f1: 71.095538
+	Training Loss: 0.008693. Training Acc: 95.157895%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.049626. Val Acc: 75.328947% f1: 72.658920
+	Training Loss: 0.008818. Training Acc: 94.985646%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.066993. Val Acc: 73.026316% f1: 70.796626
+	Training Loss: 0.008538. Training Acc: 95.081340%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.063057. Val Acc: 72.697368% f1: 69.602564
+Train Subjects : [29, 30, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 31 -------
+Eval epoch: 1
+Test Loss: 0.028899. Test Acc: 77.777778% f1: 76.250867
+Test accuracy for : 77.77777777777779
+Test F-Score: 76.25086745315753
+Model Parameters: 292712
+	Training Loss: 0.026357. Training Acc: 81.559206%
+	Time consumption: [Data]13%, [Network]86%
+Eval epoch: 1
+Val Loss: 0.074754. Val Acc: 46.296296% f1: 37.149829
+Weights Saved
+	Training Loss: 0.021930. Training Acc: 85.234071%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.118036. Val Acc: 37.407407% f1: 32.757630
+	Training Loss: 0.020240. Training Acc: 86.715412%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.111116. Val Acc: 34.444444% f1: 30.669800
+	Training Loss: 0.019409. Training Acc: 87.332637%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.117478. Val Acc: 42.592593% f1: 35.941590
+	Training Loss: 0.018735. Training Acc: 87.541544%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.098640. Val Acc: 37.407407% f1: 31.866032
+	Training Loss: 0.017892. Training Acc: 88.215744%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.108103. Val Acc: 37.037037% f1: 31.619093
+	Training Loss: 0.017323. Training Acc: 88.757003%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.126970. Val Acc: 34.814815% f1: 30.934248
+	Training Loss: 0.016680. Training Acc: 89.345741%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.116124. Val Acc: 27.777778% f1: 25.714286
+	Training Loss: 0.016229. Training Acc: 89.564144%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.160269. Val Acc: 26.296296% f1: 24.378264
+	Training Loss: 0.015837. Training Acc: 89.915488%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.113565. Val Acc: 18.888889% f1: 18.296003
+	Training Loss: 0.015270. Training Acc: 90.095907%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.122401. Val Acc: 26.296296% f1: 24.556649
+	Training Loss: 0.014578. Training Acc: 90.570696%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.161388. Val Acc: 34.074074% f1: 30.404310
+	Training Loss: 0.014488. Training Acc: 90.532713%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.151128. Val Acc: 26.296296% f1: 24.378264
+	Training Loss: 0.014048. Training Acc: 91.073972%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.114385. Val Acc: 27.037037% f1: 24.757041
+	Training Loss: 0.013822. Training Acc: 91.064476%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.126943. Val Acc: 36.666667% f1: 32.241448
+	Training Loss: 0.013577. Training Acc: 91.368341%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.140657. Val Acc: 37.037037% f1: 32.216906
+	Training Loss: 0.013501. Training Acc: 91.767164%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.133168. Val Acc: 34.444444% f1: 30.411358
+	Training Loss: 0.012376. Training Acc: 92.507834%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.116270. Val Acc: 36.296296% f1: 31.705882
+	Training Loss: 0.012541. Training Acc: 92.213465%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.112437. Val Acc: 28.518519% f1: 26.084058
+	Training Loss: 0.012385. Training Acc: 92.241952%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.140902. Val Acc: 36.296296% f1: 31.705882
+	Training Loss: 0.011834. Training Acc: 92.583800%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.133536. Val Acc: 18.518519% f1: 18.068966
+	Training Loss: 0.011751. Training Acc: 92.868673%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.156209. Val Acc: 27.407407% f1: 25.237342
+	Training Loss: 0.011234. Training Acc: 93.020606%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.151565. Val Acc: 35.185185% f1: 30.656452
+	Training Loss: 0.011441. Training Acc: 92.811699%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.152152. Val Acc: 27.777778% f1: 25.520929
+	Training Loss: 0.011277. Training Acc: 92.878169%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.112342. Val Acc: 35.185185% f1: 30.656452
+	Training Loss: 0.011083. Training Acc: 93.476403%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.092082. Val Acc: 35.925926% f1: 31.721507
+	Training Loss: 0.010775. Training Acc: 93.476403%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.149548. Val Acc: 28.888889% f1: 26.363636
+	Training Loss: 0.010389. Training Acc: 93.751780%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.113538. Val Acc: 51.111111% f1: 41.798942
+	Training Loss: 0.010466. Training Acc: 93.609344%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.144600. Val Acc: 27.777778% f1: 25.520929
+	Training Loss: 0.010229. Training Acc: 93.875226%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.124498. Val Acc: 34.814815% f1: 30.672269
+	Training Loss: 0.009688. Training Acc: 94.103124%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.157067. Val Acc: 27.777778% f1: 25.520929
+	Training Loss: 0.010146. Training Acc: 93.789764%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.145087. Val Acc: 27.777778% f1: 25.520929
+	Training Loss: 0.009719. Training Acc: 94.074637%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.154767. Val Acc: 34.444444% f1: 30.142813
+	Training Loss: 0.009209. Training Acc: 94.672871%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.147225. Val Acc: 27.777778% f1: 25.520929
+	Training Loss: 0.009610. Training Acc: 94.255056%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.151280. Val Acc: 35.185185% f1: 30.656452
+	Training Loss: 0.009190. Training Acc: 94.511442%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.172544. Val Acc: 35.925926% f1: 31.721507
+	Training Loss: 0.008895. Training Acc: 94.786820%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.147289. Val Acc: 36.666667% f1: 32.241448
+	Training Loss: 0.008933. Training Acc: 94.815307%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.174924. Val Acc: 25.185185% f1: 23.329960
+	Training Loss: 0.008696. Training Acc: 95.033710%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.196859. Val Acc: 34.444444% f1: 30.669800
+	Training Loss: 0.008586. Training Acc: 94.929256%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.154686. Val Acc: 34.074074% f1: 30.149410
+Train Subjects : [29, 30, 31, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 33 -------
+Eval epoch: 1
+Test Loss: 0.040122. Test Acc: 69.407895% f1: 67.846054
+Test accuracy for : 69.40789473684211
+Test F-Score: 67.84605411307106
+Model Parameters: 292712
+	Training Loss: 0.031056. Training Acc: 77.621944%
+	Time consumption: [Data]13%, [Network]86%
+Eval epoch: 1
+Val Loss: 0.025307. Val Acc: 88.336933% f1: 81.510208
+Weights Saved
+	Training Loss: 0.026672. Training Acc: 81.792230%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.018150. Val Acc: 89.488841% f1: 83.003578
+Weights Saved
+	Training Loss: 0.024842. Training Acc: 83.368499%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.014994. Val Acc: 90.568754% f1: 83.924066
+Weights Saved
+	Training Loss: 0.023235. Training Acc: 84.932357%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.016747. Val Acc: 90.568754% f1: 84.639003
+	Training Loss: 0.022596. Training Acc: 85.540524%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.017122. Val Acc: 90.460763% f1: 83.161876
+	Training Loss: 0.021482. Training Acc: 86.396922%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.013868. Val Acc: 92.620590% f1: 86.636091
+Weights Saved
+	Training Loss: 0.021228. Training Acc: 86.632742%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.018336. Val Acc: 89.560835% f1: 81.176962
+	Training Loss: 0.020619. Training Acc: 86.943031%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.017800. Val Acc: 90.352772% f1: 83.607588
+	Training Loss: 0.019602. Training Acc: 87.799429%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.014335. Val Acc: 91.612671% f1: 85.219878
+	Training Loss: 0.019106. Training Acc: 88.072484%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.013686. Val Acc: 90.640749% f1: 83.683512
+Weights Saved
+	Training Loss: 0.018671. Training Acc: 88.444831%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.021785. Val Acc: 91.180706% f1: 84.810806
+	Training Loss: 0.018260. Training Acc: 88.444831%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.015123. Val Acc: 93.196544% f1: 88.694855
+	Training Loss: 0.017591. Training Acc: 89.313640%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.012926. Val Acc: 91.900648% f1: 86.050740
+Weights Saved
+	Training Loss: 0.016873. Training Acc: 89.822515%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.019468. Val Acc: 92.260619% f1: 86.880231
+	Training Loss: 0.016732. Training Acc: 89.748045%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.014494. Val Acc: 92.368611% f1: 86.888256
+	Training Loss: 0.016255. Training Acc: 89.810103%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.015583. Val Acc: 90.676746% f1: 83.487795
+	Training Loss: 0.015687. Training Acc: 89.996277%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.017258. Val Acc: 90.604752% f1: 82.587711
+	Training Loss: 0.015489. Training Acc: 90.430681%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.021457. Val Acc: 88.768898% f1: 80.703471
+	Training Loss: 0.014774. Training Acc: 91.113318%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.014848. Val Acc: 90.712743% f1: 84.341774
+	Training Loss: 0.014628. Training Acc: 90.703736%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.016608. Val Acc: 91.468683% f1: 85.283132
+	Training Loss: 0.013668. Training Acc: 91.932481%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.015174. Val Acc: 91.288697% f1: 83.193520
+	Training Loss: 0.013948. Training Acc: 91.436018%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.022722. Val Acc: 90.208783% f1: 82.902403
+	Training Loss: 0.014063. Training Acc: 91.423607%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.018087. Val Acc: 90.136789% f1: 81.152391
+	Training Loss: 0.013087. Training Acc: 91.858012%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.017532. Val Acc: 89.524838% f1: 79.848786
+	Training Loss: 0.012401. Training Acc: 92.242770%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.020790. Val Acc: 91.432685% f1: 83.211296
+	Training Loss: 0.012682. Training Acc: 92.317240%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.022041. Val Acc: 88.768898% f1: 80.355744
+	Training Loss: 0.012777. Training Acc: 92.317240%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.019589. Val Acc: 89.092873% f1: 82.839109
+	Training Loss: 0.011691. Training Acc: 92.689587%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.019082. Val Acc: 90.568754% f1: 82.113466
+	Training Loss: 0.011647. Training Acc: 92.764056%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.019862. Val Acc: 89.524838% f1: 81.225697
+	Training Loss: 0.011250. Training Acc: 93.334988%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.024357. Val Acc: 90.028798% f1: 83.201651
+	Training Loss: 0.010564. Training Acc: 93.545985%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.022488. Val Acc: 89.272858% f1: 80.522418
+	Training Loss: 0.010844. Training Acc: 93.186049%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.023652. Val Acc: 88.768898% f1: 81.435445
+	Training Loss: 0.010204. Training Acc: 93.756982%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.023372. Val Acc: 89.848812% f1: 82.273815
+	Training Loss: 0.010320. Training Acc: 93.868686%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.025040. Val Acc: 89.596832% f1: 81.878444
+	Training Loss: 0.010219. Training Acc: 94.067271%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.023711. Val Acc: 90.820734% f1: 84.062511
+	Training Loss: 0.009913. Training Acc: 94.092094%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.026476. Val Acc: 86.105112% f1: 75.656385
+	Training Loss: 0.009919. Training Acc: 94.253444%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.023508. Val Acc: 89.020878% f1: 80.620273
+	Training Loss: 0.009252. Training Acc: 94.228621%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.026287. Val Acc: 87.688985% f1: 78.814132
+	Training Loss: 0.009347. Training Acc: 94.116917%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.028359. Val Acc: 89.020878% f1: 82.208473
+	Training Loss: 0.009306. Training Acc: 94.315502%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.025629. Val Acc: 88.588913% f1: 79.477768
+Train Subjects : [29, 30, 31, 33, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 45 -------
+Eval epoch: 1
+Test Loss: 0.154773. Test Acc: 29.629630% f1: 27.130682
+Test accuracy for : 29.629629629629626
+Test F-Score: 27.130681818181817
+Model Parameters: 292712
+	Training Loss: 0.032196. Training Acc: 75.751553%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.032813. Val Acc: 74.729242% f1: 73.158915
+Weights Saved
+	Training Loss: 0.026412. Training Acc: 81.801242%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.032009. Val Acc: 79.422383% f1: 78.609459
+Weights Saved
+	Training Loss: 0.024250. Training Acc: 83.813665%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.031932. Val Acc: 81.227437% f1: 80.763889
+Weights Saved
+	Training Loss: 0.022744. Training Acc: 84.906832%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.031173. Val Acc: 81.588448% f1: 81.155206
+Weights Saved
+	Training Loss: 0.021550. Training Acc: 85.627329%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.040390. Val Acc: 77.256318% f1: 76.136690
+	Training Loss: 0.020832. Training Acc: 86.310559%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.032331. Val Acc: 80.144404% f1: 79.630447
+	Training Loss: 0.020126. Training Acc: 86.919255%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.041270. Val Acc: 75.451264% f1: 74.200088
+	Training Loss: 0.019401. Training Acc: 87.590062%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.027432. Val Acc: 81.227437% f1: 80.847782
+Weights Saved
+	Training Loss: 0.018848. Training Acc: 87.763975%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.037451. Val Acc: 80.505415% f1: 79.927536
+	Training Loss: 0.018203. Training Acc: 88.571429%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.028907. Val Acc: 83.032491% f1: 82.671139
+	Training Loss: 0.018255. Training Acc: 88.583851%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.027710. Val Acc: 83.754513% f1: 83.506014
+	Training Loss: 0.017281. Training Acc: 89.304348%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.027877. Val Acc: 81.227437% f1: 80.957166
+	Training Loss: 0.016735. Training Acc: 89.490683%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.028809. Val Acc: 83.754513% f1: 83.475402
+	Training Loss: 0.016472. Training Acc: 89.515528%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.028964. Val Acc: 80.505415% f1: 79.927536
+	Training Loss: 0.016328. Training Acc: 89.987578%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.026374. Val Acc: 85.198556% f1: 84.998349
+Weights Saved
+	Training Loss: 0.015794. Training Acc: 90.322981%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.039597. Val Acc: 77.256318% f1: 76.287147
+	Training Loss: 0.015070. Training Acc: 90.745342%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.032731. Val Acc: 79.061372% f1: 78.326678
+	Training Loss: 0.014825. Training Acc: 90.857143%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.039873. Val Acc: 81.227437% f1: 80.763889
+	Training Loss: 0.014478. Training Acc: 91.341615%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.029426. Val Acc: 82.310469% f1: 81.971176
+	Training Loss: 0.014425. Training Acc: 91.105590%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.031149. Val Acc: 81.949458% f1: 81.621550
+	Training Loss: 0.013758. Training Acc: 91.440994%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.038163. Val Acc: 80.866426% f1: 80.323804
+	Training Loss: 0.013443. Training Acc: 91.527950%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.031307. Val Acc: 81.949458% f1: 81.689582
+	Training Loss: 0.013110. Training Acc: 92.062112%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.037791. Val Acc: 80.505415% f1: 80.258156
+	Training Loss: 0.012735. Training Acc: 92.409938%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.049719. Val Acc: 76.173285% f1: 75.584936
+	Training Loss: 0.012637. Training Acc: 92.198758%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.033311. Val Acc: 82.671480% f1: 82.390337
+	Training Loss: 0.012569. Training Acc: 92.385093%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.044867. Val Acc: 79.061372% f1: 78.680998
+	Training Loss: 0.012335. Training Acc: 92.670807%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.035953. Val Acc: 79.783394% f1: 79.330562
+	Training Loss: 0.011696. Training Acc: 92.795031%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.038971. Val Acc: 77.256318% f1: 76.611314
+	Training Loss: 0.011632. Training Acc: 93.490683%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.033456. Val Acc: 80.505415% f1: 80.151274
+	Training Loss: 0.011585. Training Acc: 93.167702%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.042428. Val Acc: 79.783394% f1: 79.374535
+	Training Loss: 0.011247. Training Acc: 93.453416%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.044816. Val Acc: 76.173285% f1: 75.527415
+	Training Loss: 0.011219. Training Acc: 93.204969%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.045239. Val Acc: 76.173285% f1: 75.337254
+	Training Loss: 0.010573. Training Acc: 93.739130%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.038240. Val Acc: 80.505415% f1: 80.151274
+	Training Loss: 0.010793. Training Acc: 93.577640%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.038382. Val Acc: 79.061372% f1: 78.721657
+	Training Loss: 0.010069. Training Acc: 94.198758%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.051017. Val Acc: 77.256318% f1: 76.357823
+	Training Loss: 0.009888. Training Acc: 94.248447%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.039949. Val Acc: 83.393502% f1: 83.124073
+	Training Loss: 0.010229. Training Acc: 93.850932%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.037782. Val Acc: 82.310469% f1: 82.071197
+	Training Loss: 0.009966. Training Acc: 94.285714%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.040958. Val Acc: 77.978339% f1: 77.555954
+	Training Loss: 0.009584. Training Acc: 94.236025%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.039071. Val Acc: 84.115523% f1: 83.939490
+	Training Loss: 0.009482. Training Acc: 94.521739%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.038959. Val Acc: 80.505415% f1: 80.189129
+Train Subjects : [29, 30, 31, 33, 45, 37, 39, 38, 43, 35, 36, 44, 32]
+ ------------ Test Subject 46 -------
+Eval epoch: 1
+Test Loss: 0.018816. Test Acc: 87.796976% f1: 76.342866
+Test accuracy for : 87.79697624190065
+Test F-Score: 76.34286618627686
+Model Parameters: 292712
+	Training Loss: 0.027690. Training Acc: 80.152891%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.020749. Val Acc: 87.052342% f1: 85.690082
+Weights Saved
+	Training Loss: 0.023149. Training Acc: 84.022934%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.016397. Val Acc: 89.531680% f1: 88.173868
+Weights Saved
+	Training Loss: 0.021623. Training Acc: 85.341615%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.019173. Val Acc: 87.052342% f1: 85.845370
+	Training Loss: 0.020514. Training Acc: 86.067845%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.014754. Val Acc: 92.011019% f1: 91.326165
+Weights Saved
+	Training Loss: 0.019758. Training Acc: 86.679408%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.015508. Val Acc: 90.633609% f1: 89.975634
+	Training Loss: 0.019003. Training Acc: 87.720975%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.014737. Val Acc: 90.909091% f1: 90.162521
+Weights Saved
+	Training Loss: 0.017699. Training Acc: 88.514095%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.015381. Val Acc: 92.286501% f1: 91.552527
+	Training Loss: 0.017306. Training Acc: 88.705208%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.015158. Val Acc: 90.082645% f1: 89.177102
+	Training Loss: 0.016553. Training Acc: 89.240325%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.015631. Val Acc: 90.633609% f1: 89.813470
+	Training Loss: 0.016179. Training Acc: 89.851887%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.016986. Val Acc: 88.980716% f1: 88.015847
+	Training Loss: 0.015658. Training Acc: 90.253225%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.017159. Val Acc: 87.878788% f1: 86.628491
+	Training Loss: 0.015033. Training Acc: 90.453894%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.020074. Val Acc: 87.603306% f1: 86.299014
+	Training Loss: 0.014388. Training Acc: 91.170569%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.020408. Val Acc: 87.603306% f1: 86.447695
+	Training Loss: 0.014128. Training Acc: 91.227903%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.019226. Val Acc: 88.429752% f1: 87.373286
+	Training Loss: 0.013721. Training Acc: 91.524128%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.020510. Val Acc: 88.705234% f1: 87.695220
+	Training Loss: 0.013537. Training Acc: 91.772575%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.020755. Val Acc: 86.776860% f1: 85.760052
+	Training Loss: 0.013114. Training Acc: 91.954133%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.024076. Val Acc: 87.603306% f1: 86.399401
+	Training Loss: 0.012736. Training Acc: 92.030578%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.023124. Val Acc: 86.501377% f1: 85.486279
+	Training Loss: 0.012252. Training Acc: 92.728141%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.029464. Val Acc: 86.776860% f1: 85.760052
+	Training Loss: 0.011767. Training Acc: 92.546584%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.030003. Val Acc: 86.501377% f1: 85.440183
+	Training Loss: 0.011591. Training Acc: 92.890588%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.024908. Val Acc: 86.776860% f1: 85.412899
+	Training Loss: 0.011551. Training Acc: 92.947922%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.026112. Val Acc: 87.052342% f1: 85.942405
+	Training Loss: 0.011411. Training Acc: 92.947922%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.032694. Val Acc: 85.674931% f1: 84.366925
+	Training Loss: 0.010906. Training Acc: 93.454372%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.030320. Val Acc: 85.399449% f1: 84.147819
+	Training Loss: 0.010670. Training Acc: 93.760153%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.031821. Val Acc: 83.471074% f1: 81.898271
+	Training Loss: 0.010566. Training Acc: 93.827043%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.036078. Val Acc: 84.848485% f1: 83.549623
+	Training Loss: 0.010174. Training Acc: 93.893932%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.032013. Val Acc: 84.848485% f1: 83.493588
+	Training Loss: 0.010277. Training Acc: 93.616818%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.033838. Val Acc: 84.022039% f1: 82.169715
+	Training Loss: 0.009984. Training Acc: 93.874821%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.030631. Val Acc: 85.399449% f1: 83.801874
+	Training Loss: 0.009904. Training Acc: 94.018156%
+	Time consumption: [Data]13%, [Network]86%
+Eval epoch: 30
+Val Loss: 0.037131. Val Acc: 85.123967% f1: 84.384360
+	Training Loss: 0.009745. Training Acc: 94.257047%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.032951. Val Acc: 86.776860% f1: 85.569469
+	Training Loss: 0.009431. Training Acc: 94.515050%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.031932. Val Acc: 85.950413% f1: 84.986010
+	Training Loss: 0.009117. Training Acc: 94.524606%
+	Time consumption: [Data]13%, [Network]86%
+Eval epoch: 33
+Val Loss: 0.026675. Val Acc: 86.776860% f1: 85.847953
+	Training Loss: 0.009487. Training Acc: 94.381271%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.030697. Val Acc: 84.573003% f1: 83.386728
+	Training Loss: 0.009050. Training Acc: 94.658385%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.031354. Val Acc: 85.950413% f1: 84.893883
+	Training Loss: 0.009083. Training Acc: 94.744386%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.038570. Val Acc: 85.123967% f1: 83.332766
+	Training Loss: 0.008668. Training Acc: 94.925944%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.036633. Val Acc: 86.776860% f1: 85.667281
+	Training Loss: 0.008463. Training Acc: 95.059723%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.036223. Val Acc: 86.501377% f1: 85.136502
+	Training Loss: 0.008363. Training Acc: 95.059723%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.045533. Val Acc: 85.123967% f1: 83.765653
+	Training Loss: 0.008896. Training Acc: 94.801720%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.038015. Val Acc: 87.052342% f1: 85.942405
+Train Subjects : [29, 30, 31, 33, 45, 46, 39, 38, 43, 35, 36, 44, 32]
+ ------------ Test Subject 34 -------
+Eval epoch: 1
+Test Loss: 0.026687. Test Acc: 81.949458% f1: 81.460163
+Test accuracy for : 81.94945848375451
+Test F-Score: 81.46016277575498
+Model Parameters: 292712
+	Training Loss: 0.025786. Training Acc: 81.343428%
+	Time consumption: [Data]13%, [Network]86%
+Eval epoch: 1
+Val Loss: 0.030170. Val Acc: 81.818182% f1: 74.982232
+Weights Saved
+	Training Loss: 0.022524. Training Acc: 84.041934%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.027818. Val Acc: 85.909091% f1: 79.651510
+Weights Saved
+	Training Loss: 0.020856. Training Acc: 85.818288%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.032471. Val Acc: 78.409091% f1: 72.570559
+	Training Loss: 0.019629. Training Acc: 86.953990%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.032156. Val Acc: 77.954545% f1: 70.869082
+	Training Loss: 0.019023. Training Acc: 87.235488%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.028185. Val Acc: 83.409091% f1: 76.787715
+	Training Loss: 0.018137. Training Acc: 87.769365%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.027421. Val Acc: 83.409091% f1: 76.465244
+Weights Saved
+	Training Loss: 0.017601. Training Acc: 88.662396%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.031537. Val Acc: 81.363636% f1: 75.729200
+	Training Loss: 0.016927. Training Acc: 88.982722%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.031181. Val Acc: 81.590909% f1: 75.072565
+	Training Loss: 0.016146. Training Acc: 89.176859%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.032391. Val Acc: 81.590909% f1: 73.886092
+	Training Loss: 0.015831. Training Acc: 89.633081%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.030265. Val Acc: 83.409091% f1: 76.943673
+	Training Loss: 0.015468. Training Acc: 90.137837%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.026527. Val Acc: 82.954545% f1: 75.987950
+Weights Saved
+	Training Loss: 0.014476. Training Acc: 90.797903%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.027209. Val Acc: 80.909091% f1: 75.137230
+	Training Loss: 0.014236. Training Acc: 91.370608%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.031069. Val Acc: 81.136364% f1: 73.958742
+	Training Loss: 0.013947. Training Acc: 91.292953%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.031676. Val Acc: 82.727273% f1: 76.828626
+	Training Loss: 0.013483. Training Acc: 91.613279%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.038109. Val Acc: 79.318182% f1: 72.507364
+	Training Loss: 0.013212. Training Acc: 91.729761%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.036134. Val Acc: 80.909091% f1: 73.557692
+	Training Loss: 0.012508. Training Acc: 92.263638%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.036029. Val Acc: 77.500000% f1: 71.566394
+	Training Loss: 0.012083. Training Acc: 92.700447%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.033541. Val Acc: 79.545455% f1: 72.215206
+	Training Loss: 0.011871. Training Acc: 92.564551%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.030541. Val Acc: 84.090909% f1: 77.191268
+	Training Loss: 0.011569. Training Acc: 93.030480%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.042633. Val Acc: 75.909091% f1: 70.387302
+	Training Loss: 0.011301. Training Acc: 93.088721%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.043422. Val Acc: 79.772727% f1: 72.781172
+	Training Loss: 0.011466. Training Acc: 93.156669%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.040418. Val Acc: 77.272727% f1: 70.568562
+	Training Loss: 0.010668. Training Acc: 93.612891%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.041643. Val Acc: 80.681818% f1: 73.841581
+	Training Loss: 0.011017. Training Acc: 93.506115%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.032207. Val Acc: 80.909091% f1: 73.013231
+	Training Loss: 0.010323. Training Acc: 93.845855%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.041978. Val Acc: 80.454545% f1: 75.234954
+	Training Loss: 0.010047. Training Acc: 94.098233%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.040633. Val Acc: 81.136364% f1: 74.924299
+	Training Loss: 0.009886. Training Acc: 94.039992%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.040145. Val Acc: 80.909091% f1: 74.545455
+	Training Loss: 0.010181. Training Acc: 94.175888%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.043239. Val Acc: 78.181818% f1: 69.157978
+	Training Loss: 0.009760. Training Acc: 94.370025%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.042414. Val Acc: 83.181818% f1: 74.972328
+	Training Loss: 0.009558. Training Acc: 94.331198%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.040190. Val Acc: 80.909091% f1: 72.629521
+	Training Loss: 0.009275. Training Acc: 94.476801%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.048115. Val Acc: 80.000000% f1: 71.922497
+	Training Loss: 0.008876. Training Acc: 94.933023%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.048208. Val Acc: 80.909091% f1: 72.823529
+	Training Loss: 0.008609. Training Acc: 94.971850%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.060441. Val Acc: 75.000000% f1: 68.323778
+	Training Loss: 0.008888. Training Acc: 94.865075%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.048604. Val Acc: 79.318182% f1: 71.064137
+	Training Loss: 0.008540. Training Acc: 95.156280%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.054777. Val Acc: 78.181818% f1: 71.083546
+	Training Loss: 0.008033. Training Acc: 95.175694%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.062885. Val Acc: 77.500000% f1: 70.442748
+	Training Loss: 0.008555. Training Acc: 94.942730%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.046046. Val Acc: 80.227273% f1: 71.753038
+	Training Loss: 0.008024. Training Acc: 95.641623%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.058205. Val Acc: 81.136364% f1: 73.607949
+	Training Loss: 0.008443. Training Acc: 95.301883%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.050288. Val Acc: 78.181818% f1: 70.362886
+	Training Loss: 0.007431. Training Acc: 95.816346%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.060142. Val Acc: 78.636364% f1: 71.685972
+Train Subjects : [29, 30, 31, 33, 45, 46, 34, 38, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 37 -------
+Eval epoch: 1
+Test Loss: 0.019349. Test Acc: 88.980716% f1: 87.932181
+Test accuracy for : 88.98071625344353
+Test F-Score: 87.93218085106382
+Model Parameters: 292712
+	Training Loss: 0.025854. Training Acc: 81.316306%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.030956. Val Acc: 77.525773% f1: 75.482899
+Weights Saved
+	Training Loss: 0.021877. Training Acc: 85.314342%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.033316. Val Acc: 76.907216% f1: 74.500526
+	Training Loss: 0.020918. Training Acc: 85.785855%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.035978. Val Acc: 77.525773% f1: 73.747200
+	Training Loss: 0.019704. Training Acc: 86.532417%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.033332. Val Acc: 77.525773% f1: 75.786099
+	Training Loss: 0.018882. Training Acc: 87.436149%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.036645. Val Acc: 78.350515% f1: 75.067197
+	Training Loss: 0.018221. Training Acc: 88.035363%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.035855. Val Acc: 78.969072% f1: 76.364522
+	Training Loss: 0.017667. Training Acc: 88.104126%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.034857. Val Acc: 77.731959% f1: 74.974200
+	Training Loss: 0.016952. Training Acc: 88.831041%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.039165. Val Acc: 78.350515% f1: 74.522341
+	Training Loss: 0.016729. Training Acc: 88.968566%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.030303. Val Acc: 80.618557% f1: 78.413826
+Weights Saved
+	Training Loss: 0.015865. Training Acc: 89.626719%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.033219. Val Acc: 81.237113% f1: 79.879097
+	Training Loss: 0.015551. Training Acc: 89.960707%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.036244. Val Acc: 79.793814% f1: 78.041727
+	Training Loss: 0.014789. Training Acc: 90.530452%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.040482. Val Acc: 80.412371% f1: 78.401095
+	Training Loss: 0.014552. Training Acc: 90.697446%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.038454. Val Acc: 79.175258% f1: 76.258330
+	Training Loss: 0.013956. Training Acc: 90.972495%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.040816. Val Acc: 79.587629% f1: 77.491667
+	Training Loss: 0.013628. Training Acc: 91.542240%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.040616. Val Acc: 79.381443% f1: 76.531955
+	Training Loss: 0.013102. Training Acc: 91.748527%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.038139. Val Acc: 79.381443% f1: 77.477896
+	Training Loss: 0.013028. Training Acc: 91.748527%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.044227. Val Acc: 81.649485% f1: 78.404651
+	Training Loss: 0.012288. Training Acc: 92.023576%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.037871. Val Acc: 81.443299% f1: 79.332386
+	Training Loss: 0.011975. Training Acc: 92.897839%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.037442. Val Acc: 81.237113% f1: 79.252556
+	Training Loss: 0.011663. Training Acc: 92.848723%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.042793. Val Acc: 78.556701% f1: 75.826240
+	Training Loss: 0.011090. Training Acc: 93.202358%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.042305. Val Acc: 80.206186% f1: 77.615385
+	Training Loss: 0.011297. Training Acc: 93.094303%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.040702. Val Acc: 79.381443% f1: 77.102768
+	Training Loss: 0.010494. Training Acc: 93.673870%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.043073. Val Acc: 78.969072% f1: 76.841622
+	Training Loss: 0.010481. Training Acc: 93.693517%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.043895. Val Acc: 79.793814% f1: 77.687960
+	Training Loss: 0.010153. Training Acc: 94.017682%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.043905. Val Acc: 77.938144% f1: 75.392268
+	Training Loss: 0.009947. Training Acc: 94.145383%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.053652. Val Acc: 76.907216% f1: 74.904831
+	Training Loss: 0.009443. Training Acc: 94.479371%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.055547. Val Acc: 77.319588% f1: 75.814202
+	Training Loss: 0.009507. Training Acc: 94.400786%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.048003. Val Acc: 78.762887% f1: 77.007765
+	Training Loss: 0.009525. Training Acc: 94.243615%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.045161. Val Acc: 79.175258% f1: 76.632081
+	Training Loss: 0.009269. Training Acc: 94.312377%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.047505. Val Acc: 78.762887% f1: 76.892049
+	Training Loss: 0.008397. Training Acc: 95.000000%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.053736. Val Acc: 78.144330% f1: 75.283654
+	Training Loss: 0.008774. Training Acc: 94.823183%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.044662. Val Acc: 77.525773% f1: 75.482899
+	Training Loss: 0.008929. Training Acc: 94.705305%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.046128. Val Acc: 77.938144% f1: 75.243888
+	Training Loss: 0.008564. Training Acc: 94.882122%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.058483. Val Acc: 79.793814% f1: 77.687960
+	Training Loss: 0.008582. Training Acc: 95.029470%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.045692. Val Acc: 79.793814% f1: 77.291404
+	Training Loss: 0.007976. Training Acc: 95.166994%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.062415. Val Acc: 79.175258% f1: 76.840229
+	Training Loss: 0.007808. Training Acc: 95.491159%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.061890. Val Acc: 77.731959% f1: 75.198864
+	Training Loss: 0.007740. Training Acc: 95.500982%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.057337. Val Acc: 78.144330% f1: 75.658144
+	Training Loss: 0.007977. Training Acc: 95.265226%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.058632. Val Acc: 78.144330% f1: 75.658144
+	Training Loss: 0.007839. Training Acc: 95.432220%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.053231. Val Acc: 78.350515% f1: 75.555492
+Train Subjects : [29, 30, 31, 33, 45, 46, 34, 37, 43, 35, 36, 44, 34, 32]
+ ------------ Test Subject 39 -------
+Eval epoch: 1
+Test Loss: 0.026474. Test Acc: 82.954545% f1: 78.345178
+Test accuracy for : 82.95454545454545
+Test F-Score: 78.34517786483453
+Model Parameters: 292712
+	Training Loss: 0.027752. Training Acc: 79.573346%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.026017. Val Acc: 82.903735% f1: 69.733526
+Weights Saved
+	Training Loss: 0.023448. Training Acc: 83.748136%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.027322. Val Acc: 81.273014% f1: 72.753552
+	Training Loss: 0.021529. Training Acc: 84.883588%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.026031. Val Acc: 82.219884% f1: 72.316711
+	Training Loss: 0.020359. Training Acc: 86.053446%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.026629. Val Acc: 83.692793% f1: 75.461775
+	Training Loss: 0.019079. Training Acc: 86.787476%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.030380. Val Acc: 82.535508% f1: 74.590391
+	Training Loss: 0.017847. Training Acc: 88.335818%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.023936. Val Acc: 84.166228% f1: 75.126941
+Weights Saved
+	Training Loss: 0.017486. Training Acc: 88.232595%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.033594. Val Acc: 79.274066% f1: 71.957873
+	Training Loss: 0.016797. Training Acc: 89.046909%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.031684. Val Acc: 80.378748% f1: 72.830339
+	Training Loss: 0.015998. Training Acc: 89.735061%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.030599. Val Acc: 82.640715% f1: 75.832139
+	Training Loss: 0.015530. Training Acc: 89.895630%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.034387. Val Acc: 79.537086% f1: 72.687357
+	Training Loss: 0.014918. Training Acc: 90.790228%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.034285. Val Acc: 79.326670% f1: 72.710975
+	Training Loss: 0.014587. Training Acc: 90.916389%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.029044. Val Acc: 84.324040% f1: 77.347111
+	Training Loss: 0.013961. Training Acc: 91.237527%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.031892. Val Acc: 82.167280% f1: 74.466186
+	Training Loss: 0.013268. Training Acc: 91.581603%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.030120. Val Acc: 84.113624% f1: 76.182214
+	Training Loss: 0.013182. Training Acc: 91.960087%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.031953. Val Acc: 83.219358% f1: 74.726192
+	Training Loss: 0.012438. Training Acc: 92.315633%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.033542. Val Acc: 82.325092% f1: 74.713059
+	Training Loss: 0.012441. Training Acc: 92.487671%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.037717. Val Acc: 82.377696% f1: 75.134560
+	Training Loss: 0.011981. Training Acc: 92.889093%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.039275. Val Acc: 81.325618% f1: 73.775754
+	Training Loss: 0.011793. Training Acc: 92.854685%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.036038. Val Acc: 82.377696% f1: 74.932740
+	Training Loss: 0.011375. Training Acc: 92.957908%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.032339. Val Acc: 82.377696% f1: 73.507166
+	Training Loss: 0.011211. Training Acc: 93.508430%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.052703. Val Acc: 79.484482% f1: 72.750789
+	Training Loss: 0.010858. Training Acc: 93.841037%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.036957. Val Acc: 83.271962% f1: 74.920345
+	Training Loss: 0.010553. Training Acc: 93.737814%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.043399. Val Acc: 81.115203% f1: 73.522208
+	Training Loss: 0.010537. Training Acc: 93.737814%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.037011. Val Acc: 80.852183% f1: 72.650941
+	Training Loss: 0.009964. Training Acc: 94.208051%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.048464. Val Acc: 80.378748% f1: 72.446074
+	Training Loss: 0.009903. Training Acc: 94.299805%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.045720. Val Acc: 82.693319% f1: 75.011677
+	Training Loss: 0.009747. Training Acc: 94.150705%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.041486. Val Acc: 81.904261% f1: 73.761636
+	Training Loss: 0.009170. Training Acc: 94.712696%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.040242. Val Acc: 82.062073% f1: 74.400097
+	Training Loss: 0.008873. Training Acc: 94.976488%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.041269. Val Acc: 81.641241% f1: 72.843713
+	Training Loss: 0.009015. Training Acc: 94.827388%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.047539. Val Acc: 82.167280% f1: 74.466186
+	Training Loss: 0.008644. Training Acc: 95.045303%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.036232. Val Acc: 82.325092% f1: 74.240112
+	Training Loss: 0.008428. Training Acc: 95.068242%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.054148. Val Acc: 82.009469% f1: 73.825041
+	Training Loss: 0.008081. Training Acc: 95.538479%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.050822. Val Acc: 80.168332% f1: 72.454199
+	Training Loss: 0.008371. Training Acc: 95.228811%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.051669. Val Acc: 79.905313% f1: 71.623229
+	Training Loss: 0.008529. Training Acc: 95.159995%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.050369. Val Acc: 81.378222% f1: 72.623848
+	Training Loss: 0.007757. Training Acc: 95.871086%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.054983. Val Acc: 80.589164% f1: 72.388600
+	Training Loss: 0.008215. Training Acc: 95.607294%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.053204. Val Acc: 80.694371% f1: 73.389618
+	Training Loss: 0.007947. Training Acc: 95.572887%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.052944. Val Acc: 79.852709% f1: 72.144666
+	Training Loss: 0.007166. Training Acc: 96.031655%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.059327. Val Acc: 80.326144% f1: 72.778390
+	Training Loss: 0.007167. Training Acc: 95.985778%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.054537. Val Acc: 81.641241% f1: 73.756357
+Train Subjects : [29, 30, 31, 33, 45, 46, 34, 37, 39, 35, 36, 44, 34, 32]
+ ------------ Test Subject 38 -------
+Eval epoch: 1
+Test Loss: 0.030819. Test Acc: 80.206186% f1: 77.243402
+Test accuracy for : 80.20618556701031
+Test F-Score: 77.2434017595308
+Model Parameters: 292712
+	Training Loss: 0.028360. Training Acc: 78.621613%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.030550. Val Acc: 72.995781% f1: 71.079927
+Weights Saved
+	Training Loss: 0.023336. Training Acc: 83.461581%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.027924. Val Acc: 79.324895% f1: 77.806020
+Weights Saved
+	Training Loss: 0.021004. Training Acc: 85.413182%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.026528. Val Acc: 82.278481% f1: 79.662471
+Weights Saved
+	Training Loss: 0.020287. Training Acc: 86.316494%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.031090. Val Acc: 78.902954% f1: 76.691581
+	Training Loss: 0.018661. Training Acc: 87.398238%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.030144. Val Acc: 81.434599% f1: 78.839286
+	Training Loss: 0.017788. Training Acc: 88.279246%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.029132. Val Acc: 81.856540% f1: 78.637459
+	Training Loss: 0.017136. Training Acc: 89.126798%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.031669. Val Acc: 79.746835% f1: 76.915584
+	Training Loss: 0.016435. Training Acc: 89.271774%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.027422. Val Acc: 83.122363% f1: 80.762987
+	Training Loss: 0.015939. Training Acc: 89.662094%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.030378. Val Acc: 84.810127% f1: 82.686688
+	Training Loss: 0.015401. Training Acc: 90.308910%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.033280. Val Acc: 81.856540% f1: 79.896633
+	Training Loss: 0.014550. Training Acc: 90.710383%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.041590. Val Acc: 76.371308% f1: 74.318885
+	Training Loss: 0.014381. Training Acc: 90.966879%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.042839. Val Acc: 77.637131% f1: 75.757049
+	Training Loss: 0.013733. Training Acc: 91.145311%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.030903. Val Acc: 82.278481% f1: 79.369093
+	Training Loss: 0.013234. Training Acc: 91.780975%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.036878. Val Acc: 81.012658% f1: 78.133393
+	Training Loss: 0.012714. Training Acc: 92.115535%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.040368. Val Acc: 80.590717% f1: 78.793184
+	Training Loss: 0.012360. Training Acc: 92.461247%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.043656. Val Acc: 78.481013% f1: 76.156471
+	Training Loss: 0.011720. Training Acc: 92.673135%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.044367. Val Acc: 75.105485% f1: 73.945853
+	Training Loss: 0.011977. Training Acc: 92.706591%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.043174. Val Acc: 77.637131% f1: 75.994267
+	Training Loss: 0.011343. Training Acc: 92.829263%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.051789. Val Acc: 76.793249% f1: 74.967834
+	Training Loss: 0.010992. Training Acc: 93.319951%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.040567. Val Acc: 78.059072% f1: 76.027077
+	Training Loss: 0.010512. Training Acc: 93.832943%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.045718. Val Acc: 78.481013% f1: 76.671878
+	Training Loss: 0.010583. Training Acc: 93.498383%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.043333. Val Acc: 83.544304% f1: 81.971562
+	Training Loss: 0.010260. Training Acc: 93.777183%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.047553. Val Acc: 78.481013% f1: 76.293027
+	Training Loss: 0.009850. Training Acc: 94.100591%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.049882. Val Acc: 81.856540% f1: 79.896633
+	Training Loss: 0.010081. Training Acc: 94.156351%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.035363. Val Acc: 83.966245% f1: 82.285602
+	Training Loss: 0.009665. Training Acc: 94.111743%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.041257. Val Acc: 82.700422% f1: 81.148511
+	Training Loss: 0.009279. Training Acc: 94.613583%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.039990. Val Acc: 81.434599% f1: 79.924534
+	Training Loss: 0.009276. Training Acc: 94.479759%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.052617. Val Acc: 80.590717% f1: 78.556255
+	Training Loss: 0.009197. Training Acc: 94.457455%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.048729. Val Acc: 83.544304% f1: 81.306502
+	Training Loss: 0.008873. Training Acc: 94.713951%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.049207. Val Acc: 81.856540% f1: 79.652591
+	Training Loss: 0.008647. Training Acc: 94.992751%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.049451. Val Acc: 79.324895% f1: 78.102314
+	Training Loss: 0.008238. Training Acc: 95.193487%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.051158. Val Acc: 80.168776% f1: 77.759808
+	Training Loss: 0.008151. Training Acc: 95.305007%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.053334. Val Acc: 78.481013% f1: 77.302687
+	Training Loss: 0.008447. Training Acc: 95.081967%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.048035. Val Acc: 81.856540% f1: 80.011768
+	Training Loss: 0.008021. Training Acc: 95.126575%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.046422. Val Acc: 84.810127% f1: 83.312471
+	Training Loss: 0.007778. Training Acc: 95.583807%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.051220. Val Acc: 82.700422% f1: 80.347861
+	Training Loss: 0.007909. Training Acc: 95.349615%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.055860. Val Acc: 80.168776% f1: 77.895739
+	Training Loss: 0.007517. Training Acc: 95.695327%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.071168. Val Acc: 78.481013% f1: 75.867026
+	Training Loss: 0.007447. Training Acc: 95.840303%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.049486. Val Acc: 80.590717% f1: 78.430674
+	Training Loss: 0.007099. Training Acc: 95.951823%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.053692. Val Acc: 79.746835% f1: 77.215190
+Train Subjects : [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 36, 44, 34, 32]
+ ------------ Test Subject 43 -------
+Eval epoch: 1
+Test Loss: 0.022520. Test Acc: 85.218306% f1: 76.204697
+Test accuracy for : 85.21830615465544
+Test F-Score: 76.20469677727438
+Model Parameters: 292712
+	Training Loss: 0.030789. Training Acc: 75.187617%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.032797. Val Acc: 71.634615% f1: 63.751292
+Weights Saved
+	Training Loss: 0.025953. Training Acc: 81.500938%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.029805. Val Acc: 76.923077% f1: 74.672755
+Weights Saved
+	Training Loss: 0.023302. Training Acc: 83.527205%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.030714. Val Acc: 77.884615% f1: 75.728057
+	Training Loss: 0.021466. Training Acc: 85.046904%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.022338. Val Acc: 83.173077% f1: 81.700726
+Weights Saved
+	Training Loss: 0.020535. Training Acc: 86.013133%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.025074. Val Acc: 81.250000% f1: 79.220779
+	Training Loss: 0.019715. Training Acc: 86.838649%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.026064. Val Acc: 79.326923% f1: 77.238834
+	Training Loss: 0.018939. Training Acc: 86.988743%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.024211. Val Acc: 81.250000% f1: 79.220779
+	Training Loss: 0.018223. Training Acc: 88.048780%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.026595. Val Acc: 82.692308% f1: 81.004566
+	Training Loss: 0.017684. Training Acc: 88.405253%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.024357. Val Acc: 83.173077% f1: 81.806822
+	Training Loss: 0.017057. Training Acc: 88.911820%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.029329. Val Acc: 80.769231% f1: 78.758170
+	Training Loss: 0.016238. Training Acc: 89.643527%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.026115. Val Acc: 83.653846% f1: 82.651359
+	Training Loss: 0.015508. Training Acc: 90.018762%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.027045. Val Acc: 83.653846% f1: 82.170230
+	Training Loss: 0.015367. Training Acc: 90.347092%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.029941. Val Acc: 82.692308% f1: 80.621118
+	Training Loss: 0.014572. Training Acc: 90.825516%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.029043. Val Acc: 77.884615% f1: 75.877370
+	Training Loss: 0.014542. Training Acc: 91.088180%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.027734. Val Acc: 82.211538% f1: 80.152160
+	Training Loss: 0.013824. Training Acc: 91.529081%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.030380. Val Acc: 82.692308% f1: 81.121420
+	Training Loss: 0.013362. Training Acc: 91.782364%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.027918. Val Acc: 82.211538% f1: 80.011947
+	Training Loss: 0.012962. Training Acc: 92.232645%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.028604. Val Acc: 84.615385% f1: 83.006536
+	Training Loss: 0.012871. Training Acc: 92.439024%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.031165. Val Acc: 84.134615% f1: 82.532129
+	Training Loss: 0.012378. Training Acc: 92.542214%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.029160. Val Acc: 82.211538% f1: 80.655054
+	Training Loss: 0.012082. Training Acc: 93.180113%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.029095. Val Acc: 82.211538% f1: 80.767212
+	Training Loss: 0.011690. Training Acc: 93.133208%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.030343. Val Acc: 83.653846% f1: 82.059868
+	Training Loss: 0.011654. Training Acc: 93.170732%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.032197. Val Acc: 79.326923% f1: 77.648382
+	Training Loss: 0.011282. Training Acc: 93.433396%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.032441. Val Acc: 80.769231% f1: 79.266348
+	Training Loss: 0.011289. Training Acc: 93.208255%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.037786. Val Acc: 83.653846% f1: 82.170230
+	Training Loss: 0.010950. Training Acc: 93.508443%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.030263. Val Acc: 84.134615% f1: 82.532129
+	Training Loss: 0.010418. Training Acc: 94.108818%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.035897. Val Acc: 80.769231% f1: 78.758170
+	Training Loss: 0.010168. Training Acc: 94.127580%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.033382. Val Acc: 79.807692% f1: 78.348369
+	Training Loss: 0.010176. Training Acc: 94.033771%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.029673. Val Acc: 85.576923% f1: 84.534549
+	Training Loss: 0.009383. Training Acc: 94.512195%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.040063. Val Acc: 82.692308% f1: 81.630851
+	Training Loss: 0.009748. Training Acc: 94.427767%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.032395. Val Acc: 85.096154% f1: 83.975745
+	Training Loss: 0.009569. Training Acc: 94.409006%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.038805. Val Acc: 80.769231% f1: 78.616223
+	Training Loss: 0.009393. Training Acc: 94.418386%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.040310. Val Acc: 81.250000% f1: 79.356152
+	Training Loss: 0.008953. Training Acc: 94.765478%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.041520. Val Acc: 78.846154% f1: 77.317339
+	Training Loss: 0.009200. Training Acc: 94.662289%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.037076. Val Acc: 82.211538% f1: 80.874276
+	Training Loss: 0.009263. Training Acc: 94.568480%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.040460. Val Acc: 80.769231% f1: 79.023800
+	Training Loss: 0.008496. Training Acc: 95.075047%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.039112. Val Acc: 81.250000% f1: 79.840453
+	Training Loss: 0.008503. Training Acc: 95.075047%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.041770. Val Acc: 79.326923% f1: 77.238834
+	Training Loss: 0.008337. Training Acc: 95.018762%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.044163. Val Acc: 81.250000% f1: 79.356152
+	Training Loss: 0.008291. Training Acc: 95.178236%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.043398. Val Acc: 79.807692% f1: 78.348369
+Train Subjects : [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 44, 34, 32]
+ ------------ Test Subject 35 -------
+Eval epoch: 1
+Test Loss: 0.025298. Test Acc: 81.856540% f1: 79.896633
+Test accuracy for : 81.85654008438819
+Test F-Score: 79.89663267117749
+Model Parameters: 292712
+	Training Loss: 0.026276. Training Acc: 80.965468%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.034657. Val Acc: 76.186709% f1: 64.268836
+Weights Saved
+	Training Loss: 0.021893. Training Acc: 84.729358%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.030644. Val Acc: 80.498418% f1: 74.011592
+Weights Saved
+	Training Loss: 0.019806. Training Acc: 86.414147%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.032908. Val Acc: 81.210443% f1: 73.316498
+	Training Loss: 0.019552. Training Acc: 87.405903%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.032586. Val Acc: 80.023734% f1: 69.455560
+	Training Loss: 0.018261. Training Acc: 88.194527%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.036369. Val Acc: 79.865506% f1: 70.829458
+	Training Loss: 0.017002. Training Acc: 88.588840%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.037955. Val Acc: 80.656646% f1: 71.114141
+	Training Loss: 0.016758. Training Acc: 89.018999%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.030340. Val Acc: 79.351266% f1: 70.765398
+Weights Saved
+	Training Loss: 0.016143. Training Acc: 89.281874%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.039864. Val Acc: 78.322785% f1: 67.562788
+	Training Loss: 0.015449. Training Acc: 90.249731%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.037823. Val Acc: 80.300633% f1: 72.343350
+	Training Loss: 0.014721. Training Acc: 90.440913%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.037860. Val Acc: 79.588608% f1: 71.969418
+	Training Loss: 0.013772. Training Acc: 90.954714%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.041019. Val Acc: 79.113924% f1: 68.746628
+	Training Loss: 0.013560. Training Acc: 91.384873%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.039848. Val Acc: 80.340190% f1: 71.768058
+	Training Loss: 0.013335. Training Acc: 91.611901%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.035874. Val Acc: 80.458861% f1: 73.344876
+	Training Loss: 0.012473. Training Acc: 92.185446%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.038113. Val Acc: 79.232595% f1: 71.366678
+	Training Loss: 0.012227. Training Acc: 92.579759%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.038673. Val Acc: 79.469937% f1: 71.822404
+	Training Loss: 0.011492. Training Acc: 92.782889%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.041668. Val Acc: 78.955696% f1: 69.798793
+	Training Loss: 0.011218. Training Acc: 93.009918%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.041939. Val Acc: 79.667722% f1: 69.280671
+	Training Loss: 0.010784. Training Acc: 93.511770%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.047396. Val Acc: 80.221519% f1: 70.876650
+	Training Loss: 0.010808. Training Acc: 93.296690%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.046730. Val Acc: 79.628165% f1: 70.998473
+	Training Loss: 0.009930. Training Acc: 93.882184%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.047112. Val Acc: 79.311709% f1: 69.105717
+	Training Loss: 0.010274. Training Acc: 93.846338%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.041229. Val Acc: 79.825949% f1: 71.877094
+	Training Loss: 0.009484. Training Acc: 94.407934%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.043579. Val Acc: 80.221519% f1: 72.428524
+	Training Loss: 0.009282. Training Acc: 94.372087%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.043668. Val Acc: 80.142405% f1: 70.163307
+	Training Loss: 0.009567. Training Acc: 94.288445%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.042195. Val Acc: 79.232595% f1: 71.032959
+	Training Loss: 0.008874. Training Acc: 94.790298%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.051487. Val Acc: 79.628165% f1: 69.453577
+	Training Loss: 0.008729. Training Acc: 94.921735%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.046038. Val Acc: 80.458861% f1: 73.315099
+	Training Loss: 0.008241. Training Acc: 95.327996%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.050981. Val Acc: 80.063291% f1: 71.807690
+	Training Loss: 0.008054. Training Acc: 95.160712%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.053054. Val Acc: 79.074367% f1: 68.751290
+	Training Loss: 0.007716. Training Acc: 95.483331%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.055767. Val Acc: 79.153481% f1: 69.874649
+	Training Loss: 0.007659. Training Acc: 95.423587%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.052478. Val Acc: 79.944620% f1: 71.518873
+	Training Loss: 0.007778. Training Acc: 95.411638%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.051067. Val Acc: 79.944620% f1: 71.622692
+	Training Loss: 0.007528. Training Acc: 95.913490%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.050876. Val Acc: 79.984177% f1: 72.877998
+	Training Loss: 0.009229. Training Acc: 94.324292%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.050203. Val Acc: 80.142405% f1: 70.875228
+	Training Loss: 0.007396. Training Acc: 95.889593%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.045552. Val Acc: 79.311709% f1: 71.732770
+	Training Loss: 0.006818. Training Acc: 95.997132%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.053108. Val Acc: 79.430380% f1: 70.662775
+	Training Loss: 0.006729. Training Acc: 96.044928%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.055535. Val Acc: 79.944620% f1: 70.832196
+	Training Loss: 0.007121. Training Acc: 95.973235%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.047918. Val Acc: 80.181962% f1: 73.071978
+	Training Loss: 0.006772. Training Acc: 96.104672%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.048048. Val Acc: 80.617089% f1: 73.441894
+	Training Loss: 0.009111. Training Acc: 94.515474%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.049978. Val Acc: 80.696203% f1: 72.669568
+	Training Loss: 0.006824. Training Acc: 96.080774%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.052807. Val Acc: 80.814873% f1: 73.176886
+Train Subjects : [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 34, 32]
+ ------------ Test Subject 36 -------
+Eval epoch: 1
+Test Loss: 0.031194. Test Acc: 77.403846% f1: 76.395026
+Test accuracy for : 77.40384615384616
+Test F-Score: 76.39502595677894
+Model Parameters: 292712
+	Training Loss: 0.026577. Training Acc: 80.469880%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.034153. Val Acc: 74.368231% f1: 72.619694
+Weights Saved
+	Training Loss: 0.021870. Training Acc: 85.000000%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.026487. Val Acc: 86.281588% f1: 86.059017
+Weights Saved
+	Training Loss: 0.020500. Training Acc: 85.710843%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.032328. Val Acc: 76.895307% f1: 75.947031
+	Training Loss: 0.019370. Training Acc: 86.506024%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.032628. Val Acc: 78.339350% f1: 77.579322
+	Training Loss: 0.017924. Training Acc: 87.795181%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.032993. Val Acc: 79.061372% f1: 78.759915
+	Training Loss: 0.017149. Training Acc: 88.240964%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.026279. Val Acc: 82.310469% f1: 81.971176
+Weights Saved
+	Training Loss: 0.016046. Training Acc: 89.566265%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.034056. Val Acc: 80.505415% f1: 79.875686
+	Training Loss: 0.015719. Training Acc: 89.710843%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.037744. Val Acc: 80.144404% f1: 79.475677
+	Training Loss: 0.014975. Training Acc: 89.975904%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.027857. Val Acc: 82.310469% f1: 82.039882
+	Training Loss: 0.014507. Training Acc: 90.626506%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.035954. Val Acc: 76.534296% f1: 75.677136
+	Training Loss: 0.013875. Training Acc: 91.144578%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.032421. Val Acc: 77.978339% f1: 77.039936
+	Training Loss: 0.013165. Training Acc: 91.433735%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.034163. Val Acc: 80.505415% f1: 80.151274
+	Training Loss: 0.012710. Training Acc: 92.036145%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.042267. Val Acc: 79.061372% f1: 78.265693
+	Training Loss: 0.012472. Training Acc: 92.144578%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.036478. Val Acc: 79.422383% f1: 78.889736
+	Training Loss: 0.011693. Training Acc: 92.903614%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.034477. Val Acc: 81.949458% f1: 81.824147
+	Training Loss: 0.011372. Training Acc: 93.012048%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.045294. Val Acc: 76.895307% f1: 75.947031
+	Training Loss: 0.011308. Training Acc: 93.036145%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.039789. Val Acc: 76.173285% f1: 74.958909
+	Training Loss: 0.010780. Training Acc: 93.373494%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.042082. Val Acc: 78.339350% f1: 77.579322
+	Training Loss: 0.010489. Training Acc: 93.855422%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.037346. Val Acc: 78.700361% f1: 77.982999
+	Training Loss: 0.010198. Training Acc: 93.650602%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.040810. Val Acc: 75.090253% f1: 73.863994
+	Training Loss: 0.009824. Training Acc: 94.240964%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.041230. Val Acc: 75.812274% f1: 74.781569
+	Training Loss: 0.009652. Training Acc: 94.337349%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.050332. Val Acc: 74.007220% f1: 72.492552
+	Training Loss: 0.009979. Training Acc: 94.060241%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.044782. Val Acc: 76.895307% f1: 75.873707
+	Training Loss: 0.009007. Training Acc: 94.783133%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.049295. Val Acc: 72.924188% f1: 71.682682
+	Training Loss: 0.008786. Training Acc: 94.867470%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.044627. Val Acc: 74.729242% f1: 73.768939
+	Training Loss: 0.008898. Training Acc: 94.807229%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.061407. Val Acc: 71.841155% f1: 70.200265
+	Training Loss: 0.008408. Training Acc: 95.132530%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.078681. Val Acc: 72.202166% f1: 70.529065
+	Training Loss: 0.008263. Training Acc: 95.216867%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.055651. Val Acc: 74.368231% f1: 73.192939
+	Training Loss: 0.008253. Training Acc: 95.120482%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.054701. Val Acc: 74.729242% f1: 73.441267
+	Training Loss: 0.007453. Training Acc: 95.674699%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.046511. Val Acc: 76.173285% f1: 75.691416
+	Training Loss: 0.007343. Training Acc: 95.891566%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.066481. Val Acc: 74.007220% f1: 72.492552
+	Training Loss: 0.007398. Training Acc: 95.891566%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.055895. Val Acc: 69.314079% f1: 67.467149
+	Training Loss: 0.007165. Training Acc: 95.963855%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.061853. Val Acc: 75.812274% f1: 74.781569
+	Training Loss: 0.007269. Training Acc: 95.819277%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.065495. Val Acc: 75.812274% f1: 74.536599
+	Training Loss: 0.007183. Training Acc: 95.795181%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.062724. Val Acc: 75.451264% f1: 74.284622
+	Training Loss: 0.007232. Training Acc: 95.891566%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.060982. Val Acc: 76.895307% f1: 76.084610
+	Training Loss: 0.006609. Training Acc: 96.325301%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.061832. Val Acc: 76.534296% f1: 75.458325
+	Training Loss: 0.005988. Training Acc: 96.578313%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.060289. Val Acc: 74.007220% f1: 72.857921
+	Training Loss: 0.006805. Training Acc: 96.060241%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.053847. Val Acc: 77.256318% f1: 76.552234
+	Training Loss: 0.006048. Training Acc: 96.481928%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.054412. Val Acc: 74.007220% f1: 72.771953
+Train Subjects : [29, 30, 31, 33, 45, 46, 37, 39, 38, 43, 35, 36, 32]
+ ------------ Test Subject 44 -------
+Eval epoch: 1
+Test Loss: 0.032003. Test Acc: 79.707278% f1: 71.216971
+Test accuracy for : 79.70727848101266
+Test F-Score: 71.21697067352028
+Model Parameters: 292712
+	Training Loss: 0.028116. Training Acc: 79.519667%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 1
+Val Loss: 0.028442. Val Acc: 78.571429% f1: 72.011518
+Weights Saved
+	Training Loss: 0.023604. Training Acc: 83.708396%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 2
+Val Loss: 0.027526. Val Acc: 83.730159% f1: 76.002787
+Weights Saved
+	Training Loss: 0.021696. Training Acc: 85.013238%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 3
+Val Loss: 0.024152. Val Acc: 83.730159% f1: 79.635360
+Weights Saved
+	Training Loss: 0.020470. Training Acc: 86.166793%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 4
+Val Loss: 0.021367. Val Acc: 86.111111% f1: 83.193277
+Weights Saved
+	Training Loss: 0.019279. Training Acc: 86.677383%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 5
+Val Loss: 0.021909. Val Acc: 83.333333% f1: 80.218301
+	Training Loss: 0.018608. Training Acc: 87.225794%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 6
+Val Loss: 0.026288. Val Acc: 80.158730% f1: 76.271186
+	Training Loss: 0.017869. Training Acc: 87.774206%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 7
+Val Loss: 0.020180. Val Acc: 84.920635% f1: 81.966102
+Weights Saved
+	Training Loss: 0.017244. Training Acc: 88.360439%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 8
+Val Loss: 0.025917. Val Acc: 80.158730% f1: 78.600543
+	Training Loss: 0.016701. Training Acc: 89.173601%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 9
+Val Loss: 0.025634. Val Acc: 77.380952% f1: 75.051672
+	Training Loss: 0.015823. Training Acc: 89.693646%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 10
+Val Loss: 0.020960. Val Acc: 84.920635% f1: 81.679039
+	Training Loss: 0.015464. Training Acc: 90.138048%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 11
+Val Loss: 0.024118. Val Acc: 85.317460% f1: 82.637841
+	Training Loss: 0.014923. Training Acc: 90.648638%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 12
+Val Loss: 0.023797. Val Acc: 84.126984% f1: 81.298701
+	Training Loss: 0.014565. Training Acc: 90.781014%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 13
+Val Loss: 0.022048. Val Acc: 84.920635% f1: 80.685760
+	Training Loss: 0.013961. Training Acc: 91.386157%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 14
+Val Loss: 0.024002. Val Acc: 83.333333% f1: 78.852302
+	Training Loss: 0.013700. Training Acc: 91.433434%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 15
+Val Loss: 0.022255. Val Acc: 84.523810% f1: 81.562013
+	Training Loss: 0.013373. Training Acc: 91.773828%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 16
+Val Loss: 0.022638. Val Acc: 85.714286% f1: 82.781658
+	Training Loss: 0.013226. Training Acc: 91.944024%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 17
+Val Loss: 0.022677. Val Acc: 86.904762% f1: 83.460292
+	Training Loss: 0.012539. Training Acc: 92.397882%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 18
+Val Loss: 0.022054. Val Acc: 88.095238% f1: 85.032074
+	Training Loss: 0.012447. Training Acc: 92.473525%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 19
+Val Loss: 0.027468. Val Acc: 84.523810% f1: 80.798312
+	Training Loss: 0.012196. Training Acc: 92.672088%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 20
+Val Loss: 0.022577. Val Acc: 87.301587% f1: 84.571822
+	Training Loss: 0.011646. Training Acc: 92.880106%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 21
+Val Loss: 0.024928. Val Acc: 85.714286% f1: 82.197802
+	Training Loss: 0.011619. Training Acc: 93.031392%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 22
+Val Loss: 0.022921. Val Acc: 89.285714% f1: 86.706524
+	Training Loss: 0.011373. Training Acc: 92.974660%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 23
+Val Loss: 0.025437. Val Acc: 87.698413% f1: 85.344164
+	Training Loss: 0.011190. Training Acc: 93.144856%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 24
+Val Loss: 0.026898. Val Acc: 85.317460% f1: 82.507551
+	Training Loss: 0.010540. Training Acc: 93.636536%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 25
+Val Loss: 0.030110. Val Acc: 84.523810% f1: 81.419794
+	Training Loss: 0.010757. Training Acc: 93.617625%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 26
+Val Loss: 0.024486. Val Acc: 85.714286% f1: 82.351568
+	Training Loss: 0.010515. Training Acc: 93.560893%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 27
+Val Loss: 0.028615. Val Acc: 82.142857% f1: 79.327317
+	Training Loss: 0.010255. Training Acc: 94.071483%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 28
+Val Loss: 0.026099. Val Acc: 82.936508% f1: 79.670938
+	Training Loss: 0.009600. Training Acc: 94.251135%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 29
+Val Loss: 0.033254. Val Acc: 83.333333% f1: 80.503979
+	Training Loss: 0.009466. Training Acc: 94.317322%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 30
+Val Loss: 0.029445. Val Acc: 86.904762% f1: 84.278287
+	Training Loss: 0.009242. Training Acc: 94.629349%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 31
+Val Loss: 0.030562. Val Acc: 84.920635% f1: 81.040627
+	Training Loss: 0.009576. Training Acc: 94.355144%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 32
+Val Loss: 0.027531. Val Acc: 85.714286% f1: 82.643300
+	Training Loss: 0.009036. Training Acc: 94.534796%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 33
+Val Loss: 0.037082. Val Acc: 78.174603% f1: 75.221239
+	Training Loss: 0.009377. Training Acc: 94.449697%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 34
+Val Loss: 0.032407. Val Acc: 82.936508% f1: 79.514132
+	Training Loss: 0.008942. Training Acc: 94.884644%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 35
+Val Loss: 0.027973. Val Acc: 86.111111% f1: 82.914592
+	Training Loss: 0.008684. Training Acc: 95.064297%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 36
+Val Loss: 0.034583. Val Acc: 83.333333% f1: 80.067797
+	Training Loss: 0.008939. Training Acc: 94.704992%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 37
+Val Loss: 0.039540. Val Acc: 83.333333% f1: 79.410163
+	Training Loss: 0.008576. Training Acc: 95.017020%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 38
+Val Loss: 0.033619. Val Acc: 85.714286% f1: 82.038489
+	Training Loss: 0.007944. Training Acc: 95.338502%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 39
+Val Loss: 0.031237. Val Acc: 80.952381% f1: 76.468757
+	Training Loss: 0.008520. Training Acc: 95.262859%
+	Time consumption: [Data]13%, [Network]85%
+Eval epoch: 40
+Val Loss: 0.042642. Val Acc: 82.539683% f1: 78.786255
+Train Subjects : [29, 30, 31, 33, 45, 46, 37, 39, 38, 43, 35, 36, 44]
+ ------------ Test Subject 34 -------
+Eval epoch: 1
+Test Loss: 0.031652. Test Acc: 83.754513% f1: 83.408537
+Test accuracy for : 83.75451263537907
+Test F-Score: 83.4085373158168
