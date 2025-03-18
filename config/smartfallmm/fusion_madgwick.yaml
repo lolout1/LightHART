@@ -1,9 +1,9 @@
-# config/smartfallmm/optimized_fusion.yaml
+# config/smartfallmm/fusion_madgwick.yaml
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Include more subjects for better generalization
-subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
+# Include all subjects for better generalization
+subjects: [29, 30, 31, 33, 45, 46]
 
 model_args:
   num_layers: 3
@@ -20,17 +20,18 @@ model_args:
 
 dataset_args:
   mode: 'sliding_window'
-  max_length: 64 
+  max_length: 64
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'ukf'  # Use unscented Kalman filter for best performance
+    filter_type: 'madgwick'
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true
+    save_aligned: true
 
 batch_size: 16
 test_batch_size: 16
@@ -41,7 +42,7 @@ num_epoch: 60
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 16
-  drop_last: true  # Prevents index error
+  drop_last: true
 
 val_feeder_args:
   batch_size: 16
@@ -52,7 +53,6 @@ test_feeder_args:
   drop_last: false
 
 seed: 42
-optimizer: adamw  # Better than standard Adam
+optimizer: adamw
 base_lr: 0.0005
 weight_decay: 0.001
-

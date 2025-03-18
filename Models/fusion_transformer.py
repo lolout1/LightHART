@@ -23,7 +23,8 @@ class FusionTransModel(nn.Module):
                 use_batch_norm=True,
                 **kwargs):
         """
-        Optimized transformer model for IMU fusion with linear acceleration and quaternion.
+        Transformer model for IMU fusion with linear acceleration and quaternion.
+        
         Args:
             acc_frames: Number of frames in acceleration data
             num_classes: Number of output classes
@@ -42,7 +43,7 @@ class FusionTransModel(nn.Module):
         self.seq_len = acc_frames
         self.embed_dim = embed_dim
 
-        # Linear acceleration encoder (the data is already linear acceleration)
+        # Linear acceleration encoder
         self.linear_acc_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -124,14 +125,19 @@ class FusionTransModel(nn.Module):
         """
         # Extract inputs
         if isinstance(data_dict, dict):
-            # Get linear acceleration (this is already linear, not raw accelerometer)
+            # Get linear acceleration
             linear_acc = data_dict.get('linear_acceleration')
             
-            # Get quaternion data for orientation
+            # Get quaternion data
             quaternion = data_dict.get('quaternion')
             
+            # For backward compatibility, check for 'accelerometer' if 'linear_acceleration' not found
+            if linear_acc is None and 'accelerometer' in data_dict:
+                linear_acc = data_dict.get('accelerometer')
+                
+            # Validate required inputs
             if linear_acc is None:
-                raise ValueError("Missing required input: linear_acceleration")
+                raise ValueError("Missing required input: linear_acceleration (or accelerometer)")
                 
             if quaternion is None:
                 raise ValueError("Missing required input: quaternion")
@@ -169,7 +175,7 @@ class FusionTransModel(nn.Module):
         # Apply transformer encoder
         transformer_output = self.transformer(features)
         
-        # Global average pooling with attention weights
+        # Global average pooling
         pooled = torch.mean(transformer_output, dim=1)
         
         # Classification

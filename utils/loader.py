@@ -37,6 +37,7 @@ import threading
 # Import IMU fusion module for thread pool management
 from utils.imu_fusion import (
     process_imu_data, 
+    save_aligned_sensor_data,
     ThreadPoolExecutor as IMUThreadPoolExecutor
 )
 
@@ -492,13 +493,6 @@ def align_sensors_with_hybrid_interpolation(acc_data: pd.DataFrame, gyro_data: p
         elapsed_time = time.time() - start_time
         logger.info(f"Hybrid interpolation complete: {num_samples} aligned samples in {elapsed_time:.2f}s")
 
-        # Visualize alignment for debugging
-        try:
-            visualize_alignment(acc_times, acc_values, gyro_times, gyro_values,
-                            common_times, aligned_acc, aligned_gyro)
-        except Exception as e:
-            logger.warning(f"Failed to create alignment visualization: {e}")
-
         return aligned_acc, aligned_gyro, common_times
 
     except Exception as e:
@@ -813,6 +807,9 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
         for key in dynamic_keys:
             data[key] = filter_data_by_ids(data[key], list(inertial_ids))
+        
+        if 'aligned_timestamps' in data:
+            data['aligned_timestamps'] = filter_data_by_ids(data['aligned_timestamps'].reshape(-1, 1), list(inertial_ids)).flatten()
 
         logger.info(f"DTW alignment complete: {len(skeleton_idx)} skeleton frames, {len(inertial_ids)} inertial frames")
 
@@ -828,102 +825,6 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     logger.debug(f"Alignment completed in {elapsed_time:.2f}s")
 
     return data
-
-
-def _extract_window(data, start, end, window_size, fuse, filter_type):
-    """
-    Helper function to extract a window from data.
-    Designed to be run in a separate thread.
-    
-    Args:
-        data: Dictionary of sensor data arrays
-        start: Start index for window
-        end: End index for window
-        window_size: Target window size
-        fuse: Whether to apply fusion
-        filter_type: Type of filter to use
-        
-    Returns:
-        Dictionary of windowed data
-    """
-    window_data = {}
-    
-    # Extract window for each modality
-    for modality, modality_data in data.items():
-        if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
-            try:
-                # Special handling for one-dimensional arrays like aligned_timestamps
-                if modality == 'aligned_timestamps':
-                    # Handle 1D array - no second dimension indexing
-                    if len(modality_data.shape) == 1:
-                        window_data_array = modality_data[start:min(end, len(modality_data))]
-
-                        # Pad if needed
-                        if len(window_data_array) < window_size:
-                            logger.debug(f"Padding {modality} window from {len(window_data_array)} to {window_size}")
-                            padded = np.zeros(window_size, dtype=window_data_array.dtype)
-                            padded[:len(window_data_array)] = window_data_array
-                            window_data_array = padded
-                    else:
-                        # If somehow it's not 1D, fall back to regular handling
-                        window_data_array = modality_data[start:min(end, len(modality_data)), :]
-                        if window_data_array.shape[0] < window_size:
-                            padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                            padded[:window_data_array.shape[0]] = window_data_array
-                            window_data_array = padded
-                else:
-                    # Regular handling for 2D arrays
-                    window_data_array = modality_data[start:min(end, len(modality_data)), :]
-
-                    # Pad if needed
-                    if window_data_array.shape[0] < window_size:
-                        logger.debug(f"Padding {modality} window from {window_data_array.shape[0]} to {window_size}")
-                        padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                        padded[:window_data_array.shape[0]] = window_data_array
-                        window_data_array = padded
-
-                window_data[modality] = window_data_array
-            except Exception as e:
-                logger.error(f"Error extracting {modality} window: {str(e)}")
-                window_data[modality] = None
-
-    # Apply fusion if requested and we have both accelerometer and gyroscope
-    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
-        try:
-            # Extract the window data
-            acc_window = window_data['accelerometer']
-            gyro_window = window_data['gyroscope']
-
-            # Extract timestamps if available
-            timestamps = None
-            if 'aligned_timestamps' in window_data:
-                # Ensure we handle 1D timestamp array correctly
-                if len(window_data['aligned_timestamps'].shape) == 1:
-                    timestamps = window_data['aligned_timestamps']
-                else:
-                    # Handle unexpected 2D timestamps if they occur
-                    timestamps = window_data['aligned_timestamps'][:, 0]
-
-            # Process data using IMU fusion
-            features = process_imu_data(
-                acc_data=acc_window,
-                gyro_data=gyro_window,
-                timestamps=timestamps,
-                filter_type=filter_type,
-                return_features=True
-            )
-
-            # Add fusion results to window data
-            window_data['quaternion'] = features['quaternion']
-            window_data['linear_acceleration'] = features['linear_acceleration']
-            if 'fusion_features' in features:
-                window_data['fusion_features'] = features['fusion_features']
-                
-            logger.debug(f"Added fusion data to window")
-        except Exception as e:
-            logger.error(f"Error in fusion processing: {str(e)}")
-    
-    return window_data
 
 
 def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
@@ -1021,257 +922,101 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
     return windowed_data
 
 
-class ModalityFile: 
-    '''
-    Represents an individual file in a modality, containing the subject ID, action ID, sequence number, and file path
-
-    Attributes: 
-    subject_id (int) : ID of the subject performing the action
-    action_id (int) : ID of the action being performed
-    sequence_number (int) : Sequence/trial number
-    file_path (str) : Path to the data file
-    '''
-
-    def __init__(self, subject_id: int, action_id: int, sequence_number: int, file_path: str) -> None: 
-        self.subject_id = subject_id
-        self.action_id = action_id
-        self.sequence_number = sequence_number
-        self.file_path = file_path
-
-    def __repr__(self) -> str : 
-        return (
-            f"ModalityFile(subject_id  = {self.subject_id}, action_id={self.action_id}, sequence_number={self.sequence_number}, file_path = '{self.file_path}')"
-        )
-
-
-class Modality:
-    '''
-    Represents a modality (e.g., RGB, Depth) containing a list of ModalityFile objects.
-
-    Attributes:
-        name (str): Name of the modality.
-        files (List[ModalityFile]): List of files belonging to this modality.
-    '''
-
-    def __init__(self, name : str) -> None:
-        self.name = name 
-        self.files : List[ModalityFile] = []
-    
-    def add_file(self, subject_id: int , action_id: int, sequence_number: int, file_path: str) -> None: 
-        '''
-        Adds a file to the modality
-
-        Args: 
-            subject_id (int): ID of the subject.
-            action_id (int): ID of the action.
-            sequence_number (int): Sequence number of the trial.
-            file_path (str): Path to the file.
-        '''
-        modality_file = ModalityFile(subject_id, action_id, sequence_number, file_path)
-        self.files.append(modality_file)
-    
-    def __repr__(self) -> str:
-        return f"Modality(name='{self.name}', files={self.files})"
-    
-
-class MatchedTrial: 
+def _extract_window(data, start, end, window_size, fuse, filter_type):
     """
-    Represents a matched trial containing files from different modalities for the same trial.
-
-    Attributes:
-        subject_id (int): ID of the subject.
-        action_id (int): ID of the action.
-        sequence_number (int): Sequence number of the trial.
-        files (Dict[str, str]): Dictionary mapping modality names to file paths.
-    """
-    def __init__(self, subject_id: int, action_id: int, sequence_number: int) -> None:
-        self.subject_id  = subject_id
-        self.action_id = action_id
-        self.sequence_number = sequence_number
-        self.files: Dict[str, List[str, ]] = {}
+    Helper function to extract a window from data.
+    Designed to be run in a separate thread.
     
-    def add_file(self, modality_name: str, file_path: str) -> None:
-        '''
-        Adds a file to the matched trial for a specific modality
-
-        Args:
-            modality_name (str) : Name of the modality
-            file_path(str) : Path to the file
-        '''
-        self.files[modality_name] = file_path
-    
-    def __repr__(self) -> str:
-        return f"MatchedTrial(subject_id={self.subject_id}, action_id={self.action_id}, sequence_number={self.sequence_number}, files={self.files})"
-
-
-class SmartFallMM:
-    """
-    Represents the SmartFallMM dataset, managing the loading of files and matching of trials across modalities and specific sensors.
-
-    Attributes:
-        root_dir (str): Root directory of the SmartFallMM dataset.
-        age_groups (Dict[str, Dict[str, Modality]]): Dictionary containing 'old' and 'young' groups, each having a dictionary of modality names to Modality objects.
-        matched_trials (List[MatchedTrial]): List of matched trials containing files from different modalities.
-        selected_sensors (Dict[str, str]): Dictionary storing selected sensors for modalities like 'accelerometer' and 'gyroscope'. Skeleton data is loaded as is.
-        fusion_options (Dict): Optional configuration for IMU fusion (filter type, etc.)
-    """
-
-    def __init__(self, root_dir: str, fusion_options: Optional[Dict] = None) -> None:
-        self.root_dir = root_dir
-        self.age_groups: Dict[str, Dict[str, Modality]] = {
-            "old": {},
-            "young": {}
-        }
-        self.matched_trials: List[MatchedTrial] = []
-        self.selected_sensors: Dict[str, str] = {}  # Stores the selected sensor for each modality (e.g., accelerometer)
-        self.fusion_options = fusion_options or {}  # Store fusion configuration
-
-    def add_modality(self, age_group: str, modality_name: str) -> None:
-        """
-        Adds a modality to the dataset for a specific age group.
-
-        Args:
-            age_group (str): Either 'old' or 'young'.
-            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
-        """
-        if age_group not in self.age_groups:
-            raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
+    Args:
+        data: Dictionary of sensor data arrays
+        start: Start index for window
+        end: End index for window
+        window_size: Target window size
+        fuse: Whether to apply fusion
+        filter_type: Type of filter to use
         
-        self.age_groups[age_group][modality_name] = Modality(modality_name)
+    Returns:
+        Dictionary of windowed data
+    """
+    window_data = {}
+    
+    # Extract window for each modality
+    for modality, modality_data in data.items():
+        if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
+            try:
+                # Special handling for one-dimensional arrays like aligned_timestamps
+                if modality == 'aligned_timestamps':
+                    # Handle 1D array - no second dimension indexing
+                    if len(modality_data.shape) == 1:
+                        window_data_array = modality_data[start:min(end, len(modality_data))]
 
-    def select_sensor(self, modality_name: str, sensor_name: str = None) -> None:
-        """
-        Selects a specific sensor for a given modality if applicable. Only files from this sensor will be loaded for modalities like 'accelerometer' or 'gyroscope'.
-        For modalities like 'skeleton', no sensor is needed.
-
-        Args:
-            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
-            sensor_name (str): Name of the sensor (e.g., phone, watch, meta_wrist, meta_hip). None for 'skeleton'.
-        """
-        if modality_name == "skeleton":
-            # Skeleton modality doesn't have sensor-specific data
-            self.selected_sensors[modality_name] = None
-        else:
-            if sensor_name is None:
-                raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
-            self.selected_sensors[modality_name] = sensor_name
-
-    def load_files(self) -> None:
-        """
-        Loads files from the dataset based on selected sensors and age groups.
-        Skeleton data is loaded without sensor selection.
-        """
-        for age_group, modalities in self.age_groups.items():
-            for modality_name, modality in modalities.items():
-                # Handle skeleton data (no sensor required)
-                if modality_name == "skeleton":
-                    modality_dir = os.path.join(self.root_dir, age_group, modality_name)
-                else:
-                    # Only load data from the selected sensor if it exists
-                    if modality_name in self.selected_sensors:
-                        sensor_name = self.selected_sensors[modality_name]
-                        modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
+                        # Pad if needed
+                        if len(window_data_array) < window_size:
+                            logger.debug(f"Padding {modality} window from {len(window_data_array)} to {window_size}")
+                            padded = np.zeros(window_size, dtype=window_data_array.dtype)
+                            padded[:len(window_data_array)] = window_data_array
+                            window_data_array = padded
                     else:
-                        continue
+                        # If somehow it's not 1D, fall back to regular handling
+                        window_data_array = modality_data[start:min(end, len(modality_data)), :]
+                        if window_data_array.shape[0] < window_size:
+                            padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
+                            padded[:window_data_array.shape[0]] = window_data_array
+                            window_data_array = padded
+                else:
+                    # Regular handling for 2D arrays
+                    window_data_array = modality_data[start:min(end, len(modality_data)), :]
 
-                # Load the files
-                for root, _, files in os.walk(modality_dir):
-                    for file in files:
-                        try:
-                            if file.endswith(('.csv')):
-                                # Extract information based on the filename
-                                subject_id = int(file[1:3])  # Assuming S001 format for subject
-                                action_id = int(file[4:6])  # Assuming A001 format for action
-                                sequence_number = int(file[7:9])  # Assuming T001 format for trial
-                                file_path = os.path.join(root, file)
-                                modality.add_file(subject_id, action_id, sequence_number, file_path)
-                        except Exception as e:
-                            logger.error(f"Error processing file {file}: {e}")
+                    # Pad if needed
+                    if window_data_array.shape[0] < window_size:
+                        logger.debug(f"Padding {modality} window from {window_data_array.shape[0]} to {window_size}")
+                        padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
+                        padded[:window_data_array.shape[0]] = window_data_array
+                        window_data_array = padded
 
-    def match_trials(self) -> None:
-        """
-        Matches files from different modalities based on subject ID, action ID, and sequence number.
-        Only trials that have matching files in all modalities will be kept in matched_trials.
-        """
-        trial_dict = {}
+                window_data[modality] = window_data_array
+            except Exception as e:
+                logger.error(f"Error extracting {modality} window: {str(e)}")
+                window_data[modality] = None
 
-        # Step 1: Group files by (subject_id, action_id, sequence_number)
-        for age_group, modalities in self.age_groups.items():
-            for modality_name, modality in modalities.items():
-                for modality_file in modality.files:
-                    key = (modality_file.subject_id, modality_file.action_id, modality_file.sequence_number)
+    # Apply fusion if requested and we have both accelerometer and gyroscope
+    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
+        try:
+            # Extract the window data
+            acc_window = window_data['accelerometer']
+            gyro_window = window_data['gyroscope']
 
-                    if key not in trial_dict:
-                        trial_dict[key] = {}
+            # Extract timestamps if available
+            timestamps = None
+            if 'aligned_timestamps' in window_data:
+                # Ensure we handle 1D timestamp array correctly
+                if len(window_data['aligned_timestamps'].shape) == 1:
+                    timestamps = window_data['aligned_timestamps']
+                else:
+                    # Handle unexpected 2D timestamps if they occur
+                    timestamps = window_data['aligned_timestamps'][:, 0]
 
-                    # Add the file under its modality name
-                    trial_dict[key][modality_name] = modality_file.file_path
+            # Process data using IMU fusion
+            features = process_imu_data(
+                acc_data=acc_window,
+                gyro_data=gyro_window,
+                timestamps=timestamps,
+                filter_type=filter_type,
+                return_features=True
+            )
 
-        # Step 2: Filter out incomplete trials
-        required_modalities = list(self.age_groups['young'].keys())  # Assuming all age groups have the same modalities
-
-        for key, files_dict in trial_dict.items():
-            # Check if all required modalities are present for this trial
-            if all(modality in files_dict for modality in required_modalities):
-                subject_id, action_id, sequence_number = key
-                matched_trial = MatchedTrial(subject_id, action_id, sequence_number)
-
-                for modality_name, file_path in files_dict.items():
-                    matched_trial.add_file(modality_name, file_path)
-
-                self.matched_trials.append(matched_trial)
-
-    def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
-        """
-        Finds or creates a MatchedTrial for a given subject ID, action ID, and sequence number.
-
-        Args:
-            subject_id (int): ID of the subject.
-            action_id (int): ID of the action.
-            sequence_number (int): Sequence number of the trial.
-
-        Returns:
-            MatchedTrial: The matched trial object.
-        """
-        for trial in self.matched_trials:
-            if (trial.subject_id == subject_id and trial.action_id == action_id
-                    and trial.sequence_number == sequence_number):
-                return trial
-        new_trial = MatchedTrial(subject_id, action_id, sequence_number)
-        self.matched_trials.append(new_trial)
-        return new_trial
-
-    def pipe_line(self, age_group: List[str], modalities: List[str], sensors: List[str]):
-        '''
-        A pipeline to load the data 
-        
-        Args:
-            age_group: List of age groups ('young', 'old')
-            modalities: List of modalities ('accelerometer', 'gyroscope', 'skeleton')
-            sensors: List of sensors ('phone', 'watch', 'meta_wrist', 'meta_hip')
-        '''
-        for age in age_group: 
-            for modality in modalities:
-                self.add_modality(age, modality)
-                if modality == 'skeleton':
-                    self.select_sensor('skeleton')
-                else: 
-                    for sensor in sensors:
-                        self.select_sensor(modality, sensor)
-
-        # Load files for the selected sensors and skeleton data)
-        self.load_files()
-
-        # Match trials across the modalities
-        self.match_trials()
-        
-        logger.info(f"Loaded {len(self.matched_trials)} matched trials")
-        logger.info(f"Modalities: {modalities}")
-        logger.info(f"Sensors: {sensors}")
-        logger.info(f"Age groups: {age_group}")
-        
-        if hasattr(self, 'fusion_options') and self.fusion_options.get('filter_type'):
-            logger.info(f"Using fusion with filter type: {self.fusion_options['filter_type']}")
+            # IMPORTANT: Add fusion results to window data
+            # We change the key to 'linear_acceleration' instead of 'accelerometer'
+            window_data['linear_acceleration'] = features['linear_acceleration']
+            window_data['quaternion'] = features['quaternion']
+            if 'fusion_features' in features:
+                window_data['fusion_features'] = features['fusion_features']
+                
+            logger.debug(f"Added fusion data to window")
+        except Exception as e:
+            logger.error(f"Error in fusion processing: {str(e)}")
+    
+    return window_data
 
 
 class DatasetBuilder:
@@ -1305,6 +1050,11 @@ class DatasetBuilder:
         self.task = task
         self.fuse = None
         self.fusion_options = fusion_options or {}
+
+        # Create directory for aligned data
+        self.aligned_data_dir = os.path.join(os.getcwd(), "data/aligned")
+        for dir_name in ["accelerometer", "gyroscope", "skeleton"]:
+            os.makedirs(os.path.join(self.aligned_data_dir, dir_name), exist_ok=True)
 
         # Log fusion options if present
         if fusion_options:
@@ -1461,7 +1211,66 @@ class DatasetBuilder:
         '''
         return all(len(v) > 1 for v in d.values())
 
-    def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick', visualize: bool = False):
+    def _process_trial(self, trial, label, fuse, filter_type, visualize, save_aligned=False):
+        """
+        Process a single trial with robust error handling.
+
+        Args:
+            trial: Trial object containing modality file paths
+            label: Class label for this trial
+            fuse: Whether to use sensor fusion
+            filter_type: Type of filter to use
+            visualize: Whether to generate visualizations
+            save_aligned: Whether to save aligned data to files
+
+        Returns:
+            Processed trial data or None if processing failed
+        """
+        try:
+            # Create dictionary to hold trial data
+            trial_data = {}
+            
+            # Load data from each modality
+            for modality, file_path in trial.files.items():
+                try:
+                    unimodal_data = self.load_file(file_path)
+                    trial_data[modality] = unimodal_data
+                except Exception as e:
+                    logger.error(f"Error loading {modality} from {file_path}: {str(e)}")
+                    return None
+            
+            # Align skeleton and inertial data
+            trial_data = align_sequence(trial_data)
+            
+            # Save aligned data if requested
+            if save_aligned:
+                aligned_acc = trial_data.get('accelerometer')
+                aligned_gyro = trial_data.get('gyroscope')
+                aligned_skl = trial_data.get('skeleton')
+                aligned_timestamps = trial_data.get('aligned_timestamps')
+                
+                if aligned_acc is not None and aligned_gyro is not None:
+                    save_aligned_sensor_data(
+                        trial.subject_id, 
+                        trial.action_id, 
+                        trial.sequence_number,
+                        aligned_acc,
+                        aligned_gyro,
+                        aligned_skl,
+                        aligned_timestamps if aligned_timestamps is not None else np.arange(len(aligned_acc))
+                    )
+            
+            # Process the aligned data
+            processed_data = self.process(trial_data, label, fuse, filter_type, visualize)
+            
+            return processed_data
+        
+        except Exception as e:
+            logger.error(f"Trial processing failed: {str(e)}")
+            return None
+
+    def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick', 
+                    visualize: bool = False, save_aligned: bool = False):
         '''
         Creates a dataset from the sensor data files for the specified subjects.
 
@@ -1470,12 +1279,17 @@ class DatasetBuilder:
             fuse: Whether to apply sensor fusion
             filter_type: Type of fusion filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
             visualize: Whether to generate visualizations
+            save_aligned: Whether to save aligned data to files
         '''
         logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
 
         start_time = time.time()
         self.data = defaultdict(list)
         self.fuse = fuse
+        
+        # Check if save_aligned is specified in fusion options
+        if hasattr(self, 'fusion_options'):
+            save_aligned = save_aligned or self.fusion_options.get('save_aligned', False)
 
         # Use ThreadPoolExecutor for parallel processing
         with ThreadPoolExecutor(max_workers=min(8, len(self.dataset.matched_trials))) as executor:
@@ -1495,7 +1309,15 @@ class DatasetBuilder:
                 else:  # Activity recognition
                     label = trial.action_id - 1
                 
-                future = executor.submit(self._process_trial, trial, label, fuse, filter_type, visualize)
+                future = executor.submit(
+                    self._process_trial, 
+                    trial, 
+                    label, 
+                    fuse, 
+                    filter_type, 
+                    visualize,
+                    save_aligned
+                )
                 future_to_trial[future] = trial
             
             # Collect results with progress tracking
@@ -1532,45 +1354,6 @@ class DatasetBuilder:
 
         elapsed_time = time.time() - start_time
         logger.info(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
-
-    def _process_trial(self, trial, label, fuse, filter_type, visualize):
-        """
-        Process a single trial with robust error handling.
-
-        Args:
-            trial: Trial object containing modality file paths
-            label: Class label for this trial
-            fuse: Whether to use sensor fusion
-            filter_type: Type of filter to use
-            visualize: Whether to generate visualizations
-
-        Returns:
-            Processed trial data or None if processing failed
-        """
-        try:
-            # Create dictionary to hold trial data
-            trial_data = {}
-            
-            # Load data from each modality
-            for modality, file_path in trial.files.items():
-                try:
-                    unimodal_data = self.load_file(file_path)
-                    trial_data[modality] = unimodal_data
-                except Exception as e:
-                    logger.error(f"Error loading {modality} from {file_path}: {str(e)}")
-                    return None
-            
-            # Align skeleton and inertial data
-            trial_data = align_sequence(trial_data)
-            
-            # Process the aligned data
-            processed_data = self.process(trial_data, label, fuse, filter_type, visualize)
-            
-            return processed_data
-        
-        except Exception as e:
-            logger.error(f"Trial processing failed: {str(e)}")
-            return None
 
     def normalization(self) -> Dict[str, np.ndarray]:
         '''
@@ -1614,83 +1397,3 @@ class DatasetBuilder:
         logger.info(f"Normalization complete in {elapsed_time:.2f}s")
 
         return self.data
-
-
-def prepare_smartfallmm(arg) -> DatasetBuilder: 
-    '''
-    Function for dataset preparation
-    
-    Args:
-        arg: Configuration object with dataset_args
-        
-    Returns:
-        DatasetBuilder object ready for creating datasets
-    '''
-    # Check if fusion options are present in the configuration
-    fusion_options = arg.dataset_args.get('fusion_options', {})
-    
-    # Create dataset object with optional fusion configuration
-    sm_dataset = SmartFallMM(
-        root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'),
-        fusion_options=fusion_options
-    )
-    
-    # Setup the dataset pipeline
-    sm_dataset.pipe_line(
-        age_group=arg.dataset_args['age_group'],
-        modalities=arg.dataset_args['modalities'],
-        sensors=arg.dataset_args['sensors']
-    )
-    
-    # Create the dataset builder
-    builder = DatasetBuilder(
-        sm_dataset, 
-        arg.dataset_args['mode'], 
-        arg.dataset_args['max_length'],
-        arg.dataset_args['task'],
-        fusion_options=fusion_options
-    )
-    
-    return builder
-
-
-def split_by_subjects(builder, subjects, fuse, filter_type='madgwick', visualize=False) -> Dict[str, np.ndarray]:
-    '''
-    Function to filter data by expected subjects and apply fusion if needed
-    
-    Args:
-        builder: DatasetBuilder object
-        subjects: List of subject IDs to include
-        fuse: Basic flag for fusion (True/False)
-        filter_type: Type of filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
-        visualize: Whether to generate visualizations
-        
-    Returns:
-        Dictionary of normalized dataset components
-    '''
-    # Get fusion options if available
-    fusion_options = getattr(builder, 'fusion_options', {})
-    
-    # Check if detailed fusion configuration is available
-    if fusion_options and fusion_options.get('enabled', False):
-        # Use the specified filter type (or default to madgwick)
-        filter_type_config = fusion_options.get('filter_type', 'madgwick')
-        visualize_config = fusion_options.get('visualize', False)
-        
-        # Override with supplied parameters if provided
-        filter_type = filter_type or filter_type_config
-        visualize = visualize or visualize_config
-        
-        logger.info(f"Applying IMU fusion with filter type: {filter_type}")
-        logger.info(f"Visualization enabled: {visualize}")
-        
-        # Create dataset with enhanced fusion options
-        builder.make_dataset(subjects, True, filter_type=filter_type, visualize=visualize)
-    else:
-        # Use the basic fusion flag
-        builder.make_dataset(subjects, fuse, filter_type=filter_type, visualize=visualize)
-    
-    # Apply normalization
-    norm_data = builder.normalization()
-    
-    return norm_data

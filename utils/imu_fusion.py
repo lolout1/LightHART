@@ -67,7 +67,63 @@ def get_file_thread_pool():
         if _file_thread_pool is None:
             _file_thread_pool = ThreadPoolExecutor(max_workers=MAX_FILES_PARALLEL)
         return _file_thread_pool
-
+def save_aligned_sensor_data(subject_id: int, action_id: int, trial_id: int,
+                           acc_data: np.ndarray, gyro_data: np.ndarray, skl_data: Optional[np.ndarray],
+                           timestamps: np.ndarray):
+    """
+    Save aligned sensor data to dedicated directories.
+    
+    Args:
+        subject_id: Subject identifier
+        action_id: Action identifier
+        trial_id: Trial identifier
+        acc_data: Aligned accelerometer data
+        gyro_data: Aligned gyroscope data
+        skl_data: Aligned skeleton data (optional)
+        timestamps: Aligned timestamps
+    
+    Returns:
+        Boolean indicating success
+    """
+    try:
+        # Create directory structure
+        base_dir = os.path.join(os.getcwd(), "data/aligned")
+        os.makedirs(os.path.join(base_dir, "accelerometer"), exist_ok=True)
+        os.makedirs(os.path.join(base_dir, "gyroscope"), exist_ok=True)
+        if skl_data is not None:
+            os.makedirs(os.path.join(base_dir, "skeleton"), exist_ok=True)
+        
+        # Generate filename format: S01A01T01.csv
+        filename = f"S{subject_id:02d}A{action_id:02d}T{trial_id:02d}.csv"
+        
+        # Save accelerometer data
+        acc_df = pd.DataFrame(acc_data, columns=['x', 'y', 'z'])
+        acc_df.insert(0, 'timestamp', timestamps)
+        acc_df.to_csv(os.path.join(base_dir, "accelerometer", filename), index=False)
+        
+        # Save gyroscope data
+        gyro_df = pd.DataFrame(gyro_data, columns=['x', 'y', 'z'])
+        gyro_df.insert(0, 'timestamp', timestamps)
+        gyro_df.to_csv(os.path.join(base_dir, "gyroscope", filename), index=False)
+        
+        # Save skeleton data if provided
+        if skl_data is not None:
+            # Flatten the skeleton data if needed
+            if len(skl_data.shape) > 2:
+                # Reshape from [frames, joints, 3] to [frames, joints*3]
+                skl_flat = skl_data.reshape(skl_data.shape[0], -1)
+            else:
+                skl_flat = skl_data
+            
+            skl_df = pd.DataFrame(skl_flat)
+            skl_df.to_csv(os.path.join(base_dir, "skeleton", filename), index=False, header=False)
+        
+        logger.debug(f"Saved aligned data for subject {subject_id}, action {action_id}, trial {trial_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving aligned data: {str(e)}")
+        return False
 def get_processing_thread_pool(file_id):
     """Get or create a thread pool for a specific file."""
     global _processing_thread_pool
@@ -1319,6 +1375,7 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
         return {
             'quaternion': np.zeros((0, 4)),
             'linear_acceleration': np.zeros((0, 3)),  # Pass through the linear acceleration
+            'accelerometer': acc_data.copy(),  # Important: preserve original accelerometer data
             'fusion_features': np.zeros(0) if return_features else None
         }
 
@@ -1430,7 +1487,7 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
                     all_chunks.append({
                         'quaternion': np.zeros((chunk_length, 4)),
                         'linear_acceleration': acc_data[start_idx:end_idx],
-                        'accelerometer': np.zeros((chunk_length, 3)),
+                        'accelerometer': acc_data[start_idx:end_idx].copy(),  # Keep original data
                         'angular_velocity': gyro_data[start_idx:end_idx],
                         'final_quaternion': None
                     })
@@ -1438,7 +1495,7 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             # Combine chunks (skipping overlap)
             quaternions = []
             linear_acc = []
-            accelerometer = []
+            accelerometer_data = []  # Original accelerometer data
             angular_velocity = []
             
             for i, chunk in enumerate(all_chunks):
@@ -1453,19 +1510,19 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
                 # Add data to the combined result
                 quaternions.append(chunk['quaternion'][:end_idx])
                 linear_acc.append(chunk['linear_acceleration'][:end_idx])
-                accelerometer.append(chunk['accelerometer'][:end_idx])
+                accelerometer_data.append(chunk['accelerometer'][:end_idx])
                 angular_velocity.append(chunk['angular_velocity'][:end_idx])
             
             # Concatenate all chunks
             quaternions = np.concatenate(quaternions, axis=0)
             linear_acc = np.concatenate(linear_acc, axis=0)
-            accelerometer = np.concatenate(accelerometer, axis=0)
+            accelerometer_data = np.concatenate(accelerometer_data, axis=0)
             angular_velocity = np.concatenate(angular_velocity, axis=0)
             
             # Trim to original length
             quaternions = quaternions[:data_length]
             linear_acc = linear_acc[:data_length]
-            accelerometer = accelerometer[:data_length]
+            accelerometer_data = accelerometer_data[:data_length]
             angular_velocity = angular_velocity[:data_length]
             
         else:
@@ -1475,13 +1532,15 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             )
             quaternions = chunk_result['quaternion']
             linear_acc = chunk_result['linear_acceleration']
-            accelerometer = chunk_result['accelerometer']
+            accelerometer_data = chunk_result['accelerometer']
             angular_velocity = chunk_result['angular_velocity']
 
-        # Create result dictionary
+        # Create result dictionary - IMPORTANT: Include all necessary keys
         results = {
             'quaternion': quaternions,
-            'linear_acceleration': linear_acc  # Pass through the input linear acceleration
+            'linear_acceleration': linear_acc,  # Pass through the input linear acceleration
+            'accelerometer': acc_data.copy(),  # IMPORTANT: Include original accelerometer data
+            'gyroscope': gyro_data.copy()  # Include original gyroscope data
         }
 
         # Extract features if requested
@@ -1502,10 +1561,12 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
     except Exception as e:
         logger.error(f"Error in IMU processing: {str(e)}")
         logger.error(traceback.format_exc())
-        # Return empty results on error
+        # Return empty results on error, but include original accelerometer data
         return {
             'quaternion': np.zeros((len(acc_data), 4)) if len(acc_data) > 0 else np.zeros((0, 4)),
             'linear_acceleration': acc_data,  # Return original accelerometer data
+            'accelerometer': acc_data.copy(),  # IMPORTANT: Include original accelerometer data
+            'gyroscope': gyro_data.copy(),  # Include original gyroscope data
             'fusion_features': np.zeros(43) if return_features else None
         }
 
@@ -1652,3 +1713,61 @@ def extract_features_from_window(window_data: Dict[str, np.ndarray]) -> np.ndarr
     except Exception as e:
         logger.error(f"Feature extraction failed: {str(e)}\n{traceback.format_exc()}")
         return np.zeros(43)  # Return zeros in case of failure
+
+def save_aligned_sensor_data(subject_id: int, action_id: int, trial_id: int,
+                            acc_data: np.ndarray, gyro_data: np.ndarray, skl_data: Optional[np.ndarray],
+                            timestamps: np.ndarray):
+    """
+    Save aligned sensor data to dedicated directories.
+    
+    Args:
+        subject_id: Subject identifier
+        action_id: Action identifier
+        trial_id: Trial identifier
+        acc_data: Aligned accelerometer data
+        gyro_data: Aligned gyroscope data
+        skl_data: Aligned skeleton data (optional)
+        timestamps: Aligned timestamps
+    
+    Returns:
+        Boolean indicating success
+    """
+    try:
+        # Create directory structure
+        base_dir = "data/aligned"
+        os.makedirs(f"{base_dir}/accelerometer", exist_ok=True)
+        os.makedirs(f"{base_dir}/gyroscope", exist_ok=True)
+        if skl_data is not None:
+            os.makedirs(f"{base_dir}/skeleton", exist_ok=True)
+        
+        # Generate filename format: S01A01T01.csv
+        filename = f"S{subject_id:02d}A{action_id:02d}T{trial_id:02d}.csv"
+        
+        # Save accelerometer data
+        acc_df = pd.DataFrame(acc_data, columns=['x', 'y', 'z'])
+        acc_df.insert(0, 'timestamp', timestamps)
+        acc_df.to_csv(f"{base_dir}/accelerometer/{filename}", index=False)
+        
+        # Save gyroscope data
+        gyro_df = pd.DataFrame(gyro_data, columns=['x', 'y', 'z'])
+        gyro_df.insert(0, 'timestamp', timestamps)
+        gyro_df.to_csv(f"{base_dir}/gyroscope/{filename}", index=False)
+        
+        # Save skeleton data if provided
+        if skl_data is not None:
+            # Flatten the skeleton data if needed
+            if len(skl_data.shape) > 2:
+                # Reshape from [frames, joints, 3] to [frames, joints*3]
+                skl_flat = skl_data.reshape(skl_data.shape[0], -1)
+            else:
+                skl_flat = skl_data
+            
+            skl_df = pd.DataFrame(skl_flat)
+            skl_df.to_csv(f"{base_dir}/skeleton/{filename}", index=False, header=False)
+        
+        logger.debug(f"Saved aligned data for subject {subject_id}, action {action_id}, trial {trial_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving aligned data: {str(e)}")
+        return False
