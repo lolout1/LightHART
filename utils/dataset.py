@@ -384,7 +384,7 @@ def prepare_smartfallmm(arg) -> DatasetBuilder:
     return builder
 
 
-def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
+def split_by_subjects(builder, subjects, fuse, filter_type='madgwick', visualize=False) -> Dict[str, np.ndarray]:
     '''
     Function to filter data by expected subjects and apply fusion if needed
     
@@ -392,6 +392,8 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
         builder: DatasetBuilder object
         subjects: List of subject IDs to include
         fuse: Basic flag for fusion (True/False)
+        filter_type: Type of filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
+        visualize: Whether to generate visualizations
         
     Returns:
         Dictionary of normalized dataset components
@@ -402,8 +404,12 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
     # Check if detailed fusion configuration is available
     if fusion_options and fusion_options.get('enabled', False):
         # Use the specified filter type (or default to madgwick)
-        filter_type = fusion_options.get('filter_type', 'madgwick')
-        visualize = fusion_options.get('visualize', False)
+        filter_type_config = fusion_options.get('filter_type', 'madgwick')
+        visualize_config = fusion_options.get('visualize', False)
+        
+        # Override with supplied parameters if provided
+        filter_type = filter_type or filter_type_config
+        visualize = visualize or visualize_config
         
         print(f"Applying IMU fusion with filter type: {filter_type}")
         print(f"Visualization enabled: {visualize}")
@@ -412,14 +418,12 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
         builder.make_dataset(subjects, True, filter_type=filter_type, visualize=visualize)
     else:
         # Use the basic fusion flag
-        builder.make_dataset(subjects, fuse)
+        builder.make_dataset(subjects, fuse, filter_type=filter_type, visualize=visualize)
     
     # Apply normalization
     norm_data = builder.normalization()
     
     return norm_data
-
-
 def distribution_viz(labels: np.array, work_dir: str, mode: str) -> None:
     '''
     Visualizes the distribution of labels in the dataset

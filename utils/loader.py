@@ -5,6 +5,12 @@ This module handles loading, preprocessing, and alignment of multi-modal sensor 
 for human activity recognition and fall detection. It implements various techniques
 for handling variably-sampled sensor data, including hybrid interpolation that
 intelligently switches between cubic spline and linear methods.
+
+Key features:
+- High-performance parallel processing of multiple files
+- Efficient alignment of variable-rate sensor data
+- Advanced hybrid interpolation of accelerometer and gyroscope data
+- Robust error handling and recovery
 '''
 import os
 from typing import List, Dict, Tuple, Union, Optional, Any
@@ -24,6 +30,19 @@ import torch.nn.functional as F
 import time
 import logging
 from utils.processor.base import Processor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+import threading
+
+# Import IMU fusion module
+from utils.imu_fusion import (
+    process_imu_data, 
+    process_multiple_files_parallel,
+    get_file_thread_pool,
+    cleanup_thread_pools,
+    MAX_FILES_PARALLEL,
+    THREADS_PER_FILE
+)
 
 # Configure logging
 log_dir = "debug_logs"
@@ -65,15 +84,29 @@ def csvloader(file_path: str, **kwargs) -> np.ndarray:
             cols = 96  # Skeleton data has 32 joints × 3 coordinates
             logger.debug(f"Detected skeleton data with {cols} columns")
         else:
-            cols = 3  # Inertial data has 3 axes (x, y, z)
+            # Check if this is a meta sensor file or other inertial data
+            if file_data.shape[1] > 4:
+                # Meta sensor format: epoch, time, elapsed time, x, y, z
+                cols = file_data.shape[1] - 3
+                file_data = file_data.iloc[:, 3:]  # Skip first 3 columns
+            else:
+                cols = 3  # Standard inertial data has 3 axes (x, y, z)
             logger.debug(f"Detected inertial sensor data with {cols} columns")
 
         # Validate data shape
         if file_data.shape[1] < cols:
             logger.warning(f"File has fewer columns than expected: {file_data.shape[1]} < {cols}")
+            # Add zero columns if needed
+            missing_cols = cols - file_data.shape[1]
+            for i in range(missing_cols):
+                file_data[f'missing_{i}'] = 0
 
-        # Extract data, skipping the first 2 rows which might be headers or metadata
-        activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
+        # Extract data, skipping header rows if present
+        if file_data.shape[0] > 2:
+            activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
+        else:
+            activity_data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
+            
         logger.debug(f"Extracted data with shape: {activity_data.shape}")
 
         return activity_data
@@ -422,22 +455,43 @@ def align_sensors_with_hybrid_interpolation(acc_data: pd.DataFrame, gyro_data: p
         logger.debug(f"Acc magnitude range: {acc_mag.min():.2f}-{acc_mag.max():.2f}g")
         logger.debug(f"Gyro magnitude range: {gyro_mag.min():.2f}-{gyro_mag.max():.2f}rad/s")
 
-        # Interpolate each axis
+        # Process in parallel using thread pool
+        thread_pool = ThreadPoolExecutor(max_workers=THREADS_PER_FILE)
+        futures = []
+
+        # Submit interpolation tasks
         for axis in range(3):
             # Use different thresholds for accelerometer and gyroscope
-            aligned_acc[:, axis] = hybrid_interpolate(
-                acc_times,
-                acc_values[:, axis],
-                common_times,
-                threshold=acc_threshold
+            futures.append(
+                thread_pool.submit(
+                    hybrid_interpolate,
+                    acc_times,
+                    acc_values[:, axis],
+                    common_times,
+                    threshold=acc_threshold
+                )
+            )
+            
+            futures.append(
+                thread_pool.submit(
+                    hybrid_interpolate,
+                    gyro_times,
+                    gyro_values[:, axis],
+                    common_times,
+                    threshold=gyro_threshold
+                )
             )
 
-            aligned_gyro[:, axis] = hybrid_interpolate(
-                gyro_times,
-                gyro_values[:, axis],
-                common_times,
-                threshold=gyro_threshold
-            )
+        # Collect results
+        for i, future in enumerate(futures):
+            result = future.result()
+            if i < 3:  # First 3 are accelerometer
+                aligned_acc[:, i] = result
+            else:  # Last 3 are gyroscope
+                aligned_gyro[:, i - 3] = result
+
+        # Clean up thread pool
+        thread_pool.shutdown()
 
         elapsed_time = time.time() - start_time
         logger.info(f"Hybrid interpolation complete: {num_samples} aligned samples in {elapsed_time:.2f}s")
@@ -733,9 +787,6 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         inertial_data = data[dynamic_keys[0]]
         logger.debug(f"Using {dynamic_keys[0]} with shape {inertial_data.shape} for skeleton alignment")
 
-        
-        # Calculate Frobenius norm for both data types
-
         # Calculate Frobenius norm for both data types
         skeleton_frob_norm = np.linalg.norm(skeleton_joint_data, axis=1)
         inertial_frob_norm = np.linalg.norm(inertial_data, axis=1)
@@ -768,30 +819,6 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     return data
 
 
-def butterworth_filter(data, cutoff, fs, order=4, filter_type='low'):
-    '''
-    Applies Butterworth filter to remove noise from signal.
-
-    Args:
-        data: Input data array
-        cutoff: Cutoff frequency
-        fs: Sampling frequency
-        order: Filter order
-        filter_type: Type of filter ('low', 'high', 'band', 'bandstop')
-
-    Returns:
-        Filtered data
-    '''
-    logger.debug(f"Applying Butterworth filter: {filter_type}pass, cutoff={cutoff}Hz, order={order}")
-
-    nyquist = 0.5 * fs  # Nyquist frequency
-    normal_cutoff = cutoff / nyquist  # Normalized cutoff frequency
-    b, a = butter(order, normal_cutoff, btype=filter_type, analog=False)
-    filtered_data = filtfilt(b, a, data, axis=0)
-
-    return filtered_data
-
-
 def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
                             peaks: Union[List[int], np.ndarray], label: int,
                             fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
@@ -820,9 +847,15 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
         logger.warning("Fusion requested but gyroscope data not available")
         fuse = False
 
-    # Create windows around peaks
-    windows_created = 0
-    for peak in peaks:
+    # Create windows around peaks with parallel processing
+    window_tasks = []
+    file_id = id(data)  # Generate unique ID for this data
+    
+    # Get the thread pool for this file
+    thread_pool = get_processing_thread_pool(file_id)
+
+    # Submit window extraction tasks
+    for peak_idx, peak in enumerate(peaks):
         # Calculate window boundaries
         start = max(0, peak - window_size // 2)
         end = min(len(data['accelerometer']), start + window_size)
@@ -832,125 +865,38 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
             logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size})")
             continue
 
-        # Add window for each modality
-        for modality, modality_data in data.items():
-            if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
-                try:
-                    # Extract window for this modality
-                    if len(modality_data) <= start:
-                        logger.warning(f"Modality {modality} has insufficient data length: {len(modality_data)} <= {start}")
-                        continue
+        # Submit task
+        window_tasks.append((
+            peak_idx,
+            peak,
+            thread_pool.submit(
+                _extract_window,
+                data,
+                start,
+                end,
+                window_size,
+                fuse,
+                filter_type
+            )
+        ))
 
-                    # Special handling for one-dimensional arrays like aligned_timestamps
-                    if modality == 'aligned_timestamps':
-                        # Handle 1D array - no second dimension indexing
-                        if len(modality_data.shape) == 1:
-                            window_data = modality_data[start:min(end, len(modality_data))]
-
-                            # Pad if needed
-                            if len(window_data) < window_size:
-                                logger.debug(f"Padding {modality} window from {len(window_data)} to {window_size}")
-                                padded = np.zeros(window_size, dtype=window_data.dtype)
-                                padded[:len(window_data)] = window_data
-                                window_data = padded
-                        else:
-                            # If somehow it's not 1D, fall back to regular handling
-                            window_data = modality_data[start:min(end, len(modality_data)), :]
-                            if window_data.shape[0] < window_size:
-                                padded = np.zeros((window_size, window_data.shape[1]), dtype=window_data.dtype)
-                                padded[:window_data.shape[0]] = window_data
-                                window_data = padded
-                    else:
-                        # Regular handling for 2D arrays
-                        window_data = modality_data[start:min(end, len(modality_data)), :]
-
-                        # Pad if needed
-                        if window_data.shape[0] < window_size:
-                            logger.debug(f"Padding {modality} window from {window_data.shape[0]} to {window_size}")
-                            padded = np.zeros((window_size, window_data.shape[1]), dtype=window_data.dtype)
-                            padded[:window_data.shape[0]] = window_data
-                            window_data = padded
-
-                    windowed_data[modality].append(window_data)
-                except Exception as e:
-                    logger.error(f"Error extracting {modality} window at peak {peak}: {str(e)}")
-
-        # If fusion is enabled and we have both accelerometer and gyroscope data
-        if fuse and has_gyro:
+    # Collect results
+    windows_created = 0
+    with tqdm(total=len(window_tasks), desc="Processing windows") as pbar:
+        for peak_idx, peak, future in window_tasks:
             try:
-                # Extract the window data
-                acc_window = data['accelerometer'][start:end, :]
-                gyro_window = data['gyroscope'][start:end, :]
-
-                # Extract timestamps if available
-                timestamps = None
-                if 'aligned_timestamps' in data and start < len(data['aligned_timestamps']):
-                    # Ensure we handle 1D timestamp array correctly
-                    if len(data['aligned_timestamps'].shape) == 1:
-                        timestamps = data['aligned_timestamps'][start:min(end, len(data['aligned_timestamps']))]
-                    else:
-                        # Handle unexpected 2D timestamps if they occur
-                        timestamps = data['aligned_timestamps'][start:min(end, len(data['aligned_timestamps'])), 0]
-
-                # Ensure we have enough data for fusion
-                if len(acc_window) < window_size or len(gyro_window) < window_size:
-                    logger.debug(f"Padding window data for fusion at peak {peak}")
-
-                    # Pad accelerometer data if needed
-                    if len(acc_window) < window_size:
-                        acc_padded = np.zeros((window_size, acc_window.shape[1]), dtype=acc_window.dtype)
-                        acc_padded[:len(acc_window)] = acc_window
-                        acc_window = acc_padded
-
-                    # Pad gyroscope data if needed
-                    if len(gyro_window) < window_size:
-                        gyro_padded = np.zeros((window_size, gyro_window.shape[1]), dtype=gyro_window.dtype)
-                        gyro_padded[:len(gyro_window)] = gyro_window
-                        gyro_window = gyro_padded
-
-                    # Create synthetic timestamps if needed
-                    if timestamps is None or len(timestamps) < window_size:
-                        # Create evenly spaced timestamps from 0 to window_size/30 (assuming 30Hz)
-                        timestamps = np.linspace(0, window_size/30, window_size)
-
-                # Import necessary functions from imu_fusion
-                try:
-                    from utils.imu_fusion import process_imu_data
-
-                    # Process data using IMU fusion
-                    features = process_imu_data(
-                        acc_data=acc_window,
-                        gyro_data=gyro_window,
-                        timestamps=timestamps,
-                        filter_type=filter_type,
-                        return_features=True
-                    )
-
-                    # Add quaternion data
-                    if 'quaternion' not in windowed_data:
-                        windowed_data['quaternion'] = []
-                    windowed_data['quaternion'].append(features['quaternion'])
-
-                    # Add linear acceleration data
-                    if 'linear_acceleration' not in windowed_data:
-                        windowed_data['linear_acceleration'] = []
-                    windowed_data['linear_acceleration'].append(features['linear_acceleration'])
-
-                    # Add fusion features
-                    if 'fusion_features' not in windowed_data:
-                        windowed_data['fusion_features'] = []
-                    if 'fusion_features' in features:
-                        windowed_data['fusion_features'].append(features['fusion_features'])
-
-                    logger.debug(f"Added fusion data for window at peak {peak}")
-                except ImportError:
-                    logger.error("Failed to import IMU fusion functions")
-                except Exception as e:
-                    logger.error(f"Error in fusion processing for peak {peak}: {str(e)}")
+                window_data = future.result()
+                
+                # Add this window's data to the result dictionary
+                for modality, modality_window in window_data.items():
+                    if modality_window is not None:
+                        windowed_data[modality].append(modality_window)
+                
+                windows_created += 1
             except Exception as e:
-                logger.error(f"Error processing window fusion at peak {peak}: {str(e)}")
-
-        windows_created += 1
+                logger.error(f"Error processing window at peak {peak}: {str(e)}")
+            finally:
+                pbar.update(1)
 
     # Convert lists of arrays to arrays
     for modality in windowed_data:
@@ -970,6 +916,102 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
     return windowed_data
 
 
+def _extract_window(data, start, end, window_size, fuse, filter_type):
+    """
+    Helper function to extract a window from data.
+    Designed to be run in a separate thread.
+    
+    Args:
+        data: Dictionary of sensor data arrays
+        start: Start index for window
+        end: End index for window
+        window_size: Target window size
+        fuse: Whether to apply fusion
+        filter_type: Type of filter to use
+        
+    Returns:
+        Dictionary of windowed data
+    """
+    window_data = {}
+    
+    # Extract window for each modality
+    for modality, modality_data in data.items():
+        if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
+            try:
+                # Special handling for one-dimensional arrays like aligned_timestamps
+                if modality == 'aligned_timestamps':
+                    # Handle 1D array - no second dimension indexing
+                    if len(modality_data.shape) == 1:
+                        window_data_array = modality_data[start:min(end, len(modality_data))]
+
+                        # Pad if needed
+                        if len(window_data_array) < window_size:
+                            logger.debug(f"Padding {modality} window from {len(window_data_array)} to {window_size}")
+                            padded = np.zeros(window_size, dtype=window_data_array.dtype)
+                            padded[:len(window_data_array)] = window_data_array
+                            window_data_array = padded
+                    else:
+                        # If somehow it's not 1D, fall back to regular handling
+                        window_data_array = modality_data[start:min(end, len(modality_data)), :]
+                        if window_data_array.shape[0] < window_size:
+                            padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
+                            padded[:window_data_array.shape[0]] = window_data_array
+                            window_data_array = padded
+                else:
+                    # Regular handling for 2D arrays
+                    window_data_array = modality_data[start:min(end, len(modality_data)), :]
+
+                    # Pad if needed
+                    if window_data_array.shape[0] < window_size:
+                        logger.debug(f"Padding {modality} window from {window_data_array.shape[0]} to {window_size}")
+                        padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
+                        padded[:window_data_array.shape[0]] = window_data_array
+                        window_data_array = padded
+
+                window_data[modality] = window_data_array
+            except Exception as e:
+                logger.error(f"Error extracting {modality} window: {str(e)}")
+                window_data[modality] = None
+
+    # Apply fusion if requested and we have both accelerometer and gyroscope
+    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
+        try:
+            # Extract the window data
+            acc_window = window_data['accelerometer']
+            gyro_window = window_data['gyroscope']
+
+            # Extract timestamps if available
+            timestamps = None
+            if 'aligned_timestamps' in window_data:
+                # Ensure we handle 1D timestamp array correctly
+                if len(window_data['aligned_timestamps'].shape) == 1:
+                    timestamps = window_data['aligned_timestamps']
+                else:
+                    # Handle unexpected 2D timestamps if they occur
+                    timestamps = window_data['aligned_timestamps'][:, 0]
+
+            # Process data using IMU fusion
+            features = process_imu_data(
+                acc_data=acc_window,
+                gyro_data=gyro_window,
+                timestamps=timestamps,
+                filter_type=filter_type,
+                return_features=True
+            )
+
+            # Add fusion results to window data
+            window_data['quaternion'] = features['quaternion']
+            window_data['linear_acceleration'] = features['linear_acceleration']
+            if 'fusion_features' in features:
+                window_data['fusion_features'] = features['fusion_features']
+                
+            logger.debug(f"Added fusion data to window")
+        except Exception as e:
+            logger.error(f"Error in fusion processing: {str(e)}")
+    
+    return window_data
+
+
 class DatasetBuilder:
     '''
     Builds a dataset from sensor data files for machine learning.
@@ -985,7 +1027,8 @@ class DatasetBuilder:
         fusion_options: Configuration options for sensor fusion
         **kwargs: Additional arguments
     '''
-    def __init__(self, dataset: object, mode: str, max_length: int, task='fd', fusion_options=None, **kwargs) -> None:
+    def __init__(self, dataset: object, mode: str, max_length: int, task='fd', 
+                 fusion_options=None, **kwargs) -> None:
         logger.info(f"Initializing DatasetBuilder with mode={mode}, task={task}")
 
         if mode not in ['avg_pool', 'sliding_window']:
@@ -1045,18 +1088,21 @@ class DatasetBuilder:
 
         return LOADER_MAP[file_type]
 
-    def process(self, data, label):
+    def process(self, data, label, fuse=False, filter_type='madgwick', visualize=False):
         '''
         Processes data using either average pooling or peak-based sliding windows.
 
         Args:
             data: Dictionary of sensor data
             label: Activity label
+            fuse: Whether to apply sensor fusion
+            filter_type: Type of filter to use
+            visualize: Whether to generate visualizations
 
         Returns:
             Dictionary of processed data
         '''
-        logger.info(f"Processing data for label {label} with mode={self.mode}")
+        logger.info(f"Processing data for label {label} with mode={self.mode}, fusion={fuse}")
 
         if self.mode == 'avg_pool':
             # Use average pooling to create fixed-length data
@@ -1073,6 +1119,29 @@ class DatasetBuilder:
 
             # Add label
             processed_data['labels'] = np.array([label])
+
+            # Apply fusion if requested
+            if fuse and 'accelerometer' in processed_data and 'gyroscope' in processed_data:
+                try:
+                    logger.debug(f"Applying sensor fusion with {filter_type} filter")
+                    
+                    # Extract timestamps if available
+                    timestamps = processed_data.get('aligned_timestamps', None)
+                    
+                    # Process with IMU fusion
+                    fusion_result = process_imu_data(
+                        acc_data=processed_data['accelerometer'],
+                        gyro_data=processed_data['gyroscope'],
+                        timestamps=timestamps,
+                        filter_type=filter_type,
+                        return_features=True
+                    )
+                    
+                    # Add fusion results to processed data
+                    processed_data.update(fusion_result)
+                    
+                except Exception as e:
+                    logger.error(f"Fusion processing failed: {str(e)}")
 
             return processed_data
         else:
@@ -1092,20 +1161,13 @@ class DatasetBuilder:
 
             logger.debug(f"Found {len(peaks)} peaks")
 
-            # Get fusion parameters
-            if self.fusion_options and self.fusion_options.get('enabled', False):
-                filter_type = self.fusion_options.get('filter_type', 'madgwick')
-                logger.debug(f"Using {filter_type} filter for IMU fusion")
-            else:
-                filter_type = 'madgwick'  # Default
-
             # Extract windows around peaks with optional fusion
             processed_data = selective_sliding_window(
                 data=data,
                 window_size=self.max_length,
                 peaks=peaks,
                 label=label,
-                fuse=self.fuse,
+                fuse=fuse,
                 filter_type=filter_type
             )
 
@@ -1140,6 +1202,7 @@ class DatasetBuilder:
     def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick', visualize: bool = False):
         '''
         Creates a dataset from the sensor data files for the specified subjects.
+        Uses parallel processing to handle multiple files concurrently.
 
         Args:
             subjects: List of subject IDs to include
@@ -1147,39 +1210,161 @@ class DatasetBuilder:
             filter_type: Type of fusion filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
             visualize: Whether to generate visualizations
         '''
-        logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
+        self.print_log(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
 
         start_time = time.time()
         self.data = defaultdict(list)
         self.fuse = fuse
 
+        # Group trials by subject for better parallel processing
+        subject_trials = {subject: [] for subject in subjects}
+        for trial in self.dataset.matched_trials:
+            if trial.subject_id in subjects:
+                subject_trials[trial.subject_id].append(trial)
+
+        # Initialize result tracking
         count = 0
         processed_count = 0
         skipped_count = 0
+        trial_results = []
 
-        for trial in self.dataset.matched_trials:
-            count += 1
+        # Process each subject's trials in parallel
+        file_pool = get_file_thread_pool()
+        futures = []
 
-            # Check if trial subject is in requested subjects
-            if trial.subject_id not in subjects:
-                continue
+        # Submit each subject's trials for processing
+        for subject_id, trials in subject_trials.items():
+            if not trials:
+                continue  # Skip empty trial lists
+            
+            # Submit this subject's trials for processing in a separate thread
+            futures.append((
+                subject_id,
+                file_pool.submit(
+                    self._process_subject_trials,
+                    subject_id,
+                    trials,
+                    fuse,
+                    filter_type,
+                    visualize
+                )
+            ))
 
-            logger.debug(f"Processing trial: subject={trial.subject_id}, action={trial.action_id}, seq={trial.sequence_number}")
+        # Collect results with progress reporting
+        with tqdm(total=len(futures), desc="Processing subjects") as pbar:
+            for subject_id, future in futures:
+                try:
+                    subject_data, subject_stats = future.result()
+                    
+                    # Update statistics
+                    count += subject_stats['count']
+                    processed_count += subject_stats['processed']
+                    skipped_count += subject_stats['skipped']
+                    
+                    # Extend trial results
+                    trial_results.extend(subject_data)
+                    
+                    self.print_log(f"Subject {subject_id} processing complete: "
+                                  f"{subject_stats['processed']}/{subject_stats['count']} trials processed, "
+                                  f"{subject_stats['skipped']} skipped")
+                except Exception as e:
+                    self.print_log(f"Error processing subject {subject_id}: {str(e)}")
+                    skipped_count += len(subject_trials[subject_id])
+                finally:
+                    pbar.update(1)
 
-            # Determine label based on task
-            if self.task == 'fd':  # Fall detection
-                label = int(trial.action_id > 9)
-                logger.debug(f"Fall detection task: action_id={trial.action_id} -> label={label}")
-            elif self.task == 'age':
-                label = int(trial.subject_id < 29 or trial.subject_id > 46)
-                logger.debug(f"Age detection task: subject_id={trial.subject_id} -> label={label}")
-            else:  # Activity recognition
-                label = trial.action_id - 1
-                logger.debug(f"Activity recognition task: action_id={trial.action_id} -> label={label}")
+        # Concatenate all trial data
+        for key in self.data:
+            values = [result[key] for result in trial_results if key in result and result[key] is not None]
+            if values:
+                try:
+                    if all(isinstance(x, np.ndarray) for x in values):
+                        self.data[key] = np.concatenate(values, axis=0)
+                        self.print_log(f"Concatenated {key} data: shape={self.data[key].shape}")
+                    else:
+                        self.print_log(f"Cannot concatenate {key} data - not all elements are arrays")
+                except Exception as e:
+                    self.print_log(f"Error concatenating {key} data: {str(e)}")
 
+        elapsed_time = time.time() - start_time
+        self.print_log(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
+
+    def _process_subject_trials(self, subject_id, trials, fuse, filter_type, visualize):
+        """
+        Process all trials for a given subject.
+        
+        Args:
+            subject_id: ID of the subject
+            trials: List of trials for this subject
+            fuse: Whether to apply sensor fusion
+            filter_type: Type of filter to use
+            visualize: Whether to generate visualizations
+            
+        Returns:
+            Tuple of (list of trial data, statistics dictionary)
+        """
+        # Initialize statistics
+        stats = {
+            'count': len(trials),
+            'processed': 0,
+            'skipped': 0
+        }
+        
+        # Create list to hold processed trial data
+        trial_results = []
+        
+        # Process trials in parallel using thread pool
+        # We control parallelism based on number of files
+        batch_size = max(1, min(len(trials), MAX_FILES_PARALLEL // 2))  # Process in smaller batches
+        
+        # Process all trials in batches
+        for i in range(0, len(trials), batch_size):
+            batch_trials = trials[i:i+batch_size]
+            
+            futures = []
+            for trial in batch_trials:
+                # Determine label based on task
+                if self.task == 'fd':  # Fall detection
+                    label = int(trial.action_id > 9)
+                elif self.task == 'age':
+                    label = int(trial.subject_id < 29 or trial.subject_id > 46)
+                else:  # Activity recognition
+                    label = trial.action_id - 1
+                
+                # Submit trial for processing
+                futures.append((
+                    trial,
+                    ThreadPoolExecutor(max_workers=1).submit(  # Use single thread per trial for stability
+                        self._process_single_trial, 
+                        trial, 
+                        label, 
+                        fuse, 
+                        filter_type,
+                        visualize
+                    )
+                ))
+            
+            # Collect batch results
+            for trial, future in futures:
+                try:
+                    trial_data = future.result()
+                    if trial_data and self._len_check(trial_data):
+                        trial_results.append(trial_data)
+                        stats['processed'] += 1
+                    else:
+                        stats['skipped'] += 1
+                except Exception as e:
+                    self.print_log(f"Error processing trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number}: {str(e)}")
+                    stats['skipped'] += 1
+        
+        return trial_results, stats
+
+    def _process_single_trial(self, trial, label, fuse, filter_type, visualize):
+        """Process a single trial with detailed error handling."""
+        try:
             # Create dictionary to hold trial data
             trial_data = defaultdict(np.ndarray)
-
+            
             # Load data from each modality
             executed = True
             for modality, file_path in trial.files.items():
@@ -1189,55 +1374,29 @@ class DatasetBuilder:
                     logger.debug(f"Loaded {modality} data with shape {unimodal_data.shape}")
                 except Exception as e:
                     executed = False
-                    logger.error(f"Error loading {modality} from {file_path}: {str(e)}")
-
+                    raise RuntimeError(f"Error loading {modality} from {file_path}: {str(e)}")
+            
             if not executed:
-                logger.warning(f"Skipping trial due to loading errors")
-                skipped_count += 1
-                continue
-
+                return None
+            
             # Align skeleton and inertial data
-            try:
-                trial_data = align_sequence(trial_data)
-            except Exception as e:
-                logger.error(f"Error aligning trial data: {str(e)}")
-                skipped_count += 1
-                continue
-
+            trial_data = align_sequence(trial_data)
+            
             # Process the aligned data
-            try:
-                trial_data = self.process(trial_data, label)
+            trial_data = self.process(trial_data, label, fuse, filter_type, visualize)
+            
+            return trial_data
+        
+        except Exception as e:
+            # Detailed error logging but don't reraise to continue with other trials
+            self.print_log(f"Trial processing failed: {str(e)}")
+            return None
 
-                # Check if processing yielded sufficient data
-                if self._len_check(trial_data):
-                    self._add_trial_data(trial_data)
-                    processed_count += 1
-                else:
-                    logger.warning(f"Insufficient data after processing, skipping trial")
-                    skipped_count += 1
-            except Exception as e:
-                logger.error(f"Error processing trial data: {str(e)}")
-                skipped_count += 1
-
-        # Concatenate all trial data
-        for key in self.data:
-            if len(self.data[key]) > 0:
-                try:
-                    if all(isinstance(x, np.ndarray) for x in self.data[key]):
-                        self.data[key] = np.concatenate(self.data[key], axis=0)
-                        logger.info(f"Concatenated {key} data: shape={self.data[key].shape}")
-                    else:
-                        logger.warning(f"Cannot concatenate {key} data - not all elements are arrays")
-                except Exception as e:
-                    logger.error(f"Error concatenating {key} data: {str(e)}")
-
-        elapsed_time = time.time() - start_time
-        logger.info(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
-
-        # Create visualizations if requested
-        if visualize:
-            self._visualize_dataset()
-
+    def print_log(self, string: str, print_time=True) -> None:
+        '''Log a message to console and log file'''
+        print(string)
+        logger.info(string)
+        
     def _visualize_dataset(self):
         '''
         Creates visualizations of the dataset characteristics.

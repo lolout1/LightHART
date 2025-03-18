@@ -5,28 +5,28 @@ dataset: smartfallmm
 subjects: [29, 30, 31, 33, 45, 46]
 
 model_args:
-  num_layers: 2
-  embed_dim: 32
+  num_layers: 3
+  embed_dim: 48
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
-  acc_frames: 64
+  acc_frames: 128
   mocap_frames: 64
   num_heads: 8
   fusion_type: 'concat'
-  dropout: 0.3
+  dropout: 0.25
   use_batch_norm: true
 
 dataset_args:
   mode: 'sliding_window'
-  max_length: 64
+  max_length: 128
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'madgwick'
+    filter_type: 'ekf'
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true
@@ -48,9 +48,9 @@ val_feeder_args:
 
 test_feeder_args:
   batch_size: 16
-  drop_last: false
+  drop_last: true
 
 seed: 42
-optimizer: adamw
+optimizer: adam
 base_lr: 0.0005
 weight_decay: 0.001

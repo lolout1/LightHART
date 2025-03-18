@@ -2,11 +2,11 @@ model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
 # Include all subjects for better generalization
-subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
+subjects: [29, 30, 31, 33, 45, 46]
 
 model_args:
   num_layers: 3
-  embed_dim: 32
+  embed_dim: 64
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
@@ -14,7 +14,7 @@ model_args:
   mocap_frames: 64
   num_heads: 8
   fusion_type: 'concat'
-  dropout: 0.3
+  dropout: 0.2
   use_batch_norm: true
 
 dataset_args:
@@ -48,7 +48,7 @@ val_feeder_args:
 
 test_feeder_args:
   batch_size: 16
-  drop_last: false
+  drop_last: true
 
 seed: 42
 optimizer: adam

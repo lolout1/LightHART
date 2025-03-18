@@ -1,3 +1,4 @@
+# utils/imu_fusion.py
 '''
 IMU Fusion Module for Enhanced Orientation Estimation
 
@@ -30,6 +31,7 @@ import torch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import threading
+import queue
 
 # Configure logging
 log_dir = "debug_logs"
@@ -49,9 +51,49 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-# Initialize parallel processing resources
-MAX_THREADS = 4
-thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
+# Parallel processing configuration
+MAX_TOTAL_THREADS = 48  # Total number of threads to use
+MAX_FILES_PARALLEL = 12  # Maximum number of files to process in parallel
+THREADS_PER_FILE = 4    # Threads to use per file
+
+# Thread pool managers
+_file_thread_pool = None
+_processing_thread_pool = {}
+_thread_pool_lock = threading.Lock()
+
+def get_file_thread_pool():
+    """Get or create the file-level thread pool."""
+    global _file_thread_pool
+    with _thread_pool_lock:
+        if _file_thread_pool is None:
+            _file_thread_pool = ThreadPoolExecutor(max_workers=MAX_FILES_PARALLEL)
+        return _file_thread_pool
+
+def get_processing_thread_pool(file_id):
+    """Get or create a thread pool for a specific file."""
+    global _processing_thread_pool
+    with _thread_pool_lock:
+        if file_id not in _processing_thread_pool:
+            _processing_thread_pool[file_id] = ThreadPoolExecutor(max_workers=THREADS_PER_FILE)
+        return _processing_thread_pool[file_id]
+
+def cleanup_thread_pools():
+    """Shut down all thread pools cleanly."""
+    global _file_thread_pool, _processing_thread_pool
+    with _thread_pool_lock:
+        if _file_thread_pool is not None:
+            _file_thread_pool.shutdown(wait=True)
+            _file_thread_pool = None
+        
+        for pool in _processing_thread_pool.values():
+            pool.shutdown(wait=True)
+        _processing_thread_pool.clear()
+
+def cleanup_resources():
+    """Clean up all resources used by the module."""
+    cleanup_thread_pools()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 # GPU Configuration
 def setup_gpu_environment():
@@ -74,6 +116,69 @@ def setup_gpu_environment():
 # Initialize GPU environment
 USE_GPU, GPU_DEVICES = setup_gpu_environment()
 
+def update_thread_configuration(max_files: int, threads_per_file: int):
+    """
+    Update the thread configuration parameters.
+
+    Args:
+        max_files: New value for MAX_FILES_PARALLEL
+        threads_per_file: New value for THREADS_PER_FILE
+    """
+    global MAX_FILES_PARALLEL, THREADS_PER_FILE
+
+    # Clean up existing thread pools first
+    cleanup_thread_pools()
+
+    # Update configuration
+    MAX_FILES_PARALLEL = max_files
+    THREADS_PER_FILE = threads_per_file
+
+    logger.info(f"Thread configuration updated: {MAX_FILES_PARALLEL} files with {THREADS_PER_FILE} threads per file")
+
+def process_multiple_files_parallel(file_data_list, filter_type='madgwick', return_features=True):
+    """
+    Process multiple IMU data files in parallel.
+    
+    Args:
+        file_data_list: List of tuples (file_id, acc_data, gyro_data, timestamps)
+        filter_type: Type of filter to use
+        return_features: Whether to return extracted features
+        
+    Returns:
+        List of processing results in the same order as input
+    """
+    logger.info(f"Processing {len(file_data_list)} files in parallel using {MAX_FILES_PARALLEL} workers")
+    
+    # Get or create file thread pool
+    file_pool = get_file_thread_pool()
+    
+    # Submit all files for processing
+    futures = []
+    for idx, (file_id, acc_data, gyro_data, timestamps) in enumerate(file_data_list):
+        futures.append(file_pool.submit(
+            process_imu_data,
+            acc_data,
+            gyro_data,
+            timestamps,
+            filter_type,
+            return_features,
+            file_id
+        ))
+    
+    # Collect results with progress bar
+    results = []
+    with tqdm(total=len(futures), desc="Processing files") as pbar:
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Error processing file: {str(e)}")
+                results.append(None)
+            finally:
+                pbar.update(1)
+    
+    return results
 
 def align_sensor_data(acc_data: pd.DataFrame, gyro_data: pd.DataFrame,
                      time_tolerance: float = 0.05) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -132,55 +237,14 @@ def align_sensor_data(acc_data: pd.DataFrame, gyro_data: pd.DataFrame,
     aligned_gyro = []
     aligned_times = []
     
-    # Use multithreading for large datasets
-    if len(acc_times) > 1000:
-        logger.debug(f"Using parallel processing for {len(acc_times)} timestamps")
-        
-        # Define the function to process a chunk of timestamps
-        def process_chunk(start_idx, end_idx):
-            local_acc = []
-            local_gyro = []
-            local_times = []
-            
-            # Convert tolerance to appropriate units
-            if isinstance(acc_times[0], np.datetime64):
-                tolerance_ns = np.timedelta64(int(time_tolerance * 1e9), 'ns')
-            else:
-                tolerance_ns = time_tolerance
-                
-            for i in range(start_idx, end_idx):
-                # Find closest gyro time
-                time_diffs = np.abs(gyro_times_np - acc_times_np[i])
-                closest_idx = np.argmin(time_diffs)
-                
-                # If within tolerance, add to matched pairs
-                if time_diffs[closest_idx] <= tolerance_ns:
-                    local_acc.append(acc_data_filtered.iloc[i, 1:4].values)
-                    local_gyro.append(gyro_data_filtered.iloc[closest_idx, 1:4].values)
-                    local_times.append(acc_times[i])
-                    
-            return local_acc, local_gyro, local_times
-        
-        # Split into chunks for parallel processing
-        chunk_size = max(1, len(acc_times) // MAX_THREADS)
-        futures = []
-        
-        # Submit tasks to thread pool
-        for start_idx in range(0, len(acc_times), chunk_size):
-            end_idx = min(start_idx + chunk_size, len(acc_times))
-            futures.append(thread_pool.submit(process_chunk, start_idx, end_idx))
-        
-        # Collect results with progress tracking
-        with tqdm(total=len(futures), desc="Aligning sensor data") as pbar:
-            for future in as_completed(futures):
-                chunk_acc, chunk_gyro, chunk_times = future.result()
-                aligned_acc.extend(chunk_acc)
-                aligned_gyro.extend(chunk_gyro)
-                aligned_times.extend(chunk_times)
-                pbar.update(1)
-    else:
-        # Sequential processing for smaller datasets
-        logger.debug(f"Using sequential processing for {len(acc_times)} timestamps")
+    # Always use multithreading for alignment regardless of dataset size
+    logger.debug(f"Using parallel processing for {len(acc_times)} timestamps")
+    
+    # Define the function to process a chunk of timestamps
+    def process_chunk(start_idx, end_idx):
+        local_acc = []
+        local_gyro = []
+        local_times = []
         
         # Convert tolerance to appropriate units
         if isinstance(acc_times[0], np.datetime64):
@@ -188,16 +252,42 @@ def align_sensor_data(acc_data: pd.DataFrame, gyro_data: pd.DataFrame,
         else:
             tolerance_ns = time_tolerance
             
-        for i, acc_time in enumerate(acc_times):
+        for i in range(start_idx, end_idx):
             # Find closest gyro time
-            time_diffs = np.abs(gyro_times - acc_time)
+            time_diffs = np.abs(gyro_times_np - acc_times_np[i])
             closest_idx = np.argmin(time_diffs)
             
             # If within tolerance, add to matched pairs
             if time_diffs[closest_idx] <= tolerance_ns:
-                aligned_acc.append(acc_data_filtered.iloc[i, 1:4].values)
-                aligned_gyro.append(gyro_data_filtered.iloc[closest_idx, 1:4].values)
-                aligned_times.append(acc_time)
+                local_acc.append(acc_data_filtered.iloc[i, 1:4].values)
+                local_gyro.append(gyro_data_filtered.iloc[closest_idx, 1:4].values)
+                local_times.append(acc_times[i])
+                
+        return local_acc, local_gyro, local_times
+    
+    # Split into chunks for parallel processing
+    chunk_size = max(1, len(acc_times) // THREADS_PER_FILE)
+    futures = []
+    
+    # Create a thread pool specific to this alignment task
+    thread_pool = ThreadPoolExecutor(max_workers=THREADS_PER_FILE)
+    
+    # Submit tasks to thread pool
+    for start_idx in range(0, len(acc_times), chunk_size):
+        end_idx = min(start_idx + chunk_size, len(acc_times))
+        futures.append(thread_pool.submit(process_chunk, start_idx, end_idx))
+    
+    # Collect results with progress tracking
+    with tqdm(total=len(futures), desc="Aligning sensor data") as pbar:
+        for future in as_completed(futures):
+            chunk_acc, chunk_gyro, chunk_times = future.result()
+            aligned_acc.extend(chunk_acc)
+            aligned_gyro.extend(chunk_gyro)
+            aligned_times.extend(chunk_times)
+            pbar.update(1)
+    
+    # Clean up thread pool
+    thread_pool.shutdown()
 
     # Convert to numpy arrays
     aligned_acc = np.array(aligned_acc)
@@ -1102,23 +1192,110 @@ def apply_adaptive_filter(acc_data: np.ndarray, cutoff_freq: float = 2.0, fs: fl
     return filtered_data
 
 
-# Parallelized IMU processing function
-def process_imu_batch(batch_index, acc_data, gyro_data, timestamps, filter_type, return_features):
-    """Process a batch of IMU data in parallel"""
+def process_imu_data_chunk(chunk_id: int, acc_data: np.ndarray, gyro_data: np.ndarray, 
+                         timestamps: Optional[np.ndarray], filter_type: str, 
+                         start_quaternion: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
+    """
+    Process a chunk of IMU data for parallelization.
+
+    Args:
+        chunk_id: Identifier for this chunk
+        acc_data: Accelerometer data for this chunk
+        gyro_data: Gyroscope data for this chunk
+        timestamps: Timestamps for this chunk
+        filter_type: Type of filter to use
+        start_quaternion: Initial quaternion for continuity between chunks
+
+    Returns:
+        Dictionary with processed data
+    """
     try:
-        result = process_imu_data(acc_data, gyro_data, timestamps, filter_type, return_features)
-        return batch_index, result
+        # Apply adaptive filtering to linear acceleration
+        if acc_data.shape[0] >= 15:  # Only filter if enough samples
+            acc_data = apply_adaptive_filter(acc_data)
+
+        # Initialize orientation filter
+        if filter_type.lower() == 'madgwick':
+            orientation_filter = MadgwickFilter()
+        elif filter_type.lower() == 'comp':
+            orientation_filter = CompFilter()
+        elif filter_type.lower() == 'kalman':
+            orientation_filter = KalmanFilter()
+        elif filter_type.lower() == 'ekf':
+            orientation_filter = ExtendedKalmanFilter()
+        elif filter_type.lower() == 'ukf':
+            orientation_filter = UnscentedKalmanFilter()
+        else:
+            logger.warning(f"Unknown filter type: {filter_type}, falling back to Madgwick")
+            orientation_filter = MadgwickFilter()
+
+        # Set initial quaternion if provided
+        if start_quaternion is not None:
+            orientation_filter.orientation_q = start_quaternion
+
+        # Process data
+        quaternions = []
+        acc_with_gravity = []  # Store accelerometer with added gravity for each frame
+
+        for i in range(len(acc_data)):
+            # For orientation estimation, we need to reconstruct raw accelerometer data
+            # by adding estimated gravity based on current orientation
+            if i > 0:
+                # Use current orientation to estimate gravity direction
+                q = orientation_filter.orientation_q
+                R = Rotation.from_quat([q[1], q[2], q[3], q[0]])  # scipy uses [x,y,z,w]
+                gravity = R.apply([0, 0, 9.81])  # Gravity in body frame
+
+                # Add gravity back to get raw-equivalent accelerometer reading for orientation update
+                raw_equiv_acc = acc_data[i] + gravity
+            else:
+                # For first sample, assume gravity is aligned with z-axis
+                raw_equiv_acc = acc_data[i] + np.array([0, 0, 9.81])
+
+            # Store for later
+            acc_with_gravity.append(raw_equiv_acc)
+
+            # Get sensor readings
+            gyro = gyro_data[i]
+            timestamp = timestamps[i] if timestamps is not None else None
+
+            # Update orientation using raw-equivalent accelerometer data
+            q = orientation_filter.update(raw_equiv_acc, gyro, timestamp)
+            quaternions.append(q)
+
+        # Convert to numpy arrays
+        quaternions = np.array(quaternions)
+        acc_with_gravity = np.array(acc_with_gravity)
+
+        # Return processed data for this chunk
+        return {
+            'quaternion': quaternions,
+            'linear_acceleration': acc_data,
+            'accelerometer': acc_with_gravity,  # Added for completeness
+            'angular_velocity': gyro_data,
+            'final_quaternion': quaternions[-1] if len(quaternions) > 0 else None
+        }
     except Exception as e:
-        logger.error(f"Error processing batch {batch_index}: {str(e)}")
-        return batch_index, None
+        logger.error(f"Error processing IMU data chunk {chunk_id}: {str(e)}")
+        logger.error(traceback.format_exc())
+        # Return empty results with appropriate shapes
+        return {
+            'quaternion': np.zeros((len(acc_data), 4)) if len(acc_data) > 0 else np.zeros((0, 4)),
+            'linear_acceleration': acc_data, 
+            'accelerometer': np.zeros_like(acc_data),
+            'angular_velocity': gyro_data,
+            'final_quaternion': None
+        }
 
 
 def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
                     timestamps: np.ndarray = None,
                     filter_type: str = 'madgwick',
-                    return_features: bool = True) -> Dict[str, np.ndarray]:
+                    return_features: bool = True,
+                    file_id: int = None) -> Dict[str, np.ndarray]:
     """
     Process IMU data to extract orientation and derived features.
+    Uses parallel processing for large datasets.
 
     Important: This function assumes acc_data is already linear acceleration,
     not raw accelerometer data with gravity component.
@@ -1129,6 +1306,7 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
         timestamps: Optional timestamps for variable rate processing
         filter_type: Type of orientation filter ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
         return_features: Whether to compute derived features
+        file_id: Optional identifier for this file (for thread pool management)
 
     Returns:
         Dictionary with processed data and features
@@ -1155,108 +1333,156 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             timestamps = timestamps[:min_len]
 
     try:
-        # Apply adaptive filtering to linear acceleration data if enough samples
-        if acc_data.shape[0] >= 20:  # Only filter if we have enough data
-            try:
-                acc_data = apply_adaptive_filter(acc_data)
-            except Exception as e:
-                logger.warning(f"Adaptive filtering failed, using raw data: {str(e)}")
-        else:
-            logger.debug(f"Skipping adaptive filter, not enough samples: {acc_data.shape[0]}")
-
-        # Initialize orientation filter based on type
-        if filter_type.lower() == 'madgwick':
-            orientation_filter = MadgwickFilter()
-        elif filter_type.lower() == 'comp':
-            orientation_filter = CompFilter()
-        elif filter_type.lower() == 'kalman':
-            orientation_filter = KalmanFilter()
-        elif filter_type.lower() == 'ekf':
-            orientation_filter = ExtendedKalmanFilter()
-        elif filter_type.lower() == 'ukf':
-            orientation_filter = UnscentedKalmanFilter()
-        else:
-            logger.error(f"Unknown filter type: {filter_type}, falling back to Madgwick")
-            orientation_filter = MadgwickFilter()
-
-        # Process data
-        quaternions = []
-
-        # Use GPU for batch processing if available
-        if USE_GPU and len(acc_data) > 100:
-            try:
-                # Move data to GPU
-                device_id = GPU_DEVICES[0] if GPU_DEVICES else 'cpu'
-                device = torch.device(f'cuda:{device_id}' if device_id != 'cpu' else 'cpu')
-                
-                logger.info(f"Using GPU acceleration for orientation estimation on device {device}")
-                # This is a placeholder for GPU acceleration
-                # In a real implementation, you would use PyTorch tensors here
-                # and implement the filter algorithm on GPU
-                # For now, just fall back to CPU processing
-            except Exception as e:
-                logger.warning(f"GPU acceleration failed: {str(e)}, falling back to CPU")
-        
-        # Process with progress updates for long sequences
-        if len(acc_data) > 1000:
-            logger.info(f"Processing {len(acc_data)} samples with {filter_type} filter")
+        # Process data using parallel chunks for large datasets
+        data_length = len(acc_data)
+        if data_length > 1000:  # Large dataset
+            # Determine optimal chunk size based on data length
+            num_chunks = min(THREADS_PER_FILE, max(1, data_length // 500))
+            chunk_size = data_length // num_chunks
             
-            # Create a progress bar
-            for i in tqdm(range(len(acc_data)), desc=f"Estimating orientation with {filter_type}"):
-                # For orientation estimation, we need to reconstruct raw accelerometer data
-                # by adding estimated gravity based on current orientation
-                if i > 0:
-                    # Use current orientation to estimate gravity direction
-                    q = orientation_filter.orientation_q
-                    R = Rotation.from_quat([q[1], q[2], q[3], q[0]])  # scipy uses [x,y,z,w]
-                    gravity = R.apply([0, 0, 9.81])  # Gravity in body frame
-
-                    # Add gravity back to get raw-equivalent accelerometer reading for orientation update
-                    raw_equiv_acc = acc_data[i] + gravity
+            logger.info(f"Using {num_chunks} parallel chunks for processing {data_length} samples")
+            
+            # Create a thread pool for this file
+            if file_id is None:
+                file_id = id(acc_data)  # Use object ID as fallback
+            
+            # Get or create a thread pool for this file
+            thread_pool = get_processing_thread_pool(file_id)
+            
+            # Create chunks with overlap
+            futures = []
+            last_quaternion = None
+            
+            for i in range(num_chunks):
+                start_idx = i * chunk_size
+                end_idx = min(data_length, (i + 1) * chunk_size + 5)  # 5-sample overlap
+                
+                # Extract chunk data
+                chunk_acc = acc_data[start_idx:end_idx]
+                chunk_gyro = gyro_data[start_idx:end_idx]
+                chunk_timestamps = timestamps[start_idx:end_idx] if timestamps is not None else None
+                
+                # Submit task
+                futures.append((
+                    i,
+                    thread_pool.submit(
+                        process_imu_data_chunk,
+                        i,
+                        chunk_acc,
+                        chunk_gyro,
+                        chunk_timestamps,
+                        filter_type,
+                        last_quaternion
+                    )
+                ))
+                
+                # Ensure each chunk starts with the final orientation from the previous chunk
+                if i < num_chunks - 1:
+                    # Process just enough samples to get a good quaternion for the next chunk
+                    mini_acc = acc_data[end_idx-10:end_idx+10] if end_idx+10 < data_length else acc_data[end_idx-10:end_idx]
+                    mini_gyro = gyro_data[end_idx-10:end_idx+10] if end_idx+10 < data_length else gyro_data[end_idx-10:end_idx]
+                    mini_ts = timestamps[end_idx-10:end_idx+10] if timestamps is not None and end_idx+10 < data_length else timestamps[end_idx-10:end_idx] if timestamps is not None else None
+                    
+                    # Initialize appropriate filter
+                    if filter_type.lower() == 'madgwick':
+                        mini_filter = MadgwickFilter()
+                    elif filter_type.lower() == 'comp':
+                        mini_filter = CompFilter()
+                    elif filter_type.lower() == 'kalman':
+                        mini_filter = KalmanFilter()
+                    elif filter_type.lower() == 'ekf':
+                        mini_filter = ExtendedKalmanFilter()
+                    elif filter_type.lower() == 'ukf':
+                        mini_filter = UnscentedKalmanFilter()
+                    else:
+                        mini_filter = MadgwickFilter()
+                    
+                    # Start with the last quaternion if available
+                    if last_quaternion is not None:
+                        mini_filter.orientation_q = last_quaternion
+                    
+                    # Process the mini segment to get a continuation quaternion
+                    for j in range(len(mini_acc)):
+                        # Add gravity component based on current orientation
+                        q = mini_filter.orientation_q
+                        R = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                        gravity = R.apply([0, 0, 9.81])
+                        acc_with_g = mini_acc[j] + gravity
+                        
+                        # Update orientation
+                        ts = mini_ts[j] if mini_ts is not None else None
+                        q = mini_filter.update(acc_with_g, mini_gyro[j], ts)
+                    
+                    # Use this quaternion for the next chunk
+                    last_quaternion = mini_filter.orientation_q
+            
+            # Collect results
+            all_chunks = []
+            for chunk_id, future in sorted(futures):
+                try:
+                    chunk_result = future.result()
+                    all_chunks.append(chunk_result)
+                except Exception as e:
+                    logger.error(f"Error in chunk {chunk_id}: {e}")
+                    # Handle failure by inserting empty data
+                    start_idx = chunk_id * chunk_size
+                    end_idx = min(data_length, (chunk_id + 1) * chunk_size)
+                    chunk_length = end_idx - start_idx
+                    all_chunks.append({
+                        'quaternion': np.zeros((chunk_length, 4)),
+                        'linear_acceleration': acc_data[start_idx:end_idx],
+                        'accelerometer': np.zeros((chunk_length, 3)),
+                        'angular_velocity': gyro_data[start_idx:end_idx],
+                        'final_quaternion': None
+                    })
+            
+            # Combine chunks (skipping overlap)
+            quaternions = []
+            linear_acc = []
+            accelerometer = []
+            angular_velocity = []
+            
+            for i, chunk in enumerate(all_chunks):
+                # Determine how many samples to take from this chunk
+                if i < len(all_chunks) - 1:
+                    # Not the last chunk - take all but the overlap
+                    end_idx = len(chunk['quaternion']) - 5 if len(chunk['quaternion']) > 5 else len(chunk['quaternion'])
                 else:
-                    # For first sample, assume gravity is aligned with z-axis
-                    raw_equiv_acc = acc_data[i] + np.array([0, 0, 9.81])
-
-                # Get sensor readings
-                gyro = gyro_data[i]
-                timestamp = timestamps[i] if timestamps is not None else None
-
-                # Update orientation using raw-equivalent accelerometer data
-                q = orientation_filter.update(raw_equiv_acc, gyro, timestamp)
-                quaternions.append(q)
+                    # Last chunk - take everything
+                    end_idx = len(chunk['quaternion'])
+                
+                # Add data to the combined result
+                quaternions.append(chunk['quaternion'][:end_idx])
+                linear_acc.append(chunk['linear_acceleration'][:end_idx])
+                accelerometer.append(chunk['accelerometer'][:end_idx])
+                angular_velocity.append(chunk['angular_velocity'][:end_idx])
+            
+            # Concatenate all chunks
+            quaternions = np.concatenate(quaternions, axis=0)
+            linear_acc = np.concatenate(linear_acc, axis=0)
+            accelerometer = np.concatenate(accelerometer, axis=0)
+            angular_velocity = np.concatenate(angular_velocity, axis=0)
+            
+            # Trim to original length
+            quaternions = quaternions[:data_length]
+            linear_acc = linear_acc[:data_length]
+            accelerometer = accelerometer[:data_length]
+            angular_velocity = angular_velocity[:data_length]
+            
         else:
-            # Standard processing for smaller sequences
-            logger.debug(f"Starting orientation estimation for {len(acc_data)} samples")
-            for i in range(len(acc_data)):
-                # For orientation estimation, we need to reconstruct raw accelerometer data
-                # by adding estimated gravity based on current orientation
-                if i > 0:
-                    # Use current orientation to estimate gravity direction
-                    q = orientation_filter.orientation_q
-                    R = Rotation.from_quat([q[1], q[2], q[3], q[0]])  # scipy uses [x,y,z,w]
-                    gravity = R.apply([0, 0, 9.81])  # Gravity in body frame
+            # For smaller datasets, process sequentially
+            chunk_result = process_imu_data_chunk(
+                0, acc_data, gyro_data, timestamps, filter_type
+            )
+            quaternions = chunk_result['quaternion']
+            linear_acc = chunk_result['linear_acceleration']
+            accelerometer = chunk_result['accelerometer']
+            angular_velocity = chunk_result['angular_velocity']
 
-                    # Add gravity back to get raw-equivalent accelerometer reading for orientation update
-                    raw_equiv_acc = acc_data[i] + gravity
-                else:
-                    # For first sample, assume gravity is aligned with z-axis
-                    raw_equiv_acc = acc_data[i] + np.array([0, 0, 9.81])
-
-                # Get sensor readings
-                gyro = gyro_data[i]
-                timestamp = timestamps[i] if timestamps is not None else None
-
-                # Update orientation using raw-equivalent accelerometer data
-                q = orientation_filter.update(raw_equiv_acc, gyro, timestamp)
-                quaternions.append(q)
-
-        # Convert to numpy arrays
-        quaternions = np.array(quaternions)
-
-        # Create result dictionary - linear_acceleration is passed through
+        # Create result dictionary
         results = {
             'quaternion': quaternions,
-            'linear_acceleration': acc_data  # Pass through the input linear acceleration
+            'linear_acceleration': linear_acc  # Pass through the input linear acceleration
         }
 
         # Extract features if requested
@@ -1264,8 +1490,8 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             logger.debug("Extracting derived features")
             features = extract_features_from_window({
                 'quaternion': quaternions,
-                'linear_acceleration': acc_data,
-                'angular_velocity': gyro_data
+                'linear_acceleration': linear_acc,
+                'angular_velocity': angular_velocity
             })
             results['fusion_features'] = features
 
@@ -1276,6 +1502,7 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
 
     except Exception as e:
         logger.error(f"Error in IMU processing: {str(e)}")
+        logger.error(traceback.format_exc())
         # Return empty results on error
         return {
             'quaternion': np.zeros((len(acc_data), 4)) if len(acc_data) > 0 else np.zeros((0, 4)),
