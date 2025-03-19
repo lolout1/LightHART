@@ -120,7 +120,7 @@ train_model() {
         --config $config_file \
         --work-dir $output_dir \
         --model-saved-name $model_name \
-        --device 0 \
+        --device 0 1 \
         --multi-gpu True \
         --kfold True \
         --parallel-threads 40 \
