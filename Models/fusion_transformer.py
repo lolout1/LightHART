@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 import math
@@ -9,36 +9,22 @@ import traceback
 logger = logging.getLogger("model")
 
 class FusionTransModel(nn.Module):
-    def __init__(self,
-                acc_frames=64,
-                mocap_frames=64,
-                num_classes=2,
-                num_heads=4,
-                acc_coords=3,
-                quat_coords=4,
-                num_layers=2,
-                embed_dim=32,
-                fusion_type='concat',
-                dropout=0.3,
-                use_batch_norm=True,
-                feature_dim=None,
-                **kwargs):
+    def __init__(self, acc_frames=64, mocap_frames=64, num_classes=2, num_heads=4, 
+                 acc_coords=3, quat_coords=4, num_layers=3, embed_dim=32, 
+                 fusion_type='concat', dropout=0.3, use_batch_norm=True, feature_dim=None, **kwargs):
         super().__init__()
         self.fusion_type = fusion_type
         self.acc_frames = acc_frames
-        self.mocap_frames = mocap_frames
         self.embed_dim = embed_dim
         self.acc_coords = acc_coords
         self.quat_coords = quat_coords
         self.num_classes = num_classes
-        
         self.seq_len = self.acc_frames
         
         self.acc_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-            nn.GELU(),
-            nn.Dropout(dropout/2),
+            nn.GELU(), nn.Dropout(dropout/2),
             nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
@@ -47,8 +33,7 @@ class FusionTransModel(nn.Module):
         self.gyro_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-            nn.GELU(),
-            nn.Dropout(dropout/2),
+            nn.GELU(), nn.Dropout(dropout/2),
             nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
@@ -57,8 +42,7 @@ class FusionTransModel(nn.Module):
         self.quat_encoder = nn.Sequential(
             nn.Conv1d(quat_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-            nn.GELU(),
-            nn.Dropout(dropout/2),
+            nn.GELU(), nn.Dropout(dropout/2),
             nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
@@ -70,7 +54,6 @@ class FusionTransModel(nn.Module):
             elif fusion_type in ['attention', 'weighted']:
                 self.feature_dim = embed_dim
             else:
-                logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'concat'")
                 self.fusion_type = 'concat'
                 self.feature_dim = embed_dim * 3
         else:
@@ -80,8 +63,6 @@ class FusionTransModel(nn.Module):
         
         if self.feature_dim % num_heads != 0:
             adjusted_heads = max(1, self.feature_dim // (self.feature_dim // num_heads))
-            if adjusted_heads != num_heads:
-                logger.info(f"Adjusting number of heads from {num_heads} to {adjusted_heads} to match feature dimension")
             num_heads = adjusted_heads
             
         encoder_layers = nn.TransformerEncoderLayer(
@@ -103,13 +84,14 @@ class FusionTransModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(self.feature_dim, 64),
             nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, num_classes)
+            nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(64, 32),
+            nn.LayerNorm(32) if use_batch_norm else nn.Identity(),
+            nn.ReLU(), nn.Dropout(dropout/2),
+            nn.Linear(32, num_classes)
         )
         
-        logger.info(f"Initialized FusionTransModel with feature_dim={self.feature_dim}, num_heads={num_heads}")
-        logger.info(f"Fusion type: {self.fusion_type}")
+        nn.init.xavier_normal_(self.classifier[-1].weight)
 
     def forward_all_modalities(self, acc_data, gyro_data, quat_data=None):
         try:
@@ -127,30 +109,36 @@ class FusionTransModel(nn.Module):
                 quat_features = rearrange(quat_features, 'b c l -> b l c')
             else:
                 batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
-                quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, 
-                                         device=acc_data.device)
+                quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
-                
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
             elif self.fusion_type == 'attention':
-                fused_features = acc_features + gyro_features + quat_features
-                fused_features = self.feature_adapter(fused_features)
+                q = self.feature_adapter(acc_features)
+                k = torch.cat([gyro_features, quat_features], dim=2)
+                v = torch.cat([gyro_features, quat_features], dim=2)
+                
+                k_adapter = nn.Linear(k.shape[2], q.shape[2], device=acc_data.device)
+                v_adapter = nn.Linear(v.shape[2], q.shape[2], device=acc_data.device)
+                
+                k = k_adapter(k)
+                v = v_adapter(v)
+                
+                scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(q.shape[-1])
+                attn_weights = F.softmax(scores, dim=-1)
+                fused_features = torch.matmul(attn_weights, v)
             elif self.fusion_type == 'weighted':
-                weights = torch.softmax(torch.tensor([1.0, 1.0, 0.8], device=acc_data.device), dim=0)
-                fused_features = weights[0] * acc_features + weights[1] * gyro_features + weights[2] * quat_features
+                weights = torch.softmax(torch.tensor([1.0, 1.0, 1.5], device=acc_data.device), dim=0)
+                fused_features = (weights[0] * acc_features + weights[1] * gyro_features + weights[2] * quat_features)
                 fused_features = self.feature_adapter(fused_features)
             
             transformer_output = self.transformer(fused_features)
-            
             pooled = torch.mean(transformer_output, dim=1)
-            
             logits = self.classifier(pooled)
             
             return logits
-            
         except Exception as e:
             logger.error(f"Error in forward_all_modalities: {e}")
             logger.error(traceback.format_exc())
@@ -167,12 +155,10 @@ class FusionTransModel(nn.Module):
             gyro_features = rearrange(gyro_features, 'b c l -> b l c')
             
             batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
-            quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, 
-                                     device=acc_data.device)
+            quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
-                
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
             elif self.fusion_type == 'attention' or self.fusion_type == 'weighted':
@@ -181,13 +167,10 @@ class FusionTransModel(nn.Module):
                 fused_features = self.feature_adapter(fused_features)
             
             transformer_output = self.transformer(fused_features)
-            
             pooled = torch.mean(transformer_output, dim=1)
-            
             logits = self.classifier(pooled)
             
             return logits
-            
         except Exception as e:
             logger.error(f"Error in forward_acc_gyro_only: {e}")
             logger.error(traceback.format_exc())
@@ -202,25 +185,16 @@ class FusionTransModel(nn.Module):
             batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
             
             if self.fusion_type == 'concat':
-                dummy_features = torch.zeros(
-                    batch_size, 
-                    seq_len, 
-                    self.feature_dim - self.embed_dim,
-                    device=acc_data.device
-                )
-                
+                dummy_features = torch.zeros(batch_size, seq_len, self.feature_dim - self.embed_dim, device=acc_data.device)
                 fused_features = torch.cat([acc_features, dummy_features], dim=2)
             else:
                 fused_features = self.feature_adapter(acc_features)
             
             transformer_output = self.transformer(fused_features)
-            
             pooled = torch.mean(transformer_output, dim=1)
-            
             logits = self.classifier(pooled)
             
             return logits
-            
         except Exception as e:
             logger.error(f"Error in forward_accelerometer_only: {e}")
             logger.error(traceback.format_exc())
@@ -233,30 +207,22 @@ class FusionTransModel(nn.Module):
                 has_gyro = 'gyroscope' in data and data['gyroscope'] is not None
                 has_quaternion = 'quaternion' in data and data['quaternion'] is not None
                 
-                if has_acc and not has_gyro:
-                    logger.info("No gyroscope data, using accelerometer-only forward path")
-                    return self.forward_accelerometer_only(data['accelerometer'])
+                if not has_quaternion and has_acc and has_gyro:
+                    batch_size, seq_len = data['accelerometer'].shape[:2]
+                    device = data['accelerometer'].device
+                    data['quaternion'] = torch.zeros(batch_size, seq_len, 4, device=device)
+                    has_quaternion = True
                 
-                if has_acc and has_gyro:
-                    if has_quaternion:
-                        return self.forward_all_modalities(
-                            data['accelerometer'],
-                            data['gyroscope'],
-                            data['quaternion']
-                        )
-                    else:
-                        return self.forward_acc_gyro_only(
-                            data['accelerometer'],
-                            data['gyroscope']
-                        )
-                
+                if has_acc and has_gyro and has_quaternion:
+                    return self.forward_all_modalities(data['accelerometer'], data['gyroscope'], data['quaternion'])
+                elif has_acc and has_gyro:
+                    return self.forward_acc_gyro_only(data['accelerometer'], data['gyroscope'])
                 elif has_acc:
                     return self.forward_accelerometer_only(data['accelerometer'])
                 else:
                     raise ValueError("Input must contain at least accelerometer data")
             else:
                 return self.forward_accelerometer_only(data)
-                    
         except Exception as e:
             logger.error(f"Error in forward pass: {str(e)}")
             if isinstance(data, dict) and 'accelerometer' in data:
@@ -264,5 +230,4 @@ class FusionTransModel(nn.Module):
                     return self.forward_accelerometer_only(data['accelerometer'])
                 except:
                     pass
-            
             raise

@@ -20,7 +20,7 @@ model_args:
 
 dataset_args:
   mode: 'sliding_window'
-  max_length: 64
+  max_length: 128
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
