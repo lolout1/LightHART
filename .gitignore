@@ -3,8 +3,29 @@ results_hybrid/
 results_comparison/
 fused/
 debug_logs/
-
+data/
 # Ignore all files with the .out extension
 *.out
 *.log
 *.pyc
+*.png
+*.csv
+*.jpg
+work_dir/
+# Ignore specific file
+config/smartfallmm/fusion_comparison.yaml
+
+# Ignore directories
+data/
+dataset_visualizations/
+latest_filter_comparison/
+results/
+results_comparison_20250318_015120/
+results_optimized/
+work_dir/
+
+# Ignore specific files
+t.sh
+test_filters.py
+train_magdwick.sh
+
