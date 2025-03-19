@@ -1,7 +1,7 @@
+# config/smartfallmm/fusion_comparison.yaml
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Include all subjects for comprehensive testing
 subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
 
 model_args:
@@ -13,11 +13,10 @@ model_args:
   acc_frames: 64
   mocap_frames: 64
   num_heads: 4
-  fusion_type: 'concat'
+  fusion_type: 'concat'  # Options: 'concat', 'attention', 'weighted'
   dropout: 0.3
   use_batch_norm: true
-  # For concat fusion with 3 modalities: embed_dim * 3
-  feature_dim: 96
+  feature_dim: 96  # For concat fusion with accelerometer, gyroscope, and quaternion
 
 dataset_args:
   mode: 'sliding_window'
@@ -28,34 +27,35 @@ dataset_args:
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'madgwick'  # Default filter will be overridden during comparison
+    filter_type: 'ekf'  # Options: 'madgwick', 'comp', 'kalman', 'ekf', 'ukf'
     acc_threshold: 3.0
     gyro_threshold: 1.0
-    visualize: true
-    save_aligned: false
+    visualize: false
+    save_aligned: true
 
 batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
 num_epoch: 60
 
-# dataloader
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 16
+  drop_last: true
 
 val_feeder_args:
   batch_size: 16
+  drop_last: true
 
 test_feeder_args:
   batch_size: 16
+  drop_last: false
 
 seed: 42
 optimizer: adamw
 base_lr: 0.0005
 weight_decay: 0.001
 
-# Cross-validation settings
 kfold:
   enabled: true
   num_folds: 5

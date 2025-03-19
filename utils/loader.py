@@ -218,15 +218,35 @@ def align_sequence(data):
         logger.error(f"Error in sequence alignment: {str(e)}")
         logger.error(traceback.format_exc())
         return data
-
 def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick'):
+    """
+    Helper function to extract a window from data with proper quaternion handling.
+    Designed to be run in a separate thread.
+    
+    Args:
+        data: Dictionary of sensor data arrays
+        start: Start index for window
+        end: End index for window
+        window_size: Target window size
+        fuse: Whether to apply fusion
+        filter_type: Type of filter to use
+        
+    Returns:
+        Dictionary of windowed data
+    """
     window_data = {}
+    
+    # Extract window for each modality
     for modality, modality_data in data.items():
         if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
             try:
+                # Special handling for one-dimensional arrays
                 if modality == 'aligned_timestamps':
+                    # Handle 1D array - no second dimension indexing
                     if len(modality_data.shape) == 1:
                         window_data_array = modality_data[start:min(end, len(modality_data))]
+                        
+                        # Pad if needed
                         if len(window_data_array) < window_size:
                             padded = np.zeros(window_size, dtype=window_data_array.dtype)
                             padded[:len(window_data_array)] = window_data_array
@@ -238,14 +258,19 @@ def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick')
                             padded[:window_data_array.shape[0]] = window_data_array
                             window_data_array = padded
                 else:
+                    # Regular handling for 2D arrays
                     window_data_array = modality_data[start:min(end, len(modality_data)), :]
+                    
+                    # Pad if needed
                     if window_data_array.shape[0] < window_size:
                         padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
                         padded[:window_data_array.shape[0]] = window_data_array
                         window_data_array = padded
+                
                 window_data[modality] = window_data_array
             except Exception as e:
                 logger.error(f"Error extracting {modality} window: {str(e)}")
+                # Add empty data with correct shape
                 if modality == 'accelerometer':
                     window_data[modality] = np.zeros((window_size, 3))
                 elif modality == 'gyroscope':
@@ -254,42 +279,56 @@ def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick')
                     window_data[modality] = np.zeros((window_size, 4))
                 else:
                     window_data[modality] = None
+
+    # Apply fusion if requested and we have both accelerometer and gyroscope
     if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
         try:
+            # Extract the window data
             acc_window = window_data['accelerometer']
             gyro_window = window_data['gyroscope']
+            
+            # Extract timestamps if available
             timestamps = None
             if 'aligned_timestamps' in window_data:
                 timestamps = window_data['aligned_timestamps']
+                # Convert to 1D array if needed
                 if len(timestamps.shape) > 1:
                     timestamps = timestamps[:, 0] if timestamps.shape[1] > 0 else None
-            from utils.imu_fusion import process_imu_data
+            
+            # Process data using specified filter type
             fusion_results = process_imu_data(
                 acc_data=acc_window,
                 gyro_data=gyro_window,
                 timestamps=timestamps,
-                filter_type=filter_type,
+                filter_type=filter_type,  # Use the specified filter type
                 return_features=False
             )
+            
+            # Add quaternion data from fusion
             window_data['quaternion'] = fusion_results.get('quaternion', np.zeros((window_size, 4)))
-            window_data['linear_acceleration'] = fusion_results.get('linear_acceleration', acc_window)
+                
             logger.debug(f"Added fusion data to window using {filter_type} filter")
         except Exception as e:
             logger.error(f"Error in fusion processing: {str(e)}")
+            # Add empty quaternion as fallback
             window_data['quaternion'] = np.zeros((window_size, 4))
     else:
+        # Always add empty quaternion data as a fallback
         window_data['quaternion'] = np.zeros((window_size, 4))
+    
+    # Final validation of quaternion data
     if 'quaternion' not in window_data or window_data['quaternion'] is None:
         window_data['quaternion'] = np.zeros((window_size, 4))
     elif window_data['quaternion'].shape[0] != window_size:
+        # Fix quaternion shape if needed
         temp = np.zeros((window_size, 4))
         if window_data['quaternion'].shape[0] < window_size:
             temp[:window_data['quaternion'].shape[0]] = window_data['quaternion']
         else:
             temp = window_data['quaternion'][:window_size]
         window_data['quaternion'] = temp
+    
     return window_data
-
 def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int, peaks: Union[List[int], np.ndarray],
                            label: int, fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
     start_time = time.time()

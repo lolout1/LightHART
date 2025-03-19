@@ -578,6 +578,122 @@ class ExtendedKalmanFilter(OrientationFilter):
         
         return H
 
+def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
+                    timestamps: Optional[np.ndarray] = None,
+                    filter_type: str = 'madgwick',
+                    return_features: bool = False) -> Dict[str, np.ndarray]:
+    """
+    Process IMU data with specified filter to estimate orientation.
+
+    Args:
+        acc_data: Accelerometer data [n_samples, 3]
+        gyro_data: Gyroscope data [n_samples, 3]
+        timestamps: Optional timestamps for variable-rate data
+        filter_type: Type of filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
+        return_features: Whether to extract and return features
+
+    Returns:
+        Dictionary with processed data: quaternion, fusion_features (if requested)
+    """
+    start_time = time.time()
+
+    # Validate inputs
+    if not isinstance(acc_data, np.ndarray) or not isinstance(gyro_data, np.ndarray):
+        logger.error(f"Invalid input types: acc={type(acc_data)}, gyro={type(gyro_data)}")
+        return {
+            'quaternion': np.zeros((1, 4)),
+        }
+
+    # Handle empty inputs
+    if acc_data.shape[0] == 0 or gyro_data.shape[0] == 0:
+        logger.error("Empty input data")
+        return {
+            'quaternion': np.zeros((1, 4)),
+        }
+
+    # Ensure data arrays have the same length
+    if acc_data.shape[0] != gyro_data.shape[0]:
+        min_len = min(acc_data.shape[0], gyro_data.shape[0])
+        logger.warning(f"Data length mismatch: acc={acc_data.shape[0]}, gyro={gyro_data.shape[0]}, truncating to {min_len}")
+        acc_data = acc_data[:min_len]
+        gyro_data = gyro_data[:min_len]
+        if timestamps is not None:
+            timestamps = timestamps[:min_len]
+
+    try:
+        # Create timestamps if not provided
+        if timestamps is None:
+            timestamps = np.linspace(0, acc_data.shape[0] / 30.0, acc_data.shape[0])
+
+        # Convert gyro data from degrees/s to radians/s if needed
+        gyro_max = np.max(np.abs(gyro_data))
+        if gyro_max > 20.0:  # Heuristic: gyro values in deg/s are typically larger than rad/s
+            gyro_data = gyro_data * np.pi / 180.0
+
+        # Select the appropriate filter based on filter_type
+        if filter_type.lower() == 'madgwick':
+            orientation_filter = MadgwickFilter()
+            logger.info(f"Applying Madgwick filter to IMU data ({len(acc_data)} samples)")
+        elif filter_type.lower() == 'comp':
+            orientation_filter = ComplementaryFilter()
+            logger.info(f"Applying Complementary filter to IMU data ({len(acc_data)} samples)")
+        elif filter_type.lower() == 'kalman':
+            orientation_filter = KalmanFilter()
+            logger.info(f"Applying Kalman filter to IMU data ({len(acc_data)} samples)")
+        elif filter_type.lower() == 'ekf':
+            orientation_filter = ExtendedKalmanFilter()
+            logger.info(f"Applying Extended Kalman filter to IMU data ({len(acc_data)} samples)")
+        elif filter_type.lower() == 'ukf':
+            orientation_filter = UnscentedKalmanFilter()
+            logger.info(f"Applying Unscented Kalman filter to IMU data ({len(acc_data)} samples)")
+        else:
+            logger.warning(f"Unknown filter type '{filter_type}', defaulting to Madgwick")
+            orientation_filter = MadgwickFilter()
+
+        # Process data with the selected filter
+        quaternions = []
+
+        # Process each time step with appropriate filter
+        for i in range(len(acc_data)):
+            acc = acc_data[i]
+            gyro = gyro_data[i]
+            timestamp = timestamps[i] if timestamps is not None else None
+
+            # Apply the filter to get orientation
+            q = orientation_filter.update(acc, gyro, timestamp)
+            quaternions.append(q)
+
+        # Convert lists to numpy arrays
+        quaternions = np.array(quaternions)
+
+        # Prepare results
+        results = {
+            'quaternion': quaternions,
+        }
+
+        # Extract additional features if requested
+        if return_features:
+            fusion_features = extract_features_from_window({
+                'quaternion': quaternions,
+                'accelerometer': acc_data,     # Original accelerometer data
+                'gyroscope': gyro_data,        # Original gyroscope data
+            })
+            results['fusion_features'] = fusion_features
+
+        elapsed_time = time.time() - start_time
+        logger.info(f"IMU processing with {filter_type} filter completed in {elapsed_time:.2f}s")
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error in IMU processing: {str(e)}")
+        logger.error(traceback.format_exc())
+
+        # Return minimal results on error
+        sample_size = max(1, len(acc_data) if isinstance(acc_data, np.ndarray) else 1)
+        return {
+            'quaternion': np.zeros((sample_size, 4)),
+        }
 class UnscentedKalmanFilter(OrientationFilter):
     def __init__(self, freq: float = 30.0, alpha: float = 0.1, beta: float = 2.0, kappa: float = 0.0):
         super().__init__(freq)
@@ -983,111 +1099,78 @@ def extract_features_from_window(window_data: Dict[str, np.ndarray]) -> np.ndarr
     except Exception as e:
         logger.error(f"Feature extraction failed: {str(e)}")
         return np.zeros(43)
-
-def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray, timestamps: Optional[np.ndarray] = None,
-                    filter_type: str = 'madgwick', return_features: bool = False) -> Dict[str, np.ndarray]:
-    start_time = time.time()
+def compute_metrics(self, outputs, targets):
+    """
+    Compute evaluation metrics from model outputs and targets.
     
-    if not isinstance(acc_data, np.ndarray) or not isinstance(gyro_data, np.ndarray):
-        logger.error(f"Invalid input types: acc={type(acc_data)}, gyro={type(gyro_data)}")
-        return {
-            'quaternion': np.zeros((1, 4)),
-            'linear_acceleration': np.zeros((1, 3)) 
-        }
+    Args:
+        outputs: Model output logits
+        targets: Ground truth labels
+        
+    Returns:
+        Dictionary of metrics (accuracy, precision, recall, f1, etc.)
+    """
+    # Ensure both outputs and targets are on CPU and in numpy format
+    if isinstance(outputs, torch.Tensor):
+        outputs = outputs.detach().cpu().numpy()
+    if isinstance(targets, torch.Tensor):
+        targets = targets.detach().cpu().numpy()
+        
+    # Convert logits to predictions
+    if len(outputs.shape) > 1 and outputs.shape[1] > 1:
+        # Multi-class case
+        predictions = np.argmax(outputs, axis=1)
+    else:
+        # Binary case
+        predictions = (outputs.reshape(-1) > 0).astype(np.int32)
     
-    if acc_data.shape[0] == 0 or gyro_data.shape[0] == 0:
-        logger.error("Empty input data")
-        return {
-            'quaternion': np.zeros((1, 4)),
-            'linear_acceleration': np.zeros((1, 3))
-        }
-    
-    if acc_data.shape[0] != gyro_data.shape[0]:
-        min_len = min(acc_data.shape[0], gyro_data.shape[0])
-        logger.warning(f"Data length mismatch: acc={acc_data.shape[0]}, gyro={gyro_data.shape[0]}, truncating to {min_len}")
-        acc_data = acc_data[:min_len]
-        gyro_data = gyro_data[:min_len]
-        if timestamps is not None:
-            timestamps = timestamps[:min_len]
-    
+    # Calculate confusion matrix directly to avoid issues with skewed classes
     try:
-        if timestamps is None:
-            timestamps = np.linspace(0, acc_data.shape[0] / 30.0, acc_data.shape[0])
+        cm = confusion_matrix(targets, predictions, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
         
-        gyro_max = np.max(np.abs(gyro_data))
-        if gyro_max > 20.0:
-            logger.info(f"Converting gyroscope data from deg/s to rad/s (max value: {gyro_max})")
-            gyro_data = gyro_data * np.pi / 180.0
-        
-        if filter_type == 'madgwick':
-            orientation_filter = MadgwickFilter()
-        elif filter_type == 'comp':
-            orientation_filter = ComplementaryFilter()
-        elif filter_type == 'kalman':
-            orientation_filter = KalmanFilter()
-        elif filter_type == 'ekf':
-            orientation_filter = ExtendedKalmanFilter()
-        elif filter_type == 'ukf':
-            orientation_filter = UnscentedKalmanFilter()
-        else:
-            logger.warning(f"Unknown filter type '{filter_type}', using Madgwick")
-            orientation_filter = MadgwickFilter()
-            filter_type = 'madgwick'
-        
-        logger.info(f"Applying {filter_type} filter to IMU data ({len(acc_data)} samples)")
-        
-        quaternions = []
-        linear_accelerations = []
-        
-        for i in range(len(acc_data)):
-            acc = acc_data[i]
-            gyro = gyro_data[i]
-            timestamp = timestamps[i] if timestamps is not None else None
-            
-            q = orientation_filter.update(acc, gyro, timestamp)
-            quaternions.append(q)
-            
-            if i > 0:
-                R = Rotation.from_quat([q[1], q[2], q[3], q[0]])
-                gravity = R.apply([0, 0, 9.81])
-                lin_acc = acc - gravity
-            else:
-                lin_acc = acc - np.array([0, 0, 9.81])
-            
-            linear_accelerations.append(lin_acc)
-        
-        quaternions = np.array(quaternions)
-        linear_accelerations = np.array(linear_accelerations)
-        
-        results = {
-            'quaternion': quaternions,
-            'linear_acceleration': linear_accelerations
-        }
-        
-        if return_features:
-            window_data = {
-                'quaternion': quaternions,
-                'linear_acceleration': linear_accelerations,
-                'accelerometer': acc_data,
-                'gyroscope': gyro_data
-            }
-            features = extract_features_from_window(window_data)
-            results['fusion_features'] = features
-        
-        elapsed_time = time.time() - start_time
-        logger.info(f"IMU processing with {filter_type} filter completed in {elapsed_time:.2f}s")
-        
-        return results
-    
+        # Calculate metrics from confusion matrix
+        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+        balanced_accuracy = (recall + specificity) / 2
+        false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
+        miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
     except Exception as e:
-        logger.error(f"Error in IMU processing: {str(e)}")
+        logger.warning(f"Error calculating confusion matrix: {e}")
+        # Fallback to simpler calculations
+        accuracy = np.mean(predictions == targets)
+        tp = np.sum((predictions == 1) & (targets == 1))
+        fp = np.sum((predictions == 1) & (targets == 0))
+        fn = np.sum((predictions == 0) & (targets == 1))
+        tn = np.sum((predictions == 0) & (targets == 0))
         
-        sample_size = max(1, len(acc_data) if isinstance(acc_data, np.ndarray) else 1)
-        return {
-            'quaternion': np.zeros((sample_size, 4)),
-            'linear_acceleration': np.zeros((sample_size, 3)) 
-        }
-
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+        balanced_accuracy = (recall + specificity) / 2
+        false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
+        miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
+    
+    # Return all metrics
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'tp': tp,
+        'tn': tn,
+        'fp': fp,
+        'fn': fn,
+        'false_alarm_rate': false_alarm_rate,
+        'miss_rate': miss_rate,
+        'specificity': specificity,
+        'sensitivity': recall,  # Same as recall
+        'balanced_accuracy': balanced_accuracy
+    }
 def save_aligned_sensor_data(subject_id: int, action_id: int, trial_id: int, acc_data: np.ndarray, gyro_data: np.ndarray,
                           skeleton_data: Optional[np.ndarray] = None, timestamps: Optional[np.ndarray] = None,
                           save_dir: str = "data/aligned") -> None:

@@ -32,7 +32,11 @@ def cleanup_on_exit():
 atexit.register(cleanup_on_exit)
 
 logger = logging.getLogger('fall_detection')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -46,54 +50,82 @@ def str2bool(v):
 
 def get_args():
     parser = argparse.ArgumentParser(description='Fall Detection and Human Activity Recognition')
-    
-    parser.add_argument('--config', default='./config/smartfallmm/ekf_fusion.yaml', help='Path to the configuration file')
-    parser.add_argument('--dataset', type=str, default='smartfallmm', help='Dataset name to use')
-    parser.add_argument('--phase', type=str, default='train', help='Phase: train or test')
-    parser.add_argument('--work-dir', type=str, default='work_dir', help='Working directory for outputs')
-    
-    parser.add_argument('--model', default=None, help='Model class path to load')
-    parser.add_argument('--model-args', default=None, help='Dictionary of model arguments')
-    parser.add_argument('--weights', type=str, help='Path to pretrained weights file')
-    parser.add_argument('--model-saved-name', type=str, default='model', help='Name for saving the trained model')
-    
-    parser.add_argument('--batch-size', type=int, default=16, metavar='N', help='Input batch size for training (default: 16)')
-    parser.add_argument('--test-batch-size', type=int, default=16, metavar='N', help='Input batch size for testing (default: 16)')
-    parser.add_argument('--val-batch-size', type=int, default=16, metavar='N', help='Input batch size for validation (default: 16)')
-    parser.add_argument('--num-epoch', type=int, default=60, metavar='N', help='Number of epochs to train (default: 60)')
-    parser.add_argument('--start-epoch', type=int, default=0, help='Starting epoch number (default: 0)')
-    parser.add_argument('--patience', type=int, default=15, help='Patience for early stopping (default: 15)')
-    
-    parser.add_argument('--optimizer', type=str, default='adamw', help='Optimizer to use (adamw, adam, sgd)')
-    parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR', help='Base learning rate (default: 0.0005)')
-    parser.add_argument('--weight-decay', type=float, default=0.001, help='Weight decay factor (default: 0.001)')
-    parser.add_argument('--scheduler', type=str, default='plateau', help='Learning rate scheduler (plateau, cosine)')
-    parser.add_argument('--grad-clip', type=float, default=1.0, help='Gradient clipping value (default: 1.0)')
-    
-    parser.add_argument('--loss', default='torch.nn.CrossEntropyLoss', help='Loss function class path')
-    parser.add_argument('--loss-args', default="{}", type=str, help='Dictionary of loss function arguments')
-    
-    parser.add_argument('--dataset-args', default=None, help='Arguments for the dataset')
-    parser.add_argument('--subjects', nargs='+', type=int, help='Subject IDs to include')
-    parser.add_argument('--feeder', default=None, help='DataLoader class path')
-    parser.add_argument('--train-feeder-args', default=None, help='Arguments for training data loader')
-    parser.add_argument('--val-feeder-args', default=None, help='Arguments for validation data loader')
-    parser.add_argument('--test-feeder-args', default=None, help='Arguments for test data loader')
-    
-    parser.add_argument('--device', nargs='+', default=[0, 1], type=int, help='CUDA device IDs to use')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed (default: 42)')
-    parser.add_argument('--num-worker', type=int, default=8, help='Number of workers for data loading')
-    parser.add_argument('--multi-gpu', type=str2bool, default=True, help='Whether to use multiple GPUs when available')
-    parser.add_argument('--parallel-threads', type=int, default=48, help='Number of parallel threads for preprocessing')
-    
-    parser.add_argument('--include-val', type=str2bool, default=True, help='Whether to include validation set')
-    parser.add_argument('--result-file', type=str, help='File to save results to')
-    
-    parser.add_argument('--kfold', type=str2bool, default=True, help='Whether to use k-fold cross-validation')
-    parser.add_argument('--num-folds', type=int, default=5, help='Number of folds for cross-validation')
-    
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='How many batches to wait before logging training status')
-    parser.add_argument('--print-log', type=str2bool, default=True, help='Whether to print and save logs')
+    parser.add_argument('--config', default='./config/smartfallmm/madgwick_fusion.yaml',
+                        help='Path to the configuration file')
+    parser.add_argument('--dataset', type=str, default='smartfallmm',
+                        help='Dataset name to use')
+    parser.add_argument('--phase', type=str, default='train',
+                        help='Phase: train or test')
+    parser.add_argument('--work-dir', type=str, default='work_dir',
+                        help='Working directory for outputs')
+    parser.add_argument('--model', default=None,
+                        help='Model class path to load')
+    parser.add_argument('--model-args', default=None,
+                        help='Dictionary of model arguments')
+    parser.add_argument('--weights', type=str,
+                        help='Path to pretrained weights file')
+    parser.add_argument('--model-saved-name', type=str, default='model',
+                        help='Name for saving the trained model')
+    parser.add_argument('--batch-size', type=int, default=16, metavar='N',
+                        help='Input batch size for training (default: 16)')
+    parser.add_argument('--test-batch-size', type=int, default=16, metavar='N',
+                        help='Input batch size for testing (default: 16)')
+    parser.add_argument('--val-batch-size', type=int, default=16, metavar='N',
+                        help='Input batch size for validation (default: 16)')
+    parser.add_argument('--num-epoch', type=int, default=60, metavar='N',
+                        help='Number of epochs to train (default: 60)')
+    parser.add_argument('--start-epoch', type=int, default=0,
+                        help='Starting epoch number (default: 0)')
+    parser.add_argument('--patience', type=int, default=15,
+                        help='Patience for early stopping (default: 15)')
+    parser.add_argument('--optimizer', type=str, default='adamw',
+                        help='Optimizer to use (adamw, adam, sgd)')
+    parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR',
+                        help='Base learning rate (default: 0.0005)')
+    parser.add_argument('--weight-decay', type=float, default=0.001,
+                        help='Weight decay factor (default: 0.001)')
+    parser.add_argument('--scheduler', type=str, default='plateau',
+                        help='Learning rate scheduler (plateau, cosine)')
+    parser.add_argument('--grad-clip', type=float, default=1.0,
+                        help='Gradient clipping value (default: 1.0)')
+    parser.add_argument('--loss', default='torch.nn.CrossEntropyLoss',
+                        help='Loss function class path')
+    parser.add_argument('--loss-args', default="{}", type=str,
+                        help='Dictionary of loss function arguments')
+    parser.add_argument('--dataset-args', default=None,
+                        help='Arguments for the dataset')
+    parser.add_argument('--subjects', nargs='+', type=int,
+                        help='Subject IDs to include')
+    parser.add_argument('--feeder', default=None,
+                        help='DataLoader class path')
+    parser.add_argument('--train-feeder-args', default=None,
+                        help='Arguments for training data loader')
+    parser.add_argument('--val-feeder-args', default=None,
+                        help='Arguments for validation data loader')
+    parser.add_argument('--test-feeder-args', default=None,
+                        help='Arguments for test data loader')
+    parser.add_argument('--device', nargs='+', default=[0, 1], type=int,
+                        help='CUDA device IDs to use')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed (default: 42)')
+    parser.add_argument('--num-worker', type=int, default=8,
+                        help='Number of workers for data loading')
+    parser.add_argument('--multi-gpu', type=str2bool, default=True,
+                        help='Whether to use multiple GPUs when available')
+    parser.add_argument('--parallel-threads', type=int, default=48,
+                        help='Number of parallel threads for preprocessing')
+    parser.add_argument('--include-val', type=str2bool, default=True,
+                        help='Whether to include validation set')
+    parser.add_argument('--result-file', type=str,
+                        help='File to save results to')
+    parser.add_argument('--kfold', type=str2bool, default=True,
+                        help='Whether to use k-fold cross-validation')
+    parser.add_argument('--num-folds', type=int, default=5,
+                        help='Number of folds for cross-validation')
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                        help='How many batches to wait before logging training status')
+    parser.add_argument('--print-log', type=str2bool, default=True,
+                        help='Whether to print and save logs')
     
     return parser
 
@@ -147,79 +179,16 @@ def setup_gpu_environment(args):
 
 def configure_parallel_processing(args):
     if hasattr(args, 'parallel_threads') and args.parallel_threads > 0:
-        new_total = args.parallel_threads
-        
-        if new_total < 4:
-            max_files = 1
-            threads_per_file = new_total
-        else:
-            max_files = min(12, new_total // 4)
-            threads_per_file = min(4, new_total // max_files)
+        max_files = 12
+        threads_per_file = 4
+        total_threads = max_files * threads_per_file
         
         update_thread_configuration(max_files, threads_per_file)
-        logger.info(f"Configured parallel processing: {max_files} files × {threads_per_file} threads = {new_total} total")
-
-def load_model_safely(path, device):
-    try:
-        # First try normal loading
-        return torch.load(path, map_location=device)
-    except Exception as e:
-        try:
-            # Try with weights_only=False
-            return torch.load(path, map_location=device, weights_only=False)
-        except Exception:
-            try:
-                # Try with add_safe_globals for numpy.core.multiarray.scalar
-                import torch.serialization
-                import numpy as np
-                with torch.serialization.safe_globals([np.core.multiarray.scalar]):
-                    return torch.load(path, map_location=device)
-            except Exception as e2:
-                logger.error(f"All model loading attempts failed: {str(e2)}")
-                raise
-
-class WeightedCrossEntropyLoss(nn.Module):
-    def __init__(self, class_weights=None):
-        super().__init__()
-        self.class_weights = class_weights
-        
-    def forward(self, logits, targets):
-        if self.class_weights is None:
-            device = logits.device
-            class_counts = torch.bincount(targets)
-            total = class_counts.sum()
-            weights = total / (class_counts * len(class_counts))
-            weights = weights.to(device)
-        else:
-            weights = self.class_weights
-            
-        return F.cross_entropy(logits, targets, weight=weights)
-
-class EnhancedDistillationLoss(nn.Module):
-    def __init__(self, temperature=2.0, alpha=0.5, class_weights=None):
-        super().__init__()
-        self.temperature = temperature
-        self.alpha = alpha
-        
-        if class_weights is not None:
-            self.ce_loss = nn.CrossEntropyLoss(weight=class_weights)
-        else:
-            self.ce_loss = nn.CrossEntropyLoss()
-        
-    def forward(self, student_logits, teacher_logits, labels):
-        hard_loss = self.ce_loss(student_logits, labels)
-        
-        soft_targets = F.softmax(teacher_logits / self.temperature, dim=-1)
-        soft_prob = F.log_softmax(student_logits / self.temperature, dim=-1)
-        soft_loss = torch.sum(soft_targets * (torch.log(soft_targets + 1e-10) - soft_prob)) / soft_prob.size()[0] * (self.temperature**2)
-        
-        loss = self.alpha * soft_loss + (1-self.alpha) * hard_loss
-        return loss
+        logger.info(f"Configured parallel processing: {max_files} files × {threads_per_file} threads = {total_threads} total")
 
 class Trainer:
     def __init__(self, arg):
         self.arg = arg
-        
         self.train_loss_summary = []
         self.val_loss_summary = []
         self.train_metrics_history = []
@@ -231,11 +200,9 @@ class Trainer:
         self.test_f1 = 0
         self.patience_counter = 0
         self.fold_metrics = []
-        
         self.train_subjects = []
         self.val_subject = None
         self.test_subject = None
-        
         self.optimizer = None
         self.scheduler = None
         self.scaler = None
@@ -246,14 +213,15 @@ class Trainer:
         
         self.model_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}.pt'
         
-        self.inertial_modality = [modality for modality in arg.dataset_args['modalities'] if modality != 'skeleton']
+        self.inertial_modality = [modality for modality in arg.dataset_args['modalities']
+                                 if modality != 'skeleton']
         self.has_gyro = 'gyroscope' in self.inertial_modality
         self.has_fusion = len(self.inertial_modality) > 1 or (
             'fusion_options' in arg.dataset_args and
             arg.dataset_args['fusion_options'].get('enabled', False)
         )
         self.fuse = self.has_fusion
-        self.filter_type = arg.dataset_args.get('fusion_options', {}).get('filter_type', 'ekf')
+        self.filter_type = arg.dataset_args.get('fusion_options', {}).get('filter_type', 'madgwick')
 
         if not os.path.exists(self.arg.work_dir):
             os.makedirs(self.arg.work_dir)
@@ -274,7 +242,10 @@ class Trainer:
             self.model = self.load_weights()
 
         if len(self.available_gpus) > 1 and arg.multi_gpu:
-            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
+            self.model = nn.DataParallel(
+                self.model, 
+                device_ids=self.available_gpus
+            )
 
         self.load_loss()
         self.include_val = arg.include_val
@@ -315,7 +286,7 @@ class Trainer:
         self.print_log(f"Loading model: {model_path}")
         
         if 'feature_dim' not in model_args and 'embed_dim' in model_args:
-            if model_args.get('fusion_type', 'enhanced') == 'concat':
+            if model_args.get('fusion_type', 'concat') == 'concat':
                 model_args['feature_dim'] = model_args['embed_dim'] * 3
             else:
                 model_args['feature_dim'] = model_args['embed_dim']
@@ -327,7 +298,7 @@ class Trainer:
                 for heads in [old_heads-1, old_heads-2, old_heads+1, old_heads+2]:
                     if heads > 0 and model_args['feature_dim'] % heads == 0:
                         model_args['num_heads'] = heads
-                        self.print_log(f"Adjusted num_heads from {old_heads} to {heads} to ensure divisibility with feature_dim={model_args['feature_dim']}")
+                        self.print_log(f"Adjusted num_heads from {old_heads} to {heads} to ensure divisibility")
                         break
         
         try:
@@ -341,7 +312,7 @@ class Trainer:
                 new_feature_dim = (feature_dim // heads) * heads
                 if new_feature_dim != feature_dim:
                     model_args['feature_dim'] = new_feature_dim
-                    self.print_log(f"Adjusted feature_dim from {feature_dim} to {new_feature_dim} to ensure divisibility with num_heads={heads}")
+                    self.print_log(f"Adjusted feature_dim from {feature_dim} to {new_feature_dim}")
             
             model = Model(**model_args).to(device)
         
@@ -357,7 +328,7 @@ class Trainer:
         self.print_log(f"Loading weights from: {self.arg.weights}")
         
         try:
-            model = load_model_safely(self.arg.weights, device)
+            model = torch.load(self.arg.weights, map_location=device)
             self.print_log("Loaded complete model")
             return model
         except Exception as e:
@@ -365,7 +336,7 @@ class Trainer:
                 Model = import_class(self.arg.model)
                 model = Model(**self.arg.model_args).to(device)
                 
-                state_dict = load_model_safely(self.arg.weights, device)
+                state_dict = torch.load(self.arg.weights, map_location=device)
                 
                 if isinstance(state_dict, dict):
                     if 'model_state_dict' in state_dict:
@@ -406,10 +377,8 @@ class Trainer:
             
         except Exception as e:
             self.print_log(f"Error loading loss function: {str(e)}")
-            
-            # Use weighted cross entropy as a robust fallback
-            self.criterion = WeightedCrossEntropyLoss()
-            self.print_log("Fallback to WeightedCrossEntropyLoss")
+            self.criterion = torch.nn.CrossEntropyLoss()
+            self.print_log("Fallback to CrossEntropyLoss")
 
     def load_optimizer(self):
         optimizer_name = self.arg.optimizer.lower()
@@ -591,17 +560,6 @@ class Trainer:
                     return False
 
                 try:
-                    # Set up class weights for loss function based on training data
-                    if isinstance(self.criterion, (WeightedCrossEntropyLoss, EnhancedDistillationLoss)):
-                        train_labels = self.norm_train['labels']
-                        unique_labels, counts = np.unique(train_labels, return_counts=True)
-                        class_weights = torch.FloatTensor(counts.sum() / (counts * len(counts)))
-                        use_cuda = torch.cuda.is_available()
-                        device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
-                        class_weights = class_weights.to(device)
-                        self.criterion.class_weights = class_weights
-                        self.print_log(f"Set class weights for loss function: {class_weights}")
-                        
                     train_dataset = Feeder(dataset=self.norm_train, batch_size=self.arg.batch_size)
                     
                     drop_last = True
@@ -859,44 +817,41 @@ class Trainer:
 
     def compute_metrics(self, outputs, targets):
         if isinstance(outputs, torch.Tensor):
-            outputs = outputs.detach().cpu()
-            targets = targets.detach().cpu()
+            outputs = outputs.detach().cpu().numpy()
+        if isinstance(targets, torch.Tensor):
+            targets = targets.detach().cpu().numpy()
             
-            if len(outputs.shape) > 1 and outputs.shape[1] > 1:
-                predictions = torch.argmax(outputs, dim=1)
-            else:
-                predictions = (torch.sigmoid(outputs.view(-1)) > 0.5).float()
+        if len(outputs.shape) > 1 and outputs.shape[1] > 1:
+            predictions = np.argmax(outputs, axis=1)
         else:
-            if len(outputs.shape) > 1 and outputs.shape[1] > 1:
-                predictions = np.argmax(outputs, axis=1)
-            else:
-                predictions = (1 / (1 + np.exp(-outputs.reshape(-1))) > 0.5).astype(float)
+            predictions = (outputs.reshape(-1) > 0).astype(np.int32)
         
-        predictions_np = predictions.numpy() if isinstance(predictions, torch.Tensor) else predictions
-        targets_np = targets.numpy() if isinstance(targets, torch.Tensor) else targets
-        
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=UndefinedMetricWarning)
-            
-            accuracy = np.mean(predictions_np == targets_np)
-            
-            try:
-                precision, recall, f1, _ = precision_recall_fscore_support(
-                    targets_np, predictions_np, average='binary', zero_division=0
-                )
-            except Exception as e:
-                precision = recall = f1 = 0.0
-                
         try:
-            tn, fp, fn, tp = confusion_matrix(targets_np, predictions_np, labels=[0, 1]).ravel()
+            cm = confusion_matrix(targets, predictions, labels=[0, 1])
+            tn, fp, fn, tp = cm.ravel()
+            
+            accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            balanced_accuracy = (recall + specificity) / 2
             false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
             miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
-            balanced_accuracy = (sensitivity + specificity) / 2
         except Exception as e:
-            tn = fp = fn = tp = 0
-            false_alarm_rate = miss_rate = specificity = sensitivity = balanced_accuracy = 0.0
+            accuracy = np.mean(predictions == targets)
+            tp = np.sum((predictions == 1) & (targets == 1))
+            fp = np.sum((predictions == 1) & (targets == 0))
+            fn = np.sum((predictions == 0) & (targets == 1))
+            tn = np.sum((predictions == 0) & (targets == 0))
+            
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            balanced_accuracy = (recall + specificity) / 2
+            false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
+            miss_rate = fn / (fn + tp) if (fn + tp) > 0 else 0
         
         return {
             'accuracy': accuracy,
@@ -910,7 +865,7 @@ class Trainer:
             'false_alarm_rate': false_alarm_rate,
             'miss_rate': miss_rate,
             'specificity': specificity,
-            'sensitivity': sensitivity,
+            'sensitivity': recall,
             'balanced_accuracy': balanced_accuracy
         }
 
@@ -1143,7 +1098,7 @@ class Trainer:
         state_dict = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict() if not isinstance(self.model, nn.DataParallel) 
-                              else self.model.module.state_dict(),
+                               else self.model.module.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'best_f1': self.best_f1,
@@ -1172,7 +1127,10 @@ class Trainer:
         self.model = self.load_model(self.arg.model, self.arg.model_args)
         
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
-            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
+            self.model = nn.DataParallel(
+                self.model, 
+                device_ids=self.available_gpus
+            )
             
         self.load_optimizer()
         
@@ -1206,28 +1164,8 @@ class Trainer:
         self.loss_viz(self.train_loss_summary, self.val_loss_summary, fold=fold_idx)
         self.metrics_viz(self.train_metrics_history, self.val_metrics_history, fold=fold_idx)
         
-        # Load the best model for testing
-        best_model_path = os.path.join(fold_dir, f"{self.arg.model_saved_name}.pt")
-        self.print_log(f"Loading best model with F1={self.best_f1:.4f} for testing")
-        
-        try:
-            checkpoint = load_model_safely(best_model_path, f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
-            
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                if isinstance(self.model, nn.DataParallel):
-                    self.model.module.load_state_dict(checkpoint['model_state_dict'])
-                else:
-                    self.model.load_state_dict(checkpoint['model_state_dict'])
-            elif isinstance(checkpoint, dict):
-                if isinstance(self.model, nn.DataParallel):
-                    self.model.module.load_state_dict(checkpoint)
-                else:
-                    self.model.load_state_dict(checkpoint)
-        except Exception as e:
-            self.print_log(f"Error loading best model for testing: {str(e)}")
-        
         test_metrics = self.eval(0, loader_name='test', fold=fold_idx, 
-                              result_file=os.path.join(fold_dir, "test_predictions.txt"))
+                               result_file=os.path.join(fold_dir, "test_predictions.txt"))
         
         best_metrics = {
             'fold': fold_idx,
@@ -1247,116 +1185,6 @@ class Trainer:
         
         return best_metrics
 
-    def compare_filters(self, subjects=None, filter_types=None):
-        if filter_types is None:
-            filter_types = ['madgwick', 'comp', 'kalman', 'ekf', 'ukf']
-            
-        if subjects is None:
-            subjects = self.arg.subjects
-            
-        self.print_log(f"Comparing filter types: {filter_types}")
-        self.print_log(f"Using subjects: {subjects}")
-        
-        results = {}
-        
-        for filter_type in filter_types:
-            try:
-                self.print_log(f"\n{'='*20} Testing with {filter_type} filter {'='*20}")
-                
-                # Set filter type for this run
-                if hasattr(self.arg.dataset_args, 'fusion_options'):
-                    self.arg.dataset_args['fusion_options']['filter_type'] = filter_type
-                else:
-                    self.arg.dataset_args['fusion_options'] = {'enabled': True, 'filter_type': filter_type}
-                
-                self.filter_type = filter_type
-                
-                # Reload model to reset weights
-                self.model = self.load_model(self.arg.model, self.arg.model_args)
-                if len(self.available_gpus) > 1 and self.arg.multi_gpu:
-                    self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
-                
-                # Load data
-                loaded = self.load_data(subjects, subjects)
-                if not loaded:
-                    self.print_log(f"Error loading data for filter type {filter_type}, skipping")
-                    continue
-                
-                # Train model
-                self.load_optimizer()
-                best_val_f1 = 0
-                
-                for epoch in range(min(self.arg.num_epoch, 20)):  # 20 epochs for comparison
-                    val_loss = self.train(epoch)
-                    if self.val_metrics['f1'] > best_val_f1:
-                        best_val_f1 = self.val_metrics['f1']
-                
-                # Evaluate on test set
-                test_metrics = self.eval(0, loader_name='test', 
-                                     result_file=os.path.join(self.arg.work_dir, f"{filter_type}_predictions.txt"))
-                
-                # Store results
-                results[filter_type] = {
-                    'accuracy': test_metrics['accuracy'],
-                    'f1': test_metrics['f1'],
-                    'precision': test_metrics['precision'],
-                    'recall': test_metrics['recall'],
-                    'balanced_accuracy': test_metrics['balanced_accuracy']
-                }
-                
-            except Exception as e:
-                self.print_log(f"Error testing filter type {filter_type}: {str(e)}")
-                self.print_log(traceback.format_exc())
-        
-        # Create comparison visualization
-        if results:
-            self.visualize_filter_comparison(results)
-            
-        return results
-    
-    def visualize_filter_comparison(self, results):
-        filter_types = list(results.keys())
-        
-        # Create metrics bar chart
-        plt.figure(figsize=(12, 8))
-        x = np.arange(len(filter_types))
-        width = 0.15
-        
-        metrics = ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy']
-        colors = ['blue', 'green', 'red', 'orange', 'purple']
-        
-        for i, (metric, color) in enumerate(zip(metrics, colors)):
-            values = [results[f].get(metric, 0) for f in filter_types]
-            plt.bar(x + (i - 2) * width, values, width, label=metric.capitalize(), color=color)
-        
-        plt.xlabel('Filter Type')
-        plt.ylabel('Score')
-        plt.title('Filter Performance Comparison')
-        plt.xticks(x, filter_types)
-        plt.legend()
-        plt.grid(axis='y', alpha=0.3)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.arg.work_dir, 'filter_comparison.png'))
-        plt.close()
-        
-        # Save results to CSV
-        df = pd.DataFrame(results).T
-        df.index.name = 'filter_type'
-        df.to_csv(os.path.join(self.arg.work_dir, 'filter_comparison.csv'))
-        
-        # Find best filter
-        best_filter = max(filter_types, key=lambda f: results[f]['f1'])
-        
-        self.print_log(f"\n{'='*20} Filter Comparison Results {'='*20}")
-        self.print_log(f"Best filter by F1 score: {best_filter} (F1={results[best_filter]['f1']:.4f})")
-        
-        for ft in filter_types:
-            metrics = results[ft]
-            self.print_log(f"{ft}: F1={metrics['f1']:.4f}, Acc={metrics['accuracy']:.4f}, BAcc={metrics['balanced_accuracy']:.4f}")
-        
-        return best_filter
-
     def kfold_cross_validation(self):
         self.print_log(f"\n{'='*20} K-Fold Cross-Validation {'='*20}")
         
@@ -1369,7 +1197,7 @@ class Trainer:
             
         avg_metrics = {}
         metric_keys = ['f1', 'accuracy', 'precision', 'recall', 'false_alarm_rate', 
-                      'miss_rate', 'balanced_accuracy', 'test_f1', 'epochs_trained']
+                       'miss_rate', 'balanced_accuracy', 'test_f1', 'epochs_trained']
         
         for key in metric_keys:
             valid_values = [m.get(key, 0) for m in all_fold_metrics if not m.get('error', False)]
@@ -1470,18 +1298,10 @@ class Trainer:
             best_model_path = os.path.join(fold_dir, f"{self.arg.model_saved_name}.pt")
             
             if os.path.exists(best_model_path):
-                try:
-                    best_state = load_model_safely(best_model_path, f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
-                    
-                    if isinstance(best_state, dict) and 'epoch' in best_state:
-                        best_epoch = best_state['epoch']
-                        self.print_log(f"Best fold reached optimal performance at epoch {best_epoch}")
-                        num_epochs = best_epoch + 1
-                    else:
-                        num_epochs = self.arg.num_epoch
-                except Exception as e:
-                    self.print_log(f"Error loading best fold model: {str(e)}")
-                    num_epochs = self.arg.num_epoch
+                best_state = torch.load(best_model_path)
+                best_epoch = best_state['epoch']
+                self.print_log(f"Best fold reached optimal performance at epoch {best_epoch}")
+                num_epochs = best_epoch + 1
             else:
                 num_epochs = self.arg.num_epoch
         else:
@@ -1492,7 +1312,10 @@ class Trainer:
         self.model = self.load_model(self.arg.model, self.arg.model_args)
         
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
-            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
+            self.model = nn.DataParallel(
+                self.model, 
+                device_ids=self.available_gpus
+            )
             
         self.load_optimizer()
         
@@ -1521,7 +1344,7 @@ class Trainer:
         final_state = {
             'epoch': num_epochs - 1,
             'model_state_dict': self.model.state_dict() if not isinstance(self.model, nn.DataParallel) 
-                              else self.model.module.state_dict(),
+                               else self.model.module.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'metrics': self.val_metrics
@@ -1544,17 +1367,6 @@ class Trainer:
             try:
                 configure_parallel_processing(self.arg)
                 self.print_log(f'Parameters:\n{str(vars(self.arg))}\n')
-                
-                # First compare different filters
-                if self.has_fusion:
-                    filter_results = self.compare_filters()
-                    best_filter = max(filter_results.keys(), key=lambda f: filter_results[f]['f1'])
-                    self.print_log(f"Best filter identified: {best_filter}")
-                    self.filter_type = best_filter
-                    
-                    # Update fusion options with best filter
-                    if 'fusion_options' in self.arg.dataset_args:
-                        self.arg.dataset_args['fusion_options']['filter_type'] = best_filter
                 
                 if self.use_kfold:
                     cv_results = self.kfold_cross_validation()
@@ -1614,6 +1426,7 @@ class Trainer:
                 self.print_log(traceback.format_exc())
             finally:
                 cleanup_resources()
+
 
 if __name__ == "__main__":
     parser = get_args()
