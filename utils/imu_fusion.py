@@ -1101,24 +1101,38 @@ class UnscentedKalmanFilter(OrientationFilter):
             logger.error(f"UKF update error: {e}")
             logger.error(traceback.format_exc())
             return self.orientation_q
-
-def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='madgwick', return_features=False):
+def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
+                    timestamps: Optional[np.ndarray] = None,
+                    filter_type: str = 'madgwick',
+                    return_features: bool = False) -> Dict[str, np.ndarray]:
+    """
+    Process IMU data with specified filter to estimate orientation.
+    
+    Args:
+        acc_data: Accelerometer data [n_samples, 3]
+        gyro_data: Gyroscope data [n_samples, 3]
+        timestamps: Optional timestamps for variable-rate data
+        filter_type: Type of filter to use ('madgwick', 'kalman', 'ekf', 'ukf')
+        return_features: Whether to extract and return features
+        
+    Returns:
+        Dictionary with processed data: quaternion, fusion_features (if requested)
+    """
     start_time = time.time()
     
     # Validate inputs
     if not isinstance(acc_data, np.ndarray) or not isinstance(gyro_data, np.ndarray):
         logger.error(f"Invalid input types: acc={type(acc_data)}, gyro={type(gyro_data)}")
+        # Return empty data with correct shapes
         return {
-            'quaternion': np.zeros((1, 4)),
-            'linear_acceleration': np.zeros((1, 3)) 
+            'quaternion': np.zeros((1, 4))
         }
     
     # Handle empty inputs
     if acc_data.shape[0] == 0 or gyro_data.shape[0] == 0:
         logger.error("Empty input data")
         return {
-            'quaternion': np.zeros((1, 4)),
-            'linear_acceleration': np.zeros((1, 3))
+            'quaternion': np.zeros((1, 4))
         }
     
     # Ensure data arrays have the same length
@@ -1135,31 +1149,31 @@ def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='madgwick
         if timestamps is None:
             timestamps = np.linspace(0, acc_data.shape[0] / 30.0, acc_data.shape[0])
         
-        # IMPORTANT: Check if gyro data is in degrees/s and convert to rad/s if needed
+        # Convert gyro data from degrees/s to radians/s if needed
         gyro_max = np.max(np.abs(gyro_data))
         if gyro_max > 20.0:  # Heuristic: gyro values in deg/s are typically larger than rad/s
             logger.info(f"Converting gyroscope data from deg/s to rad/s (max value: {gyro_max})")
             gyro_data = gyro_data * np.pi / 180.0
         
-        # Select filter based on type
+        # Select appropriate filter based on type
         if filter_type == 'madgwick':
             orientation_filter = MadgwickFilter()
-        elif filter_type == 'comp':
-            orientation_filter = ComplementaryFilter()
         elif filter_type == 'kalman':
             orientation_filter = KalmanFilter()
         elif filter_type == 'ekf':
             orientation_filter = ExtendedKalmanFilter()
         elif filter_type == 'ukf':
             orientation_filter = UnscentedKalmanFilter()
+        elif filter_type == 'comp':
+            orientation_filter = ComplementaryFilter()
         else:
-            logger.warning(f"Unknown filter type: {filter_type}, defaulting to Madgwick")
+            logger.warning(f"Unknown filter type: {filter_type}, using Madgwick as default")
             orientation_filter = MadgwickFilter()
         
-        logger.info(f"Applying {orientation_filter.name} filter to IMU data ({len(acc_data)} samples)")
+        logger.info(f"Applying {filter_type} filter to IMU data ({len(acc_data)} samples)")
         
+        # Process data with the filter
         quaternions = []
-        linear_accelerations = []
         
         # Process each time step
         for i in range(len(acc_data)):
@@ -1167,44 +1181,41 @@ def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='madgwick
             gyro = gyro_data[i]
             timestamp = timestamps[i] if timestamps is not None else None
             
-            # NOTE: CSV acceleration data is likely already linear, but we'll still apply gravity removal
-            # to ensure consistency and handle any cases where it might be raw data
-            
             # Apply the filter to get orientation
             q = orientation_filter.update(acc, gyro, timestamp)
             quaternions.append(q)
-            
-            # Calculate linear acceleration by removing gravity
-            R = Rotation.from_quat([q[1], q[2], q[3], q[0]])  # Convert to scipy format [x,y,z,w]
-            gravity = R.apply([0, 0, 9.81])  # Rotate standard gravity vector
-            lin_acc = acc - gravity  # Remove gravity component
-            linear_accelerations.append(lin_acc)
         
         # Convert lists to numpy arrays
         quaternions = np.array(quaternions)
-        linear_accelerations = np.array(linear_accelerations)
         
         # Prepare results
         results = {
-            'quaternion': quaternions,
-            'linear_acceleration': linear_accelerations
+            'quaternion': quaternions
         }
         
+        # Extract features if requested
+        if return_features:
+            fusion_features = extract_features_from_window({
+                'accelerometer': acc_data,
+                'gyroscope': gyro_data,
+                'quaternion': quaternions
+            })
+            results['fusion_features'] = fusion_features
+        
         elapsed_time = time.time() - start_time
-        logger.info(f"IMU processing with {orientation_filter.name} filter completed in {elapsed_time:.2f}s")
+        logger.info(f"IMU processing with {filter_type} filter completed in {elapsed_time:.2f}s")
         
         return results
     
     except Exception as e:
         logger.error(f"Error in IMU processing: {str(e)}")
+        logger.error(traceback.format_exc())
         
         # Return minimal results on error - ensure consistent structure
         sample_size = max(1, len(acc_data) if isinstance(acc_data, np.ndarray) else 1)
         return {
-            'quaternion': np.zeros((sample_size, 4)),
-            'linear_acceleration': np.zeros((sample_size, 3)) 
+            'quaternion': np.zeros((sample_size, 4))
         }
-
 def extract_features_from_window(window_data):
     try:
         # Extract data from window

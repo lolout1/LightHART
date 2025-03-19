@@ -1,8 +1,8 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Include all subjects for better generalization
-subjects: [29,30,31,33,45,46,34,37,39,38,43,35,36,44,34,32]
+# Fall detection subjects
+subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32]
 
 model_args:
   num_layers: 3
@@ -10,27 +10,27 @@ model_args:
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
-  acc_frames: 128
+  acc_frames: 64
   mocap_frames: 64
   num_heads: 8
   fusion_type: 'concat'
-  dropout: 0.3
+  dropout: 0.25
   use_batch_norm: true
+  feature_dim: 96  # Explicitly set to match concat of features
 
-dataset_args:
+dataset_args: 
   mode: 'sliding_window'
-  max_length: 128
+  max_length: 64
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'kalman'
+    filter_type: 'kalman'  # Use standard Kalman Filter
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true
-    save_aligned: true
 
 batch_size: 16
 test_batch_size: 16
@@ -47,7 +47,7 @@ val_feeder_args:
   batch_size: 16
   drop_last: true
 
-test_feeder_args:
+test_feeder_args: 
   batch_size: 16
   drop_last: false
 

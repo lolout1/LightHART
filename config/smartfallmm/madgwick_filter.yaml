@@ -1,23 +1,21 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Include relevant subjects for fall detection
-subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
+# Include all subjects for better generalization
+subjects: [29, 30, 31, 33, 45, 46]
 
 model_args:
-  num_layers: 3
+  num_layers: 2
   embed_dim: 32
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 4
+  num_heads: 8
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
-  # For concat fusion with 3 modalities: embed_dim * 3
-  feature_dim: 96
 
 dataset_args:
   mode: 'sliding_window'
@@ -32,36 +30,27 @@ dataset_args:
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: true
-    save_aligned: true
 
 batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
-num_epoch: 60
+num_epoch: 120
 
 # dataloader
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 16
+  drop_last: true
 
 val_feeder_args:
   batch_size: 16
+  drop_last: true
 
 test_feeder_args:
   batch_size: 16
+  drop_last: false
 
 seed: 42
 optimizer: adamw
-base_lr: 0.0005
+base_lr: 0.001
 weight_decay: 0.001
-
-# Cross-validation settings
-kfold:
-  enabled: true
-  num_folds: 5
-  fold_assignments:
-    - [43, 35, 36]  # Fold 1: ~38.3% falls
-    - [44, 34, 32]  # Fold 2: ~39.7% falls
-    - [45, 37, 38]  # Fold 3: ~44.8% falls
-    - [46, 29, 31]  # Fold 4: ~41.4% falls
-    - [30, 39]      # Fold 5: ~43.3% falls

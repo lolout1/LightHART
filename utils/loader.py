@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Union, Optional, Any
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from scipy.signal import find_peaks, savgol_filter
 import threading
 
