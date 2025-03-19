@@ -7,17 +7,48 @@ import torch
 import torch.nn.functional as F
 from scipy.signal import find_peaks
 
-def csvloader(file_path: str, **kwargs):
+def csvloader(file_path: str, **kwargs) -> np.ndarray:
     '''
-    Loads csv data
+    Loads data from CSV files with appropriate handling for different formats.
     '''
-    file_data = pd.read_csv(file_path, index_col=False, header = 0).dropna().bfill()
-    num_col = file_data.shape[1]
-    num_extra_col = num_col % 3
-    cols_to_select = num_col - num_extra_col
-    activity_data = file_data.iloc[2:, -3:].to_numpy(dtype=np.float32)
-    return activity_data
-
+    try:
+        # First try with default comma delimiter
+        try:
+            file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
+        except:
+            # If that fails, try with semicolon delimiter
+            file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
+        
+        # Determine number of columns to use based on data type
+        if 'skeleton' in file_path:
+            cols = 96  # Skeleton data has 32 joints × 3 coordinates
+        else:
+            # Check if this is a meta sensor file or other inertial data
+            if file_data.shape[1] > 4:
+                # Meta sensor format: epoch, time, elapsed time, x, y, z
+                cols = file_data.shape[1] - 3
+                file_data = file_data.iloc[:, 3:]  # Skip first 3 columns
+            else:
+                cols = 3  # Standard inertial data has 3 axes (x, y, z)
+        
+        # Validate data shape
+        if file_data.shape[1] < cols:
+            logger.warning(f"File has fewer columns than expected: {file_data.shape[1]} < {cols}")
+            # Add zero columns if needed
+            missing_cols = cols - file_data.shape[1]
+            for i in range(missing_cols):
+                file_data[f'missing_{i}'] = 0
+        
+        # Extract data, skipping header rows if present
+        if file_data.shape[0] > 2:
+            activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
+        else:
+            activity_data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
+        
+        return activity_data
+    except Exception as e:
+        logger.error(f"Error loading CSV {file_path}: {str(e)}")
+        raise
 def matloader(file_path: str, **kwargs):
     '''
     Loads MatLab files 

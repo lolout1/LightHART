@@ -2,43 +2,34 @@
 Dataset Builder for SmartFallMM
 
 This module handles loading, preprocessing, and alignment of multi-modal sensor data
-for human activity recognition and fall detection. It implements various techniques
-for handling variably-sampled sensor data, including hybrid interpolation that
-intelligently switches between cubic spline and linear methods.
-
-Key features:
-- High-performance parallel processing of multiple files
-- Efficient alignment of variable-rate sensor data
-- Advanced hybrid interpolation of accelerometer and gyroscope data
-- Robust error handling and recovery
+for human activity recognition and fall detection. It provides robust support for
+sensor fusion using the Madgwick filter algorithm.
 '''
 import os
-from typing import List, Dict, Tuple, Union, Optional, Any
-from collections import defaultdict
+import time
+import traceback
+import logging
 import numpy as np
 import pandas as pd
-from scipy.io import loadmat
-from numpy.linalg import norm
-from dtaidistance import dtw
 import matplotlib.pyplot as plt
-from scipy.interpolate import CubicSpline, interp1d
+from typing import Dict, List, Tuple, Union, Optional, Any
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from scipy.io import loadmat
 from scipy.signal import find_peaks, savgol_filter, butter, filtfilt
 from scipy.spatial.transform import Rotation
 from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn.functional as F
-import time
-import logging
-from utils.processor.base import Processor
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import threading
 
 # Import IMU fusion module for thread pool management
 from utils.imu_fusion import (
     process_imu_data, 
-    save_aligned_sensor_data,
-    ThreadPoolExecutor as IMUThreadPoolExecutor
+    extract_features_from_window,
+    MadgwickFilter,
+    save_aligned_sensor_data
 )
 
 # Configure logging
@@ -46,51 +37,105 @@ log_dir = "debug_logs"
 os.makedirs(log_dir, exist_ok=True)
 logging.basicConfig(
     filename=os.path.join(log_dir, "loader.log"),
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("loader")
 
-# Also print to console
+# Add console handler for more immediate feedback
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+# Thread pool configuration
+MAX_WORKER_THREADS = 8  # For general file operations
+MAX_FUSION_THREADS = 4  # For sensor fusion processing
+thread_pool = ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)
+file_semaphore = threading.Semaphore(MAX_FUSION_THREADS)
+
+def update_thread_configuration(max_files: int, threads_per_file: int):
+    """
+    Update the thread pool configuration for parallel processing.
+    
+    Args:
+        max_files: Maximum number of files to process in parallel
+        threads_per_file: Number of threads to dedicate to each file
+    """
+    global MAX_WORKER_THREADS, MAX_FUSION_THREADS, thread_pool, file_semaphore
+    
+    # Ensure reasonable values
+    max_files = max(1, min(max_files, 16))
+    threads_per_file = max(1, min(threads_per_file, 8))
+    
+    new_total = max_files * threads_per_file
+    
+    # Only update if configuration changed significantly
+    if abs(new_total - MAX_WORKER_THREADS) > 2:
+        # Shutdown existing thread pool
+        thread_pool.shutdown(wait=True)
+        
+        # Update configuration
+        MAX_WORKER_THREADS = new_total
+        MAX_FUSION_THREADS = max_files
+        
+        # Create new thread pool
+        thread_pool = ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)
+        file_semaphore = threading.Semaphore(MAX_FUSION_THREADS)
+        
+        logger.info(f"Updated thread configuration: {max_files} files × {threads_per_file} threads = {MAX_WORKER_THREADS} total")
+
+def cleanup_resources():
+    """Clean up thread pool resources properly to avoid hanging processes."""
+    global thread_pool
+    try:
+        logger.info("Cleaning up thread pool resources")
+        thread_pool.shutdown(wait=False)
+        thread_pool = ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)
+    except Exception as e:
+        logger.error(f"Error during resource cleanup: {e}")
 
 def csvloader(file_path: str, **kwargs) -> np.ndarray:
-    '''
-    Loads data from CSV files with appropriate handling for different formats.
-
+    """
+    Load sensor data from CSV files with robust error handling.
+    
+    Handles different CSV formats including:
+    - Standard inertial files (time, x, y, z)
+    - Meta sensor files (epoch, time, elapsed time, x, y, z)
+    - Skeleton files (96 columns of joint coordinates)
+    
     Args:
-        file_path: Path to the CSV file
+        file_path: Path to CSV file
         **kwargs: Additional arguments
-
+        
     Returns:
-        Numpy array with the loaded data
-    '''
+        Numpy array containing loaded data
+    """
     logger.debug(f"Loading CSV file: {file_path}")
     try:
-        # Read the file and handle missing values
-        file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
+        # Try with comma delimiter first
+        try:
+            file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
+        except Exception:
+            # If that fails, try with semicolon delimiter
+            logger.debug(f"Trying semicolon delimiter for {file_path}")
+            file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
 
-        # Determine number of columns to use based on data type
+        # Determine number of columns based on file type
         if 'skeleton' in file_path:
             cols = 96  # Skeleton data has 32 joints × 3 coordinates
-            logger.debug(f"Detected skeleton data with {cols} columns")
         else:
-            # Check if this is a meta sensor file or other inertial data
+            # Check if this is a meta sensor file
             if file_data.shape[1] > 4:
                 # Meta sensor format: epoch, time, elapsed time, x, y, z
                 cols = file_data.shape[1] - 3
-                file_data = file_data.iloc[:, 3:]  # Skip first 3 columns
+                file_data = file_data.iloc[:, 3:]
             else:
                 cols = 3  # Standard inertial data has 3 axes (x, y, z)
-            logger.debug(f"Detected inertial sensor data with {cols} columns")
 
-        # Validate data shape
+        # Handle case where file has fewer columns than expected
         if file_data.shape[1] < cols:
             logger.warning(f"File has fewer columns than expected: {file_data.shape[1]} < {cols}")
             # Add zero columns if needed
@@ -103,18 +148,31 @@ def csvloader(file_path: str, **kwargs) -> np.ndarray:
             activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
         else:
             activity_data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
+
+        # Check for NaN values and replace with zeros
+        if np.isnan(activity_data).any():
+            logger.warning(f"NaN values found in {file_path}, replacing with zeros")
+            activity_data = np.nan_to_num(activity_data, nan=0.0)
             
-        logger.debug(f"Extracted data with shape: {activity_data.shape}")
+        # Check for infinite values and replace with large numbers
+        if np.isinf(activity_data).any():
+            logger.warning(f"Infinite values found in {file_path}, replacing with large finite values")
+            activity_data = np.nan_to_num(activity_data, posinf=1e6, neginf=-1e6)
 
         return activity_data
     except Exception as e:
         logger.error(f"Error loading CSV {file_path}: {str(e)}")
-        raise
-
+        logger.error(traceback.format_exc())
+        
+        # Return empty array with appropriate shape
+        if 'skeleton' in file_path:
+            return np.zeros((1, 96), dtype=np.float32)
+        else:
+            return np.zeros((1, 3), dtype=np.float32)
 
 def matloader(file_path: str, **kwargs) -> np.ndarray:
     '''
-    Loads data from MATLAB (.mat) files.
+    Load data from MATLAB (.mat) files with robust error handling.
 
     Args:
         file_path: Path to the MAT file
@@ -125,21 +183,32 @@ def matloader(file_path: str, **kwargs) -> np.ndarray:
     '''
     logger.debug(f"Loading MAT file: {file_path}")
 
-    # Check for valid key
-    key = kwargs.get('key', None)
-    if key not in ['d_iner', 'd_skel']:
-        logger.error(f"Unsupported key for MatLab file: {key}")
-        raise ValueError(f"Unsupported {key} for matlab file")
-
     try:
+        # Check for valid key
+        key = kwargs.get('key', None)
+        if key not in ['d_iner', 'd_skel']:
+            logger.error(f"Unsupported key for MatLab file: {key}")
+            raise ValueError(f"Unsupported {key} for matlab file")
+
         # Load data from the specified key
         data = loadmat(file_path)[key]
         logger.debug(f"Loaded MAT data with shape: {data.shape}")
+        
+        # Check for NaN or infinite values
+        if np.isnan(data).any() or np.isinf(data).any():
+            logger.warning(f"NaN or infinite values found in {file_path}, replacing with valid values")
+            data = np.nan_to_num(data, nan=0.0, posinf=1e6, neginf=-1e6)
+            
         return data
     except Exception as e:
         logger.error(f"Error loading MAT {file_path}: {str(e)}")
-        raise
-
+        logger.error(traceback.format_exc())
+        
+        # Return empty array with appropriate shape for the key
+        if key == 'd_iner':
+            return np.zeros((1, 3), dtype=np.float32)
+        else:  # d_skel
+            return np.zeros((1, 96), dtype=np.float32)
 
 # Map file extensions to appropriate loaders
 LOADER_MAP = {
@@ -147,6 +216,128 @@ LOADER_MAP = {
     'mat': matloader
 }
 
+def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """
+    Align data from different sensors to a common time frame.
+    
+    This function handles both timestamp-based alignment and simple concatenation
+    for fixed-rate data without timestamps.
+    
+    Args:
+        data: Dictionary containing sensor data arrays from different modalities
+        
+    Returns:
+        Dictionary with aligned data arrays and added timestamps
+    """
+    logger.debug("Aligning sequence data across modalities")
+    
+    try:
+        # Check if we have all required modalities
+        has_accel = 'accelerometer' in data and data['accelerometer'] is not None and len(data['accelerometer']) > 0
+        has_gyro = 'gyroscope' in data and data['gyroscope'] is not None and len(data['gyroscope']) > 0
+        
+        if not has_accel:
+            logger.warning("Missing accelerometer data, alignment failed")
+            return data
+            
+        # Extract sensor data and check validity
+        acc_data = data['accelerometer']
+        gyro_data = data['gyroscope'] if has_gyro else None
+        
+        if has_gyro and (len(acc_data) < 5 or len(gyro_data) < 5):
+            logger.warning(f"Insufficient data for alignment: acc={len(acc_data)}, gyro={len(gyro_data) if gyro_data is not None else 0}")
+            return data
+        
+        # Check if we already have timestamps in the accelerometer data
+        # This assumes first column is time if data has more than 3 columns
+        has_acc_timestamps = acc_data.shape[1] > 3
+        has_gyro_timestamps = has_gyro and gyro_data.shape[1] > 3
+        
+        # If either sensor has timestamps, perform alignment
+        if has_acc_timestamps or has_gyro_timestamps:
+            logger.debug("Timestamp-based alignment")
+            
+            # Extract timestamps and sensor values
+            if has_acc_timestamps:
+                acc_times = acc_data[:, 0]
+                acc_values = acc_data[:, 1:4]
+            else:
+                # Create synthetic timestamps at 30Hz
+                acc_times = np.linspace(0, len(acc_data) / 30.0, len(acc_data))
+                acc_values = acc_data
+                
+            if has_gyro and has_gyro_timestamps:
+                gyro_times = gyro_data[:, 0]
+                gyro_values = gyro_data[:, 1:4]
+            elif has_gyro:
+                # Create synthetic timestamps at 30Hz
+                gyro_times = np.linspace(0, len(gyro_data) / 30.0, len(gyro_data))
+                gyro_values = gyro_data
+            
+            # Find common time range
+            if has_gyro:
+                start_time = max(acc_times[0], gyro_times[0])
+                end_time = min(acc_times[-1], gyro_times[-1])
+                
+                # Check for valid overlap
+                if start_time >= end_time:
+                    logger.warning("No time overlap between accelerometer and gyroscope data")
+                    return data
+                
+                # Create common time grid at 50Hz
+                sample_rate = 50.0
+                duration = end_time - start_time
+                num_samples = int(duration * sample_rate)
+                
+                if num_samples < 5:
+                    logger.warning(f"Overlap too short: {duration:.2f}s")
+                    return data
+                
+                common_times = np.linspace(start_time, end_time, num_samples)
+                
+                # Initialize arrays for interpolated data
+                aligned_acc = np.zeros((num_samples, 3))
+                aligned_gyro = np.zeros((num_samples, 3))
+                
+                # Perform linear interpolation for each axis
+                for axis in range(3):
+                    aligned_acc[:, axis] = np.interp(
+                        common_times, 
+                        acc_times, 
+                        acc_values[:, axis]
+                    )
+                    
+                    aligned_gyro[:, axis] = np.interp(
+                        common_times, 
+                        gyro_times, 
+                        gyro_values[:, axis]
+                    )
+                
+                # Update data dictionary with aligned data
+                data['accelerometer'] = aligned_acc
+                data['gyroscope'] = aligned_gyro
+                data['aligned_timestamps'] = common_times
+                
+                logger.debug(f"Aligned {num_samples} samples from accelerometer and gyroscope")
+            else:
+                # Only accelerometer available, no actual alignment needed
+                data['aligned_timestamps'] = acc_times
+        else:
+            # No timestamps available, create synthetic ones
+            logger.debug("Creating synthetic timestamps for fixed-rate data")
+            
+            # Create timestamps at 30Hz
+            acc_length = len(acc_data)
+            data['aligned_timestamps'] = np.linspace(0, acc_length / 30.0, acc_length)
+        
+        return data
+        
+    except Exception as e:
+        logger.error(f"Error during sequence alignment: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Return original data if alignment fails
+        return data
 
 def avg_pool(sequence: np.ndarray, window_size: int = 5, stride: int = 1,
             max_length: int = 512, shape: Optional[Tuple] = None) -> np.ndarray:
@@ -166,39 +357,70 @@ def avg_pool(sequence: np.ndarray, window_size: int = 5, stride: int = 1,
     logger.debug(f"Applying avg_pool with window_size={window_size}, stride={stride}, max_length={max_length}")
 
     start_time = time.time()
+    
+    try:
+        # Check for empty input
+        if sequence is None or len(sequence) == 0:
+            logger.warning("Empty sequence provided to avg_pool")
+            return np.zeros((max_length, 3) if shape is None else shape)
 
-    # Store original shape and reshape for pooling
-    shape = sequence.shape if shape is None else shape
-    sequence = sequence.reshape(shape[0], -1)
-    sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
+        # Store original shape and reshape for pooling
+        shape = sequence.shape if shape is None else shape
+        
+        # Handle 1D input
+        if len(shape) == 1:
+            sequence = sequence.reshape(-1, 1)
+            
+        sequence = sequence.reshape(shape[0], -1)
+        sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
 
-    # Convert to torch tensor for F.avg_pool1d
-    sequence_tensor = torch.tensor(sequence, dtype=torch.float32)
+        # Convert to torch tensor for F.avg_pool1d
+        sequence_tensor = torch.tensor(sequence, dtype=torch.float32)
 
-    # Calculate appropriate stride to achieve target length
-    if max_length < sequence_tensor.shape[2]:
-        stride = ((sequence_tensor.shape[2] // max_length) + 1)
-        logger.debug(f"Adjusted stride to {stride} for max_length={max_length}")
-    else:
-        stride = 1
+        # Calculate appropriate stride to achieve target length
+        if max_length < sequence_tensor.shape[2]:
+            stride = ((sequence_tensor.shape[2] // max_length) + 1)
+            logger.debug(f"Adjusted stride to {stride} for max_length={max_length}")
+        else:
+            stride = 1
 
-    # Apply pooling
-    pooled = F.avg_pool1d(sequence_tensor, kernel_size=window_size, stride=stride)
+        # Apply pooling
+        pooled = F.avg_pool1d(sequence_tensor, kernel_size=window_size, stride=stride)
 
-    # Convert back to numpy and reshape
-    pooled_np = pooled.squeeze(0).numpy().transpose(1, 0)
-    result = pooled_np.reshape(-1, *shape[1:])
+        # Convert back to numpy and reshape
+        pooled_np = pooled.squeeze(0).numpy().transpose(1, 0)
+        
+        # Handle reshaping edge cases
+        if len(shape) > 1:
+            try:
+                result = pooled_np.reshape(-1, *shape[1:])
+            except Exception:
+                # If reshaping fails, use zero padding
+                logger.warning(f"Reshaping failed, using zero padding. Pooled shape: {pooled_np.shape}, Target shape: (-1, {shape[1:]})")
+                result = np.zeros((pooled_np.shape[0], *shape[1:]))
+                result[:, :pooled_np.shape[1]] = pooled_np
+        else:
+            result = pooled_np
 
-    elapsed_time = time.time() - start_time
-    logger.debug(f"avg_pool complete: input shape {shape} → output shape {result.shape} in {elapsed_time:.4f}s")
+        elapsed_time = time.time() - start_time
+        logger.debug(f"avg_pool complete: input shape {shape} → output shape {result.shape} in {elapsed_time:.4f}s")
 
-    return result
-
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in avg_pool: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Return zeros with target shape
+        if shape is None:
+            return np.zeros((max_length, 3))
+        else:
+            return np.zeros((max_length, *shape[1:]))
 
 def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int,
                       input_shape: np.ndarray) -> np.ndarray:
     '''
-    Pads or truncates a sequence to a specified length.
+    Pads or truncates a sequence to a specified length with robust error handling.
 
     Args:
         sequence: Input data sequence
@@ -209,30 +431,46 @@ def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int,
         Padded/truncated sequence of uniform length
     '''
     logger.debug(f"Padding sequence to length {max_sequence_length}")
+    
+    try:
+        # Check for empty input
+        if sequence is None or len(sequence) == 0:
+            logger.warning("Empty sequence provided to pad_sequence_numpy")
+            new_shape = list(input_shape)
+            new_shape[0] = max_sequence_length
+            return np.zeros(new_shape)
 
-    # Create target shape
-    shape = list(input_shape)
-    shape[0] = max_sequence_length
+        # Create target shape
+        shape = list(input_shape)
+        shape[0] = max_sequence_length
 
-    # Apply pooling if needed
-    pooled_sequence = avg_pool(sequence=sequence, max_length=max_sequence_length, shape=input_shape)
+        # Apply pooling if needed
+        pooled_sequence = avg_pool(sequence=sequence, max_length=max_sequence_length, shape=input_shape)
 
-    # Create zero-padded array of target shape
-    new_sequence = np.zeros(shape, sequence.dtype)
+        # Create zero-padded array of target shape
+        new_sequence = np.zeros(shape, sequence.dtype)
 
-    # Fill with pooled data up to available length
-    actual_length = min(len(pooled_sequence), max_sequence_length)
-    new_sequence[:actual_length] = pooled_sequence[:actual_length]
+        # Fill with pooled data up to available length
+        actual_length = min(len(pooled_sequence), max_sequence_length)
+        new_sequence[:actual_length] = pooled_sequence[:actual_length]
 
-    logger.debug(f"Padding complete: shape {input_shape} → {new_sequence.shape}")
+        logger.debug(f"Padding complete: shape {input_shape} → {new_sequence.shape}")
 
-    return new_sequence
-
+        return new_sequence
+        
+    except Exception as e:
+        logger.error(f"Error in pad_sequence_numpy: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Return zeros with target shape
+        new_shape = list(input_shape)
+        new_shape[0] = max_sequence_length
+        return np.zeros(new_shape)
 
 def sliding_window(data: np.ndarray, clearing_time_index: int, max_time: int,
                   sub_window_size: int, stride_size: int) -> np.ndarray:
     '''
-    Extracts sliding windows from a time series.
+    Extracts sliding windows from a time series with robust error handling.
 
     Args:
         data: Input data array
@@ -245,33 +483,58 @@ def sliding_window(data: np.ndarray, clearing_time_index: int, max_time: int,
         Array of sliding windows
     '''
     logger.debug(f"Creating sliding windows with window_size={sub_window_size}, stride={stride_size}")
+    
+    try:
+        # Check for empty input
+        if data is None or len(data) == 0:
+            logger.warning("Empty data provided to sliding_window")
+            return np.zeros((1, sub_window_size, data.shape[1] if data is not None and len(data.shape) > 1 else 3))
 
-    # Validate parameters
-    if clearing_time_index < sub_window_size - 1:
-        logger.error(f"Invalid clearing_time_index: {clearing_time_index} < {sub_window_size - 1}")
-        raise AssertionError("Clearing value needs to be greater or equal to (window size - 1)")
+        # Validate parameters
+        if clearing_time_index < sub_window_size - 1:
+            logger.warning(f"Invalid clearing_time_index: {clearing_time_index} < {sub_window_size - 1}")
+            clearing_time_index = sub_window_size - 1
 
-    # Calculate starting index
-    start = clearing_time_index - sub_window_size + 1
+        # Calculate starting index
+        start = clearing_time_index - sub_window_size + 1
 
-    # Adjust max_time if needed to prevent out-of-bounds access
-    if max_time >= data.shape[0] - sub_window_size:
-        max_time = max_time - sub_window_size + 1
-        logger.debug(f"Adjusted max_time to {max_time}")
+        # Adjust max_time if needed to prevent out-of-bounds access
+        if max_time >= data.shape[0] - sub_window_size:
+            max_time = data.shape[0] - sub_window_size
+            logger.debug(f"Adjusted max_time to {max_time}")
+            
+        # Handle case where max_time is too small
+        if max_time < 0:
+            logger.warning(f"max_time ({max_time}) is negative, using 0")
+            max_time = 0
 
-    # Generate indices for all windows
-    sub_windows = (
-        start +
-        np.expand_dims(np.arange(sub_window_size), 0) +
-        np.expand_dims(np.arange(max_time, step=stride_size), 0).T
-    )
+        # Handle case where start is too large
+        if start >= max_time:
+            logger.warning(f"start ({start}) >= max_time ({max_time}), using max_time-1")
+            start = max(0, max_time - 1)
 
-    # Extract windows using the indices
-    result = data[sub_windows]
-    logger.debug(f"Created {result.shape[0]} windows from data with shape {data.shape}")
+        # Generate indices for all windows
+        sub_windows = (
+            start +
+            np.expand_dims(np.arange(sub_window_size), 0) +
+            np.expand_dims(np.arange(start, max_time, step=stride_size), 0).T
+        )
 
-    return result
+        # Extract windows using the indices
+        result = data[sub_windows]
+        logger.debug(f"Created {result.shape[0]} windows from data with shape {data.shape}")
 
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in sliding_window: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Return single window of zeros
+        if data is not None and len(data.shape) > 1:
+            return np.zeros((1, sub_window_size, data.shape[1]))
+        else:
+            return np.zeros((1, sub_window_size, 3))
 
 def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
                       threshold: float = 2.0, window_size: int = 5) -> np.ndarray:
@@ -298,13 +561,19 @@ def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
         # Calculate first differences to estimate rate of change
         dy = np.diff(y)
         dx = np.diff(x)
-
+        
         # Avoid division by zero
-        rates = np.abs(dy / np.maximum(dx, 1e-10))
+        nonzero_dx = np.maximum(dx, 1e-10)
+        rates = np.abs(dy / nonzero_dx)
 
         # Smooth the rates to avoid switching too frequently
         if len(rates) >= window_size:
-            rates = savgol_filter(rates, window_size, 2)
+            try:
+                rates = savgol_filter(rates, window_size, 2)
+            except Exception:
+                # Fall back to moving average if savgol fails
+                kernel = np.ones(window_size) / window_size
+                rates = np.convolve(rates, kernel, mode='same')
 
         # Create mask for rapid changes
         rapid_changes = rates > threshold
@@ -313,16 +582,19 @@ def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
         if not np.any(rapid_changes):
             logger.debug("Using cubic spline interpolation for entire signal")
             try:
+                from scipy.interpolate import CubicSpline
                 cs = CubicSpline(x, y)
                 return cs(x_new)
             except Exception as e:
                 logger.warning(f"Cubic spline failed: {e}, falling back to linear")
+                from scipy.interpolate import interp1d
                 linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
                 return linear_interp(x_new)
 
         # If all changes are rapid, use linear for everything
         if np.all(rapid_changes):
             logger.debug("Using linear interpolation for entire signal")
+            from scipy.interpolate import interp1d
             linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
             return linear_interp(x_new)
 
@@ -330,6 +602,7 @@ def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
         logger.debug(f"Using hybrid interpolation: {np.sum(rapid_changes)}/{len(rapid_changes)} points have rapid changes")
 
         # Create interpolators for both methods
+        from scipy.interpolate import interp1d, CubicSpline
         linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
         try:
             spline_interp = CubicSpline(x, y)
@@ -378,554 +651,21 @@ def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
 
     except Exception as e:
         logger.error(f"Hybrid interpolation failed: {e}")
+        logger.error(traceback.format_exc())
+        
         # Fallback to simple linear interpolation
-        linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-        return linear_interp(x_new)
-
-
-def align_sensors_with_hybrid_interpolation(acc_data: pd.DataFrame, gyro_data: pd.DataFrame,
-                                          target_freq: int = 30, acc_threshold: float = 3.0,
-                                          gyro_threshold: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Aligns accelerometer and gyroscope data using hybrid interpolation that adapts to signal characteristics.
-
-    Args:
-        acc_data: DataFrame with columns [timestamp, x, y, z]
-        gyro_data: DataFrame with columns [timestamp, x, y, z]
-        target_freq: Target frequency in Hz for the aligned data
-        acc_threshold: Rate of change threshold for accelerometer (g/s)
-        gyro_threshold: Rate of change threshold for gyroscope (rad/s²)
-
-    Returns:
-        Tuple of (aligned_acc, aligned_gyro, aligned_timestamps)
-    """
-    start_time = time.time()
-    logger.info(f"Aligning sensors using hybrid interpolation at {target_freq}Hz")
-
-    try:
-        # Extract timestamps and convert to seconds if they're datetime objects
-        if isinstance(acc_data.iloc[0, 0], (str, pd.Timestamp)):
-            logger.debug("Converting accelerometer timestamps from string to datetime")
-            acc_times = pd.to_datetime(acc_data.iloc[:, 0]).astype(np.int64) / 1e9
-        else:
-            acc_times = acc_data.iloc[:, 0].values
-
-        if isinstance(gyro_data.iloc[0, 0], (str, pd.Timestamp)):
-            logger.debug("Converting gyroscope timestamps from string to datetime")
-            gyro_times = pd.to_datetime(gyro_data.iloc[:, 0]).astype(np.int64) / 1e9
-        else:
-            gyro_times = gyro_data.iloc[:, 0].values
-
-        # Find common time range
-        start_time_point = max(acc_times.min(), gyro_times.min())
-        end_time_point = min(acc_times.max(), gyro_times.max())
-
-        logger.debug(f"Common time range: {start_time_point:.3f}s to {end_time_point:.3f}s")
-
-        # Check if there's a valid overlap
-        if start_time_point >= end_time_point:
-            logger.warning("No temporal overlap between sensors")
-            return np.array([]), np.array([]), np.array([])
-
-        # Create common time grid
-        duration = end_time_point - start_time_point
-        num_samples = int(duration * target_freq)
-
-        if num_samples < 10:  # Minimum viable data
-            logger.warning(f"Overlap too short: {duration:.2f}s")
-            return np.array([]), np.array([]), np.array([])
-
-        common_times = np.linspace(start_time_point, end_time_point, num_samples)
-
-        # Extract sensor data
-        acc_values = acc_data.iloc[:, 1:4].values
-        gyro_values = gyro_data.iloc[:, 1:4].values
-
-        # Initialize arrays for interpolated data
-        aligned_acc = np.zeros((num_samples, 3))
-        aligned_gyro = np.zeros((num_samples, 3))
-
-        # Calculate signal magnitudes for diagnostics
-        acc_mag = np.linalg.norm(acc_values, axis=1)
-        gyro_mag = np.linalg.norm(gyro_values, axis=1)
-
-        logger.debug(f"Acc magnitude range: {acc_mag.min():.2f}-{acc_mag.max():.2f}g")
-        logger.debug(f"Gyro magnitude range: {gyro_mag.min():.2f}-{gyro_mag.max():.2f}rad/s")
-
-        # Process in parallel using thread pool
-        thread_pool = ThreadPoolExecutor(max_workers=6)
-        futures = []
-
-        # Submit interpolation tasks
-        for axis in range(3):
-            # Use different thresholds for accelerometer and gyroscope
-            futures.append(
-                thread_pool.submit(
-                    hybrid_interpolate,
-                    acc_times,
-                    acc_values[:, axis],
-                    common_times,
-                    threshold=acc_threshold
-                )
-            )
-            
-            futures.append(
-                thread_pool.submit(
-                    hybrid_interpolate,
-                    gyro_times,
-                    gyro_values[:, axis],
-                    common_times,
-                    threshold=gyro_threshold
-                )
-            )
-
-        # Collect results
-        for i, future in enumerate(futures):
-            result = future.result()
-            if i < 3:  # First 3 are accelerometer
-                aligned_acc[:, i] = result
-            else:  # Last 3 are gyroscope
-                aligned_gyro[:, i - 3] = result
-
-        # Clean up thread pool
-        thread_pool.shutdown()
-
-        elapsed_time = time.time() - start_time
-        logger.info(f"Hybrid interpolation complete: {num_samples} aligned samples in {elapsed_time:.2f}s")
-
-        return aligned_acc, aligned_gyro, common_times
-
-    except Exception as e:
-        logger.error(f"Sensor alignment failed: {str(e)}")
-        return np.array([]), np.array([]), np.array([])
-
-
-def visualize_alignment(acc_times, acc_values, gyro_times, gyro_values,
-                       common_times, aligned_acc, aligned_gyro):
-    """
-    Creates visualization of sensor alignment before and after interpolation.
-
-    Args:
-        acc_times: Original accelerometer timestamps
-        acc_values: Original accelerometer values
-        gyro_times: Original gyroscope timestamps
-        gyro_values: Original gyroscope values
-        common_times: Common timestamps after alignment
-        aligned_acc: Aligned accelerometer values
-        aligned_gyro: Aligned gyroscope values
-    """
-    try:
-        # Create directory for visualizations
-        viz_dir = os.path.join(log_dir, "alignment_viz")
-        os.makedirs(viz_dir, exist_ok=True)
-
-        # Create filename with timestamp
-        filename = f"alignment_{int(time.time())}.png"
-
-        # Create a new figure to avoid renderer issues
-        plt.close('all')
-        fig, axes = plt.subplots(3, 2, figsize=(15, 10))
-
-        # Plot accelerometer X axis
-        axes[0, 0].plot(acc_times, acc_values[:, 0], 'b.', alpha=0.5, label='Original')
-        axes[0, 0].plot(common_times, aligned_acc[:, 0], 'r-', label='Interpolated')
-        axes[0, 0].set_title('Accelerometer X-axis')
-        axes[0, 0].legend()
-
-        # Plot gyroscope X axis
-        axes[0, 1].plot(gyro_times, gyro_values[:, 0], 'b.', alpha=0.5, label='Original')
-        axes[0, 1].plot(common_times, aligned_gyro[:, 0], 'r-', label='Interpolated')
-        axes[0, 1].set_title('Gyroscope X-axis')
-        axes[0, 1].legend()
-
-        # Plot accelerometer Y axis
-        axes[1, 0].plot(acc_times, acc_values[:, 1], 'b.', alpha=0.5, label='Original')
-        axes[1, 0].plot(common_times, aligned_acc[:, 1], 'r-', label='Interpolated')
-        axes[1, 0].set_title('Accelerometer Y-axis')
-
-        # Plot gyroscope Y axis
-        axes[1, 1].plot(gyro_times, gyro_values[:, 1], 'b.', alpha=0.5, label='Original')
-        axes[1, 1].plot(common_times, aligned_gyro[:, 1], 'r-', label='Interpolated')
-        axes[1, 1].set_title('Gyroscope Y-axis')
-
-        # Plot accelerometer Z axis
-        axes[2, 0].plot(acc_times, acc_values[:, 2], 'b.', alpha=0.5, label='Original')
-        axes[2, 0].plot(common_times, aligned_acc[:, 2], 'r-', label='Interpolated')
-        axes[2, 0].set_title('Accelerometer Z-axis')
-
-        # Plot gyroscope Z axis
-        axes[2, 1].plot(gyro_times, gyro_values[:, 2], 'b.', alpha=0.5, label='Original')
-        axes[2, 1].plot(common_times, aligned_gyro[:, 2], 'r-', label='Interpolated')
-        axes[2, 1].set_title('Gyroscope Z-axis')
-
-        plt.tight_layout()
-        
-        # Ensure the figure is drawn before saving
-        fig.canvas.draw()
-        plt.savefig(os.path.join(viz_dir, filename))
-        plt.close(fig)
-
-        logger.debug(f"Alignment visualization saved to {os.path.join(viz_dir, filename)}")
-    except Exception as e:
-        logger.warning(f"Failed to create alignment visualization: {e}")
-        plt.close('all')  # Clean up any open figures
-
-
-def visualize_skl_acc_alignment(skeleton_mag, acc_mag, skeleton_indices, inertial_indices):
-    """
-    Visualizes alignment between skeleton and accelerometer data.
-
-    Args:
-        skeleton_mag: Magnitude values from skeleton data
-        acc_mag: Magnitude values from accelerometer data
-        skeleton_indices: Indices selected from skeleton data after alignment
-        inertial_indices: Indices selected from accelerometer data after alignment
-    """
-    try:
-        # Create directory for visualizations
-        viz_dir = os.path.join(log_dir, "alignment_viz")
-        os.makedirs(viz_dir, exist_ok=True)
-
-        # Create filename with timestamp
-        filename = f"skl_acc_alignment_{int(time.time())}.png"
-
-        # Clean up previous plots
-        plt.close('all')
-        
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-
-        # Plot magnitude signals before alignment
-        ax1.plot(skeleton_mag, 'b-', label='Skeleton')
-        ax1.plot(acc_mag, 'r-', label='Accelerometer')
-        ax1.set_title('Signals before alignment')
-        ax1.legend()
-
-        # Plot aligned signals
-        ax2.plot(skeleton_mag[list(skeleton_indices)], 'b-', label='Aligned Skeleton')
-        ax2.plot(acc_mag[list(inertial_indices)], 'r-', label='Aligned Accelerometer')
-        ax2.set_title('Signals after alignment')
-        ax2.legend()
-
-        # Draw the figure to avoid empty plot issues
-        fig.canvas.draw()
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(viz_dir, filename))
-        plt.close(fig)
-
-        logger.debug(f"Skeleton-Accelerometer alignment visualization saved to {os.path.join(viz_dir, filename)}")
-    except Exception as e:
-        logger.warning(f"Failed to create skeleton-accelerometer alignment visualization: {e}")
-        plt.close('all')
-
-
-def create_dataframe_with_timestamps(data, start_time=0, sample_rate=None):
-    """
-    Creates a DataFrame with synthetic timestamps when actual timestamps are not available.
-
-    Args:
-        data: Sensor data array
-        start_time: Start time in seconds
-        sample_rate: Estimated sample rate (if None, assumes evenly spaced samples)
-
-    Returns:
-        DataFrame with timestamp column and sensor data
-    """
-    num_samples = data.shape[0]
-
-    if sample_rate is None:
-        # Create evenly spaced timestamps (assuming 30Hz if not specified)
-        timestamps = np.linspace(start_time, start_time + num_samples/30, num_samples)
-    else:
-        # Create timestamps based on sample rate
-        timestamps = np.arange(num_samples) / sample_rate + start_time
-
-    # Create a DataFrame with timestamp and data columns
-    df = pd.DataFrame()
-    df['timestamp'] = timestamps
-
-    # Add the data columns
-    for i in range(data.shape[1]):
-        df[f'axis_{i}'] = data[:, i]
-
-    return df
-
-
-def filter_data_by_ids(data: np.ndarray, ids: List[int]) -> np.ndarray:
-    '''
-    Selects specific indices from a data array.
-
-    Args:
-        data: Input data array
-        ids: List of indices to select
-
-    Returns:
-        Filtered data array containing only the selected indices
-    '''
-    logger.debug(f"Filtering data with {len(ids)} indices")
-
-    if len(ids) == 0:
-        logger.warning("Empty ID list for filtering")
-        return np.array([])
-
-    result = data[ids, :]
-    logger.debug(f"Filtered data shape: {result.shape}")
-
-    return result
-
-
-def filter_repeated_ids(path: List[Tuple[int, int]]) -> Tuple[set, set]:
-    '''
-    Filters DTW path to create one-to-one mapping between indices.
-
-    Args:
-        path: List of index pairs from DTW warping path
-
-    Returns:
-        Two sets containing unique indices for each sequence
-    '''
-    logger.debug(f"Filtering repeated IDs from path with {len(path)} points")
-
-    seen_first = set()
-    seen_second = set()
-
-    for (first, second) in path:
-        if first not in seen_first and second not in seen_second:
-            seen_first.add(first)
-            seen_second.add(second)
-
-    logger.debug(f"Filtered to {len(seen_first)} unique first indices and {len(seen_second)} unique second indices")
-
-    return seen_first, seen_second
-
-
-def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-    '''
-    Aligns data from multiple sensor modalities using hybrid interpolation and DTW.
-
-    This function first aligns accelerometer and gyroscope data using hybrid interpolation,
-    then aligns skeleton data with the synchronized inertial data using DTW.
-
-    Args:
-        data: Dictionary containing sensor data for different modalities
-
-    Returns:
-        Dictionary with aligned sensor data
-    '''
-    logger.info("Aligning skeleton and inertial data")
-
-    start_time = time.time()
-
-    # Verify required data exists
-    if 'skeleton' not in data:
-        logger.warning("Missing skeleton data for alignment")
-
-        # If we still have both accelerometer and gyroscope, align them
-        if 'accelerometer' in data and 'gyroscope' in data:
-            try:
-                # Create DataFrames with timestamps
-                acc_df = create_dataframe_with_timestamps(data['accelerometer'])
-                gyro_df = create_dataframe_with_timestamps(data['gyroscope'])
-
-                # Align using hybrid interpolation
-                aligned_acc, aligned_gyro, aligned_times = align_sensors_with_hybrid_interpolation(
-                    acc_df, gyro_df, target_freq=30,
-                    acc_threshold=3.0,  # Adjust based on your data characteristics
-                    gyro_threshold=1.0
-                )
-
-                if len(aligned_acc) > 0:
-                    # Update data with interpolated values
-                    data['accelerometer'] = aligned_acc
-                    data['gyroscope'] = aligned_gyro
-                    data['aligned_timestamps'] = aligned_times
-                    logger.info(f"Inertial sensors aligned with {len(aligned_acc)} samples")
-                else:
-                    logger.warning("Sensor alignment failed - insufficient overlap")
-            except Exception as e:
-                logger.error(f"Sensor alignment error: {str(e)}")
-
-        return data
-
-    # Step 1: Find dynamic modalities (non-skeleton)
-    dynamic_keys = sorted([key for key in data.keys() if key != "skeleton"])
-
-    if not dynamic_keys:
-        logger.warning("No inertial data found for alignment")
-        return data
-
-    # Step 2: Align accelerometer and gyroscope if both exist
-    if len(dynamic_keys) > 1:
-        logger.debug(f"Found multiple inertial modalities: {dynamic_keys}")
-        acc_data = data[dynamic_keys[0]]
-        gyro_data = data[dynamic_keys[1]]
-
         try:
-            # Create DataFrames with timestamps
-            acc_df = create_dataframe_with_timestamps(acc_data)
-            gyro_df = create_dataframe_with_timestamps(gyro_data)
+            from scipy.interpolate import interp1d
+            linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
+            return linear_interp(x_new)
+        except Exception:
+            # Ultimate fallback: return zeros
+            return np.zeros_like(x_new)
 
-            # Align using hybrid interpolation
-            aligned_acc, aligned_gyro, aligned_times = align_sensors_with_hybrid_interpolation(
-                acc_df, gyro_df, target_freq=30
-            )
-
-            if len(aligned_acc) > 0:
-                # Update data with interpolated values
-                data[dynamic_keys[0]] = aligned_acc
-                data[dynamic_keys[1]] = aligned_gyro
-                data['aligned_timestamps'] = aligned_times
-                logger.info(f"Inertial sensors aligned: {len(aligned_acc)} samples")
-            else:
-                logger.warning("Inertial sensor alignment failed - insufficient overlap")
-        except Exception as e:
-            logger.error(f"Inertial sensor alignment error: {str(e)}")
-
-    # Step 3: Align skeleton with inertial data
-    try:
-        # Get reference skeleton joint data (typically left wrist)
-        joint_id = 9
-        skeleton_joint_data = data['skeleton'][:, (joint_id - 1) * 3 : joint_id * 3]
-        logger.debug(f"Using joint ID {joint_id} (left wrist) with shape {skeleton_joint_data.shape}")
-
-        # Get primary inertial data (usually accelerometer)
-        inertial_data = data[dynamic_keys[0]]
-        logger.debug(f"Using {dynamic_keys[0]} with shape {inertial_data.shape} for skeleton alignment")
-
-        # Calculate Frobenius norm for both data types
-        skeleton_frob_norm = np.linalg.norm(skeleton_joint_data, axis=1)
-        inertial_frob_norm = np.linalg.norm(inertial_data, axis=1)
-
-        # Perform DTW alignment
-        path = dtw.warping_path(skeleton_frob_norm, inertial_frob_norm)
-        logger.debug(f"DTW path found with {len(path)} points")
-
-        # Filter to unique indices
-        skeleton_idx, inertial_ids = filter_repeated_ids(path)
-
-        # Apply filtering
-        data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
-        for key in dynamic_keys:
-            data[key] = filter_data_by_ids(data[key], list(inertial_ids))
-        
-        if 'aligned_timestamps' in data:
-            data['aligned_timestamps'] = filter_data_by_ids(data['aligned_timestamps'].reshape(-1, 1), list(inertial_ids)).flatten()
-
-        logger.info(f"DTW alignment complete: {len(skeleton_idx)} skeleton frames, {len(inertial_ids)} inertial frames")
-
-        # Visualize alignment if at debug level
-        if logger.level <= logging.DEBUG:
-            visualize_skl_acc_alignment(skeleton_frob_norm, inertial_frob_norm,
-                                      skeleton_idx, inertial_ids)
-
-    except Exception as e:
-        logger.error(f"DTW alignment error: {str(e)}")
-
-    elapsed_time = time.time() - start_time
-    logger.debug(f"Alignment completed in {elapsed_time:.2f}s")
-
-    return data
-
-
-def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
-                            peaks: Union[List[int], np.ndarray], label: int,
-                            fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
+def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick'):
     """
-    Creates windows centered around detected peaks with optional fusion processing.
-
-    Args:
-        data: Dictionary of sensor data arrays
-        window_size: Size of each window
-        peaks: List of peak indices to center windows on
-        label: Label for this activity
-        fuse: Whether to apply sensor fusion
-        filter_type: Type of fusion filter to use
-
-    Returns:
-        Dictionary of windowed data arrays
-    """
-    start_time = time.time()
-    logger.info(f"Creating selective windows: peaks={len(peaks)}, fusion={fuse}, filter_type={filter_type}")
-
-    windowed_data = defaultdict(list)
-
-    # Check for required modalities
-    has_gyro = 'gyroscope' in data and data['gyroscope'] is not None and len(data['gyroscope']) > 0
-    if fuse and not has_gyro:
-        logger.warning("Fusion requested but gyroscope data not available")
-        fuse = False
-
-    # Create local thread pool for windows
-    max_workers = min(8, len(peaks)) if len(peaks) > 0 else 1
-    with ThreadPoolExecutor(max_workers=max_workers) as thread_pool:
-        # Create windows around peaks with parallel processing
-        futures = []
-    
-        # Submit window extraction tasks
-        for peak_idx, peak in enumerate(peaks):
-            # Calculate window boundaries
-            start = max(0, peak - window_size // 2)
-            end = min(len(data['accelerometer']), start + window_size)
-    
-            # Skip if window is too small
-            if end - start < window_size:
-                logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size})")
-                continue
-    
-            # Submit task
-            futures.append((
-                peak_idx,
-                peak,
-                thread_pool.submit(
-                    _extract_window,
-                    data,
-                    start,
-                    end,
-                    window_size,
-                    fuse,
-                    filter_type
-                )
-            ))
-    
-        # Collect results with progress bar if there are many windows
-        windows_created = 0
-        collection_iterator = tqdm(futures, desc="Processing windows") if len(futures) > 5 else futures
-        
-        for peak_idx, peak, future in collection_iterator:
-            try:
-                window_data = future.result()
-                
-                # Add this window's data to the result dictionary
-                for modality, modality_window in window_data.items():
-                    if modality_window is not None:
-                        windowed_data[modality].append(modality_window)
-                
-                windows_created += 1
-            except Exception as e:
-                logger.error(f"Error processing window at peak {peak}: {str(e)}")
-
-    # Convert lists of arrays to arrays
-    for modality in windowed_data:
-        if modality != 'labels' and len(windowed_data[modality]) > 0:
-            try:
-                windowed_data[modality] = np.array(windowed_data[modality])
-                logger.debug(f"Converted {modality} windows to array with shape {windowed_data[modality].shape}")
-            except Exception as e:
-                logger.error(f"Error converting {modality} windows to array: {str(e)}")
-
-    # Add labels
-    windowed_data['labels'] = np.repeat(label, windows_created)
-
-    elapsed_time = time.time() - start_time
-    logger.info(f"Created {windows_created} windows in {elapsed_time:.2f}s")
-
-    return windowed_data
-
-
-def _extract_window(data, start, end, window_size, fuse, filter_type):
-    """
-    Helper function to extract a window from data.
-    Designed to be run in a separate thread.
+    Helper function to extract a window from data with proper fusion handling.
+    Designed to be run in a separate thread for parallel processing.
     
     Args:
         data: Dictionary of sensor data arrays
@@ -933,26 +673,31 @@ def _extract_window(data, start, end, window_size, fuse, filter_type):
         end: End index for window
         window_size: Target window size
         fuse: Whether to apply fusion
-        filter_type: Type of filter to use
+        filter_type: Type of filter to use (default: 'madgwick')
         
     Returns:
         Dictionary of windowed data
     """
-    window_data = {}
-    
-    # Extract window for each modality
-    for modality, modality_data in data.items():
-        if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
+    try:
+        window_data = {}
+        
+        # Extract window for each modality
+        for modality, modality_data in data.items():
+            if modality == 'labels':
+                continue
+                
+            if modality_data is None or len(modality_data) == 0:
+                continue
+                
             try:
-                # Special handling for one-dimensional arrays like aligned_timestamps
+                # Handle the modality based on its type
                 if modality == 'aligned_timestamps':
                     # Handle 1D array - no second dimension indexing
                     if len(modality_data.shape) == 1:
                         window_data_array = modality_data[start:min(end, len(modality_data))]
-
+                        
                         # Pad if needed
                         if len(window_data_array) < window_size:
-                            logger.debug(f"Padding {modality} window from {len(window_data_array)} to {window_size}")
                             padded = np.zeros(window_size, dtype=window_data_array.dtype)
                             padded[:len(window_data_array)] = window_data_array
                             window_data_array = padded
@@ -965,59 +710,233 @@ def _extract_window(data, start, end, window_size, fuse, filter_type):
                             window_data_array = padded
                 else:
                     # Regular handling for 2D arrays
-                    window_data_array = modality_data[start:min(end, len(modality_data)), :]
-
-                    # Pad if needed
-                    if window_data_array.shape[0] < window_size:
-                        logger.debug(f"Padding {modality} window from {window_data_array.shape[0]} to {window_size}")
-                        padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                        padded[:window_data_array.shape[0]] = window_data_array
-                        window_data_array = padded
-
+                    max_idx = min(end, len(modality_data))
+                    if start >= max_idx:
+                        # Handle invalid indices
+                        logger.warning(f"Invalid indices for {modality}: start={start}, end={end}, len={len(modality_data)}")
+                        if modality == 'accelerometer':
+                            window_data_array = np.zeros((window_size, 3))
+                        elif modality == 'gyroscope':
+                            window_data_array = np.zeros((window_size, 3))
+                        elif modality == 'quaternion':
+                            window_data_array = np.zeros((window_size, 4))
+                        else:
+                            continue
+                    else:
+                        # Extract window from data
+                        window_data_array = modality_data[start:max_idx, :]
+                        
+                        # Pad if needed
+                        if window_data_array.shape[0] < window_size:
+                            padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
+                            padded[:window_data_array.shape[0]] = window_data_array
+                            window_data_array = padded
+                
+                # Store in window data dictionary
                 window_data[modality] = window_data_array
             except Exception as e:
                 logger.error(f"Error extracting {modality} window: {str(e)}")
-                window_data[modality] = None
-
-    # Apply fusion if requested and we have both accelerometer and gyroscope
-    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
-        try:
-            # Extract the window data
-            acc_window = window_data['accelerometer']
-            gyro_window = window_data['gyroscope']
-
-            # Extract timestamps if available
-            timestamps = None
-            if 'aligned_timestamps' in window_data:
-                # Ensure we handle 1D timestamp array correctly
-                if len(window_data['aligned_timestamps'].shape) == 1:
-                    timestamps = window_data['aligned_timestamps']
-                else:
-                    # Handle unexpected 2D timestamps if they occur
-                    timestamps = window_data['aligned_timestamps'][:, 0]
-
-            # Process data using IMU fusion
-            features = process_imu_data(
-                acc_data=acc_window,
-                gyro_data=gyro_window,
-                timestamps=timestamps,
-                filter_type=filter_type,
-                return_features=True
-            )
-
-            # IMPORTANT: Add fusion results to window data
-            # We change the key to 'linear_acceleration' instead of 'accelerometer'
-            window_data['linear_acceleration'] = features['linear_acceleration']
-            window_data['quaternion'] = features['quaternion']
-            if 'fusion_features' in features:
-                window_data['fusion_features'] = features['fusion_features']
+                # Add empty data with correct shape for critical modalities
+                if modality == 'accelerometer':
+                    window_data[modality] = np.zeros((window_size, 3))
+                elif modality == 'gyroscope':
+                    window_data[modality] = np.zeros((window_size, 3))
+                elif modality == 'quaternion':
+                    window_data[modality] = np.zeros((window_size, 4))
+        
+        # Apply fusion if requested and we have both accelerometer and gyroscope
+        if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
+            try:
+                # Extract the window data
+                acc_window = window_data['accelerometer']
+                gyro_window = window_data['gyroscope']
                 
-            logger.debug(f"Added fusion data to window")
-        except Exception as e:
-            logger.error(f"Error in fusion processing: {str(e)}")
-    
-    return window_data
+                # Extract timestamps if available, otherwise create synthetic ones
+                timestamps = None
+                if 'aligned_timestamps' in window_data:
+                    timestamps = window_data['aligned_timestamps']
+                    # Convert to 1D array if needed
+                    if len(timestamps.shape) > 1:
+                        timestamps = timestamps[:, 0] if timestamps.shape[1] > 0 else None
+                
+                # Process data using Madgwick filter
+                fusion_results = process_imu_data(
+                    acc_data=acc_window,
+                    gyro_data=gyro_window,
+                    timestamps=timestamps,
+                    filter_type='madgwick',  # Always use Madgwick for now
+                    return_features=False
+                )
+                
+                # Add fusion results to window data
+                window_data['quaternion'] = fusion_results.get('quaternion', np.zeros((window_size, 4)))
+                window_data['linear_acceleration'] = fusion_results.get('linear_acceleration', acc_window)
+                    
+                logger.debug(f"Added fusion data to window using Madgwick filter")
+            except Exception as e:
+                logger.error(f"Error in fusion processing: {str(e)}")
+                # Add empty quaternion as fallback
+                window_data['quaternion'] = np.zeros((window_size, 4))
+        else:
+            # Always add empty quaternion data as a fallback if not present
+            if 'quaternion' not in window_data:
+                window_data['quaternion'] = np.zeros((window_size, 4))
+        
+        # Final validation of quaternion data
+        if 'quaternion' not in window_data or window_data['quaternion'] is None:
+            window_data['quaternion'] = np.zeros((window_size, 4))
+        elif window_data['quaternion'].shape[0] != window_size:
+            # Fix quaternion shape if needed
+            temp = np.zeros((window_size, 4))
+            if window_data['quaternion'].shape[0] < window_size:
+                temp[:window_data['quaternion'].shape[0]] = window_data['quaternion']
+            else:
+                temp = window_data['quaternion'][:window_size]
+            window_data['quaternion'] = temp
+        
+        # IMPORTANT: Remove aligned_timestamps from window data to avoid KeyError in batching
+        if 'aligned_timestamps' in window_data:
+            del window_data['aligned_timestamps']
+            
+        return window_data
+    except Exception as e:
+        logger.error(f"Error in _extract_window: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Return minimal valid data
+        return {
+            'accelerometer': np.zeros((window_size, 3)),
+            'quaternion': np.zeros((window_size, 4))
+        }
 
+def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
+                           peaks: Union[List[int], np.ndarray], label: int,
+                           fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
+    """
+    Creates windows centered around detected peaks with IMU fusion.
+    
+    Args:
+        data: Dictionary of sensor data arrays
+        window_size: Size of each window
+        peaks: List of peak indices to center windows on
+        label: Label for this activity
+        fuse: Whether to apply sensor fusion
+        filter_type: Type of fusion filter to use (default: 'madgwick')
+        
+    Returns:
+        Dictionary of windowed data arrays
+    """
+    start_time = time.time()
+    
+    # Validate inputs
+    num_peaks = len(peaks) if peaks is not None else 0
+    logger.info(f"Creating {num_peaks} selective windows with fusion={fuse}, filter={filter_type}")
+    
+    if num_peaks == 0:
+        logger.warning("No peaks provided for windowing")
+        # Return empty data dictionary with correct structure
+        return {
+            'accelerometer': np.zeros((0, window_size, 3)),
+            'gyroscope': np.zeros((0, window_size, 3)) if 'gyroscope' in data else None,
+            'quaternion': np.zeros((0, window_size, 4)),
+            'labels': np.array([])
+        }
+    
+    # Initialize result dictionary
+    windowed_data = defaultdict(list)
+    
+    # Check for required modalities
+    has_gyro = 'gyroscope' in data and data['gyroscope'] is not None and len(data['gyroscope']) > 0
+    if fuse and not has_gyro:
+        logger.warning("Fusion requested but gyroscope data not available, will use accelerometer only")
+    
+    # Create local thread pool for windows
+    max_workers = min(8, len(peaks)) if len(peaks) > 0 else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as local_pool:
+        # Create windows around peaks with parallel processing
+        futures = []
+        
+        # Submit window extraction tasks
+        for peak in peaks:
+            # Calculate window boundaries
+            half_window = window_size // 2
+            start = max(0, peak - half_window)
+            end = min(len(data['accelerometer']), start + window_size)
+            
+            # Skip if window is too small
+            if end - start < window_size // 2:
+                logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size//2})")
+                continue
+                
+            # Submit task
+            futures.append(local_pool.submit(
+                _extract_window,
+                data,
+                start,
+                end,
+                window_size,
+                fuse,
+                filter_type
+            ))
+            
+        # Collect results with progress bar if there are many windows
+        windows_created = 0
+        use_progress = len(futures) > 10
+        
+        if use_progress:
+            collection_iterator = tqdm(futures, desc="Processing windows")
+        else:
+            collection_iterator = futures
+            
+        for future in collection_iterator:
+            try:
+                window_data = future.result()
+                
+                # Verify quaternion data exists before adding window
+                if 'quaternion' not in window_data or window_data['quaternion'] is None:
+                    logger.warning(f"Window missing quaternion data, adding zeros")
+                    window_data['quaternion'] = np.zeros((window_size, 4))
+                    
+                # Add this window's data to the result dictionary
+                for modality, modality_window in window_data.items():
+                    if modality_window is not None:
+                        windowed_data[modality].append(modality_window)
+                
+                windows_created += 1
+            except Exception as e:
+                logger.error(f"Error processing window: {str(e)}")
+    
+    # Convert lists of arrays to arrays
+    for modality in list(windowed_data.keys()):
+        if modality != 'labels' and len(windowed_data[modality]) > 0:
+            try:
+                windowed_data[modality] = np.array(windowed_data[modality])
+                logger.debug(f"Converted {modality} windows to array with shape {windowed_data[modality].shape}")
+            except Exception as e:
+                logger.error(f"Error converting {modality} windows to array: {str(e)}")
+                # Ensure quaternion data exists in case of error
+                if modality == 'quaternion':
+                    # Create empty quaternion data of correct shape
+                    windowed_data[modality] = np.zeros((windows_created, window_size, 4))
+                    
+                # Remove problematic modalities
+                if modality != 'quaternion' and modality != 'accelerometer':
+                    del windowed_data[modality]
+    
+    # Add labels
+    windowed_data['labels'] = np.repeat(label, windows_created)
+    
+    # CRITICAL: Ensure quaternion data exists
+    if 'quaternion' not in windowed_data or len(windowed_data['quaternion']) == 0:
+        logger.warning("No quaternion data in final windows, adding zeros")
+        if 'accelerometer' in windowed_data and len(windowed_data['accelerometer']) > 0:
+            num_windows = len(windowed_data['accelerometer'])
+            windowed_data['quaternion'] = np.zeros((num_windows, window_size, 4))
+    
+    elapsed_time = time.time() - start_time
+    logger.info(f"Created {windows_created} windows in {elapsed_time:.2f}s")
+    
+    return windowed_data
 
 class DatasetBuilder:
     '''
@@ -1053,7 +972,8 @@ class DatasetBuilder:
 
         # Create directory for aligned data
         self.aligned_data_dir = os.path.join(os.getcwd(), "data/aligned")
-        for dir_name in ["accelerometer", "gyroscope", "skeleton"]:
+        os.makedirs(self.aligned_data_dir, exist_ok=True)
+        for dir_name in ["accelerometer", "gyroscope", "skeleton", "quaternion"]:
             os.makedirs(os.path.join(self.aligned_data_dir, dir_name), exist_ok=True)
 
         # Log fusion options if present
@@ -1064,7 +984,7 @@ class DatasetBuilder:
 
     def load_file(self, file_path):
         '''
-        Loads sensor data from a file.
+        Loads sensor data from a file with robust error handling.
 
         Args:
             file_path: Path to the data file
@@ -1075,12 +995,32 @@ class DatasetBuilder:
         logger.debug(f"Loading file: {file_path}")
 
         try:
+            # Skip if file doesn't exist
+            if not os.path.exists(file_path):
+                logger.warning(f"File not found: {file_path}")
+                return None
+                
+            # Import appropriate loader
             loader = self._import_loader(file_path)
+            
+            # Load data
             data = loader(file_path, **self.kwargs)
+            
+            # Validate loaded data
+            if data is None or len(data) == 0:
+                logger.warning(f"Empty data loaded from {file_path}")
+                return None
+                
+            # Check for NaN values
+            if np.isnan(data).any():
+                logger.warning(f"NaN values found in {file_path}, replacing with zeros")
+                data = np.nan_to_num(data, nan=0.0)
+                
             return data
         except Exception as e:
             logger.error(f"Error loading file {file_path}: {str(e)}")
-            raise
+            logger.error(traceback.format_exc())
+            return None
 
     def _import_loader(self, file_path: str):
         '''
@@ -1116,13 +1056,24 @@ class DatasetBuilder:
         '''
         logger.info(f"Processing data for label {label} with mode={self.mode}, fusion={fuse}")
 
+        # Basic validation of input data
+        if 'accelerometer' not in data or data['accelerometer'] is None or len(data['accelerometer']) == 0:
+            logger.error("Missing accelerometer data, cannot process")
+            return {}
+
         if self.mode == 'avg_pool':
             # Use average pooling to create fixed-length data
             logger.debug("Applying average pooling")
             processed_data = {}
 
+            # Process each modality
             for modality, modality_data in data.items():
-                if modality != 'labels':
+                if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
+                    # Skip aligned_timestamps
+                    if modality == 'aligned_timestamps':
+                        continue
+                        
+                    # Pad sequence to fixed length
                     processed_data[modality] = pad_sequence_numpy(
                         sequence=modality_data,
                         max_sequence_length=self.max_length,
@@ -1135,18 +1086,18 @@ class DatasetBuilder:
             # Apply fusion if requested
             if fuse and 'accelerometer' in processed_data and 'gyroscope' in processed_data:
                 try:
-                    logger.debug(f"Applying sensor fusion with {filter_type} filter")
+                    logger.debug(f"Applying sensor fusion with Madgwick filter")
                     
                     # Extract timestamps if available
-                    timestamps = processed_data.get('aligned_timestamps', None)
+                    timestamps = data.get('aligned_timestamps', None)
                     
                     # Process with IMU fusion
                     fusion_result = process_imu_data(
                         acc_data=processed_data['accelerometer'],
                         gyro_data=processed_data['gyroscope'],
                         timestamps=timestamps,
-                        filter_type=filter_type,
-                        return_features=True
+                        filter_type='madgwick',  # Always use Madgwick
+                        return_features=False
                     )
                     
                     # Add fusion results to processed data
@@ -1154,6 +1105,13 @@ class DatasetBuilder:
                     
                 except Exception as e:
                     logger.error(f"Fusion processing failed: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    # Add default quaternion data to ensure it exists
+                    processed_data['quaternion'] = np.zeros((self.max_length, 4))
+
+            # Ensure quaternion data exists
+            if 'quaternion' not in processed_data:
+                processed_data['quaternion'] = np.zeros((self.max_length, 4))
 
             return processed_data
         else:
@@ -1166,12 +1124,44 @@ class DatasetBuilder:
             # Set peak detection parameters based on label
             if label == 1:  # Fall
                 logger.debug("Using fall detection peak parameters")
-                peaks, _ = find_peaks(sqrt_sum, height=12, distance=10)
+                height = max(10, 0.8 * np.max(sqrt_sum))  # Adaptive threshold
+                distance = max(10, min(50, len(sqrt_sum) // 10))  # Adaptive distance
+                peaks, _ = find_peaks(sqrt_sum, height=height, distance=distance)
             else:  # Non-fall
                 logger.debug("Using non-fall peak parameters")
-                peaks, _ = find_peaks(sqrt_sum, height=10, distance=20)
+                height = max(8, 0.6 * np.max(sqrt_sum))  # Adaptive threshold
+                distance = max(20, min(100, len(sqrt_sum) // 5))  # Adaptive distance
+                peaks, _ = find_peaks(sqrt_sum, height=height, distance=distance)
+
+            # If no peaks found, use simple division of sequence
+            if len(peaks) == 0:
+                logger.warning("No peaks found, creating evenly spaced windows")
+                # Create evenly spaced "peaks"
+                num_windows = max(1, len(sqrt_sum) // self.max_length)
+                peaks = np.linspace(self.max_length//2, len(sqrt_sum) - self.max_length//2, num_windows).astype(int)
 
             logger.debug(f"Found {len(peaks)} peaks")
+
+            # Generate visualizations if requested
+            if visualize:
+                try:
+                    # Create directory for visualizations
+                    viz_dir = os.path.join(os.getcwd(), "visualizations")
+                    os.makedirs(viz_dir, exist_ok=True)
+                    
+                    # Plot signal with peaks
+                    plt.figure(figsize=(12, 6))
+                    plt.plot(sqrt_sum)
+                    plt.plot(peaks, sqrt_sum[peaks], "x", color='red')
+                    plt.title(f"{'Fall' if label == 1 else 'Non-Fall'} Peak Detection")
+                    plt.xlabel("Sample")
+                    plt.ylabel("Acceleration Magnitude")
+                    
+                    # Save figure
+                    plt.savefig(os.path.join(viz_dir, f"peaks_label{label}_{int(time.time())}.png"))
+                    plt.close()
+                except Exception as e:
+                    logger.error(f"Error creating visualization: {str(e)}")
 
             # Extract windows around peaks with optional fusion
             processed_data = selective_sliding_window(
@@ -1180,24 +1170,41 @@ class DatasetBuilder:
                 peaks=peaks,
                 label=label,
                 fuse=fuse,
-                filter_type=filter_type
+                filter_type='madgwick'  # Always use Madgwick
             )
 
             return processed_data
 
     def _add_trial_data(self, trial_data):
         '''
-        Adds processed trial data to the dataset.
+        Adds processed trial data to the dataset with validation.
 
         Args:
             trial_data: Dictionary of processed sensor data for a trial
         '''
         logger.debug("Adding trial data to dataset")
 
+        # Skip empty trial data
+        if not trial_data or len(trial_data) == 0:
+            logger.warning("Empty trial data, skipping")
+            return
+            
+        # Skip trial data without labels
+        if 'labels' not in trial_data or trial_data['labels'] is None or len(trial_data['labels']) == 0:
+            logger.warning("Trial data missing labels, skipping")
+            return
+
+        # Add each modality to dataset
         for modality, modality_data in trial_data.items():
-            if len(modality_data) > 0:  # Only add non-empty data
+            if modality_data is None or len(modality_data) == 0:
+                logger.warning(f"Empty {modality} data, skipping")
+                continue
+                
+            try:
                 self.data[modality].append(modality_data)
                 logger.debug(f"Added {modality} data with shape {modality_data.shape if hasattr(modality_data, 'shape') else len(modality_data)}")
+            except Exception as e:
+                logger.error(f"Error adding {modality} data: {str(e)}")
 
     def _len_check(self, d):
         '''
@@ -1209,7 +1216,10 @@ class DatasetBuilder:
         Returns:
             Boolean indicating if all modalities have sufficient data
         '''
-        return all(len(v) > 1 for v in d.values())
+        if not d or len(d) == 0:
+            return False
+            
+        return all(len(v) > 0 for k, v in d.items() if k != 'aligned_timestamps')
 
     def _process_trial(self, trial, label, fuse, filter_type, visualize, save_aligned=False):
         """
@@ -1234,31 +1244,44 @@ class DatasetBuilder:
             for modality, file_path in trial.files.items():
                 try:
                     unimodal_data = self.load_file(file_path)
-                    trial_data[modality] = unimodal_data
+                    if unimodal_data is not None and len(unimodal_data) > 0:
+                        trial_data[modality] = unimodal_data
+                    else:
+                        logger.warning(f"Empty or missing data for {modality} from {file_path}")
                 except Exception as e:
                     logger.error(f"Error loading {modality} from {file_path}: {str(e)}")
-                    return None
             
-            # Align skeleton and inertial data
-            trial_data = align_sequence(trial_data)
+            # Skip if missing accelerometer data
+            if 'accelerometer' not in trial_data or trial_data['accelerometer'] is None or len(trial_data['accelerometer']) == 0:
+                logger.warning(f"Missing accelerometer data for trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number}")
+                return None
+            
+            # Align sequence data
+            try:
+                trial_data = align_sequence(trial_data)
+            except Exception as e:
+                logger.error(f"Error aligning data: {str(e)}")
             
             # Save aligned data if requested
             if save_aligned:
-                aligned_acc = trial_data.get('accelerometer')
-                aligned_gyro = trial_data.get('gyroscope')
-                aligned_skl = trial_data.get('skeleton')
-                aligned_timestamps = trial_data.get('aligned_timestamps')
-                
-                if aligned_acc is not None and aligned_gyro is not None:
-                    save_aligned_sensor_data(
-                        trial.subject_id, 
-                        trial.action_id, 
-                        trial.sequence_number,
-                        aligned_acc,
-                        aligned_gyro,
-                        aligned_skl,
-                        aligned_timestamps if aligned_timestamps is not None else np.arange(len(aligned_acc))
-                    )
+                try:
+                    aligned_acc = trial_data.get('accelerometer')
+                    aligned_gyro = trial_data.get('gyroscope')
+                    aligned_skl = trial_data.get('skeleton')
+                    aligned_timestamps = trial_data.get('aligned_timestamps')
+                    
+                    if aligned_acc is not None and aligned_gyro is not None:
+                        save_aligned_sensor_data(
+                            trial.subject_id, 
+                            trial.action_id, 
+                            trial.sequence_number,
+                            aligned_acc,
+                            aligned_gyro,
+                            aligned_skl,
+                            aligned_timestamps if aligned_timestamps is not None else None
+                        )
+                except Exception as e:
+                    logger.error(f"Error saving aligned data: {str(e)}")
             
             # Process the aligned data
             processed_data = self.process(trial_data, label, fuse, filter_type, visualize)
@@ -1267,20 +1290,24 @@ class DatasetBuilder:
         
         except Exception as e:
             logger.error(f"Trial processing failed: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
 
     def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick', 
                     visualize: bool = False, save_aligned: bool = False):
         '''
         Creates a dataset from the sensor data files for the specified subjects.
-
+        
         Args:
             subjects: List of subject IDs to include
             fuse: Whether to apply sensor fusion
-            filter_type: Type of fusion filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
+            filter_type: Type of fusion filter to use
             visualize: Whether to generate visualizations
             save_aligned: Whether to save aligned data to files
         '''
+        # Use madgwick filter type regardless of input
+        filter_type = 'madgwick'
+        
         logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
 
         start_time = time.time()
@@ -1291,8 +1318,19 @@ class DatasetBuilder:
         if hasattr(self, 'fusion_options'):
             save_aligned = save_aligned or self.fusion_options.get('save_aligned', False)
 
+        # Validate subjects list
+        if not subjects or len(subjects) == 0:
+            logger.error("No subjects specified for dataset creation")
+            return
+            
+        # Validate matched_trials
+        if not hasattr(self.dataset, 'matched_trials') or len(self.dataset.matched_trials) == 0:
+            logger.error("No matched trials found in dataset")
+            return
+
         # Use ThreadPoolExecutor for parallel processing
-        with ThreadPoolExecutor(max_workers=min(8, len(self.dataset.matched_trials))) as executor:
+        max_workers = min(MAX_WORKER_THREADS, len(self.dataset.matched_trials))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Create a dictionary to track futures for each trial
             future_to_trial = {}
             
@@ -1314,7 +1352,7 @@ class DatasetBuilder:
                     trial, 
                     label, 
                     fuse, 
-                    filter_type, 
+                    filter_type,
                     visualize,
                     save_aligned
                 )
@@ -1325,7 +1363,13 @@ class DatasetBuilder:
             processed_count = 0
             skipped_count = 0
             
-            for future in tqdm(as_completed(future_to_trial), total=len(future_to_trial), desc="Processing trials"):
+            # Use tqdm for progress tracking if many trials
+            if len(future_to_trial) > 5:
+                iterator = tqdm(as_completed(future_to_trial), total=len(future_to_trial), desc="Processing trials")
+            else:
+                iterator = as_completed(future_to_trial)
+            
+            for future in iterator:
                 trial = future_to_trial[future]
                 count += 1
                 
@@ -1335,9 +1379,11 @@ class DatasetBuilder:
                         self._add_trial_data(trial_data)
                         processed_count += 1
                     else:
+                        logger.warning(f"Skipping empty or invalid trial data for {trial.subject_id}-{trial.action_id}-{trial.sequence_number}")
                         skipped_count += 1
                 except Exception as e:
                     logger.error(f"Error processing trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number}: {str(e)}")
+                    logger.error(traceback.format_exc())
                     skipped_count += 1
 
         # Concatenate data from all trials
@@ -1349,8 +1395,36 @@ class DatasetBuilder:
                     logger.info(f"Concatenated {key} data with shape {self.data[key].shape}")
                 except Exception as e:
                     logger.error(f"Error concatenating {key} data: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    
+                    # Try to identify the issue
+                    shapes = [x.shape for x in values]
+                    logger.error(f"Shapes of arrays for {key}: {shapes}")
+                    
+                    # Remove problematic key
+                    if key != 'accelerometer' and key != 'labels':
+                        self.data[key] = None
             else:
                 logger.warning(f"Cannot concatenate {key} data - mixed types")
+                
+                # Remove problematic key
+                if key != 'accelerometer' and key != 'labels':
+                    self.data[key] = None
+
+        # Ensure quaternion data exists in final dataset
+        if 'quaternion' not in self.data and 'accelerometer' in self.data:
+            logger.warning("Adding empty quaternion data to final dataset")
+            acc_shape = self.data['accelerometer'].shape
+            self.data['quaternion'] = np.zeros((acc_shape[0], acc_shape[1], 4))
+            
+        # Log label distribution
+        if 'labels' in self.data and self.data['labels'] is not None and len(self.data['labels']) > 0:
+            label_values, label_counts = np.unique(self.data['labels'], return_counts=True)
+            label_distribution = {int(l): int(c) for l, c in zip(label_values, label_counts)}
+            logger.info(f"Label distribution:")
+            for label, count in label_distribution.items():
+                percentage = 100.0 * count / len(self.data['labels'])
+                logger.info(f"  Class {label}: {count} samples ({percentage:.1f}%)")
 
         elapsed_time = time.time() - start_time
         logger.info(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
@@ -1365,35 +1439,100 @@ class DatasetBuilder:
         logger.info("Normalizing dataset")
 
         start_time = time.time()
+        norm_data = {}
+
+        # Skip if no data
+        if not self.data or len(self.data) == 0:
+            logger.error("No data to normalize")
+            return {}
+            
+        # Skip normalization if only 'labels' present
+        if len(self.data) == 1 and 'labels' in self.data:
+            logger.error("Only labels present, no data to normalize")
+            return self.data
 
         # Normalize each modality separately (except labels)
         for key, value in self.data.items():
-            if key != 'labels' and len(value) > 0:
-                try:
-                    # Check if this is a feature that needs normalization
-                    if key in ['accelerometer', 'gyroscope', 'quaternion', 'linear_acceleration'] and len(value.shape) >= 2:
-                        # Reshape for standardization
-                        num_samples, length = value.shape[:2]
-                        orig_shape = value.shape
+            # Skip None values
+            if value is None:
+                continue
+                
+            # Copy labels directly
+            if key == 'labels':
+                norm_data[key] = value
+                continue
+                
+            # Skip empty data
+            if len(value) == 0:
+                logger.warning(f"Empty {key} data, skipping normalization")
+                continue
+                
+            try:
+                # Check if this is a feature that needs normalization
+                if key in ['accelerometer', 'gyroscope', 'quaternion', 'linear_acceleration'] and len(value.shape) >= 2:
+                    # Reshape for standardization
+                    num_samples, length = value.shape[:2]
+                    orig_shape = value.shape
 
-                        # StandardScaler works on 2D data, so reshape
-                        reshaped_data = value.reshape(num_samples * length, -1)
+                    # StandardScaler works on 2D data, so reshape
+                    reshaped_data = value.reshape(num_samples * length, -1)
 
-                        # Standardize data
-                        norm_data = StandardScaler().fit_transform(reshaped_data)
+                    # Check for NaN or infinite values
+                    if np.isnan(reshaped_data).any() or np.isinf(reshaped_data).any():
+                        logger.warning(f"NaN or infinite values found in {key} data, replacing with valid values")
+                        reshaped_data = np.nan_to_num(reshaped_data, nan=0.0, posinf=1e6, neginf=-1e6)
 
-                        # Reshape back to original shape
-                        self.data[key] = norm_data.reshape(orig_shape)
+                    # Standardize data
+                    try:
+                        norm_data_array = StandardScaler().fit_transform(reshaped_data)
+                    except Exception as e:
+                        logger.error(f"StandardScaler failed for {key}: {str(e)}")
+                        # Fall back to simple normalization
+                        mean = np.mean(reshaped_data, axis=0, keepdims=True)
+                        std = np.std(reshaped_data, axis=0, keepdims=True) + 1e-8  # Avoid division by zero
+                        norm_data_array = (reshaped_data - mean) / std
 
-                        logger.debug(f"Normalized {key} data: shape={self.data[key].shape}")
-                    elif key == 'fusion_features' and len(value.shape) == 2:
-                        # These are already extracted features, normalize them directly
-                        self.data[key] = StandardScaler().fit_transform(value)
-                        logger.debug(f"Normalized {key} features: shape={self.data[key].shape}")
-                except Exception as e:
-                    logger.error(f"Error normalizing {key} data: {str(e)}")
+                    # Reshape back to original shape
+                    norm_data[key] = norm_data_array.reshape(orig_shape)
+
+                    logger.debug(f"Normalized {key} data: shape={norm_data[key].shape}")
+                elif key == 'fusion_features' and len(value.shape) == 2:
+                    # These are already extracted features, normalize them directly
+                    try:
+                        norm_data[key] = StandardScaler().fit_transform(value)
+                    except Exception as e:
+                        logger.error(f"StandardScaler failed for {key}: {str(e)}")
+                        # Fall back to simple normalization
+                        mean = np.mean(value, axis=0, keepdims=True)
+                        std = np.std(value, axis=0, keepdims=True) + 1e-8  # Avoid division by zero
+                        norm_data[key] = (value - mean) / std
+                        
+                    logger.debug(f"Normalized {key} features: shape={norm_data[key].shape}")
+                else:
+                    # Copy other data without normalization
+                    norm_data[key] = value
+                    logger.debug(f"Copied {key} without normalization: shape={norm_data[key].shape}")
+            except Exception as e:
+                logger.error(f"Error normalizing {key} data: {str(e)}")
+                logger.error(traceback.format_exc())
+                
+                # Copy original data as fallback
+                norm_data[key] = value
+
+        # CRITICAL: Remove 'aligned_timestamps' to avoid issues with DataLoader
+        if 'aligned_timestamps' in norm_data:
+            del norm_data['aligned_timestamps']
+
+        # Validate normalized data
+        if 'accelerometer' not in norm_data or norm_data['accelerometer'] is None or len(norm_data['accelerometer']) == 0:
+            logger.error("Missing accelerometer data after normalization")
+            
+        if 'quaternion' not in norm_data and 'accelerometer' in norm_data:
+            logger.warning("Adding missing quaternion data")
+            acc_shape = norm_data['accelerometer'].shape
+            norm_data['quaternion'] = np.zeros((acc_shape[0], acc_shape[1], 4))
 
         elapsed_time = time.time() - start_time
         logger.info(f"Normalization complete in {elapsed_time:.2f}s")
 
-        return self.data
+        return norm_data

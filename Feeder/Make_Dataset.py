@@ -10,6 +10,9 @@ from typing import Dict, Tuple, List, Union, Optional
 import quaternion  # numpy-quaternion package
 from utils.imu_fusion import process_imu_data, extract_features_from_window
 from scipy.spatial.transform import Rotation
+import logging
+
+logger = logging.getLogger("make_dataset")
 
 #################### MAIN #####################
 # CREATE PYTORCH DATASET
@@ -95,56 +98,64 @@ class UTD_mm(torch.utils.data.Dataset):
             dataset: Dictionary containing sensor data and labels
             batch_size: Batch size for the dataloader
         """
-        # Identify the inertial modality if present
-        self.inertial_modality = next((modality for modality in dataset if modality in ['accelerometer', 'gyroscope']), None)
+        # Initialize data tracking
+        self.available_modalities = []
         
-        # Always load accelerometer data and labels
-        self.acc_data = dataset['accelerometer']
+        # Load labels
         self.labels = dataset['labels']
         
-        # Check if fusion data is available
-        self.has_fusion = 'quaternion' in dataset or 'linear_acceleration' in dataset or 'fusion_features' in dataset
-        
-        # Initialize fusion-related attributes to None by default
-        self.quaternion_data = None
-        self.linear_acceleration_data = None
-        self.fusion_features_data = None
-        self.aligned_timestamps_data = None
-        
-        if self.has_fusion:
-            # Load fusion-related data if available
-            if 'quaternion' in dataset:
-                self.quaternion_data = dataset['quaternion']
-                print(f"Quaternion data shape: {self.quaternion_data.shape}")
-                
-            if 'linear_acceleration' in dataset:
-                self.linear_acceleration_data = dataset['linear_acceleration']
-                print(f"Linear acceleration data shape: {self.linear_acceleration_data.shape}")
-                
-            if 'fusion_features' in dataset:
-                self.fusion_features_data = dataset['fusion_features']
-                print(f"Fusion features shape: {self.fusion_features_data.shape}")
-                
-            if 'aligned_timestamps' in dataset:
-                self.aligned_timestamps_data = dataset['aligned_timestamps']
+        # Load accelerometer data (required)
+        if 'accelerometer' not in dataset or dataset['accelerometer'] is None:
+            raise ValueError("Accelerometer data is required but not provided")
+        self.acc_data = dataset['accelerometer'] 
+        self.available_modalities.append('accelerometer')
         
         # Load gyroscope data if available
-        self.gyro_data = dataset.get('gyroscope', None)
-        
+        if 'gyroscope' in dataset and dataset['gyroscope'] is not None:
+            self.gyro_data = dataset['gyroscope']
+            self.available_modalities.append('gyroscope')
+        else:
+            self.gyro_data = None
+            
         # Load skeleton data if available
-        if 'skeleton' in dataset:
+        if 'skeleton' in dataset and dataset['skeleton'] is not None:
             self.skl_data = dataset['skeleton']
             self.skl_seq, self.skl_length, self.skl_features = self.skl_data.shape
             self.skl_data = self.skl_data.reshape(self.skl_seq, self.skl_length, -1, 3)
+            self.available_modalities.append('skeleton')
         else:
             self.skl_data = None
             
+        # Load quaternion data if available (produced by IMU fusion)
+        if 'quaternion' in dataset and dataset['quaternion'] is not None:
+            self.quaternion_data = dataset['quaternion']
+            self.available_modalities.append('quaternion')
+        else:
+            self.quaternion_data = None
+            
+        # Load linear acceleration data if available
+        if 'linear_acceleration' in dataset and dataset['linear_acceleration'] is not None:
+            self.linear_acceleration_data = dataset['linear_acceleration']
+            self.available_modalities.append('linear_acceleration')
+        else:
+            self.linear_acceleration_data = None
+            
+        # Load fusion features if available
+        if 'fusion_features' in dataset and dataset['fusion_features'] is not None:
+            self.fusion_features_data = dataset['fusion_features']
+            self.available_modalities.append('fusion_features')
+        else:
+            self.fusion_features_data = None
+            
+        # Store dataset dimensions
         self.num_samples = self.acc_data.shape[0]
         self.acc_seq = self.acc_data.shape[1]
         self.channels = self.acc_data.shape[2]
         self.batch_size = batch_size
         self.transform = None
         self.crop_size = 64
+        
+        logger.info(f"Initialized UTD_mm dataset with {self.num_samples} samples and modalities: {self.available_modalities}")
     
     def random_crop(self, data: torch.Tensor) -> torch.Tensor:
         '''
@@ -225,33 +236,115 @@ class UTD_mm(torch.utils.data.Dataset):
         # Create dictionary to hold data
         data = {}
         
-        # Add modalities safely with bounds checking
+        # Add accelerometer data (always required)
         if valid_index < len(self.acc_data):
-            data['accelerometer'] = torch.tensor(self.acc_data[valid_index, :, :])
+            data['accelerometer'] = torch.tensor(self.acc_data[valid_index], dtype=torch.float32)
+        else:
+            # This should never happen, but just in case
+            data['accelerometer'] = torch.zeros((self.acc_seq, self.channels), dtype=torch.float32)
         
+        # Add gyroscope data if available
         if self.gyro_data is not None and valid_index < len(self.gyro_data):
-            data['gyroscope'] = torch.tensor(self.gyro_data[valid_index, :, :])
+            data['gyroscope'] = torch.tensor(self.gyro_data[valid_index], dtype=torch.float32)
         
-        # Add other modalities if available
-        if self.quaternion_data is not None and valid_index < len(self.quaternion_data):
-            data['quaternion'] = torch.tensor(self.quaternion_data[valid_index, :, :])
-        
-        if self.linear_acceleration_data is not None and valid_index < len(self.linear_acceleration_data):
-            data['linear_acceleration'] = torch.tensor(self.linear_acceleration_data[valid_index, :, :])
-        
-        if self.fusion_features_data is not None and valid_index < len(self.fusion_features_data):
-            data['fusion_features'] = torch.tensor(self.fusion_features_data[valid_index, :])
-        
-        if self.aligned_timestamps_data is not None and valid_index < len(self.aligned_timestamps_data):
-            data['aligned_timestamps'] = torch.tensor(self.aligned_timestamps_data[valid_index, :])
-        
+        # Add skeleton data if available
         if self.skl_data is not None and valid_index < len(self.skl_data):
-            data['skeleton'] = torch.tensor(self.skl_data[valid_index, :, :, :])
+            data['skeleton'] = torch.tensor(self.skl_data[valid_index], dtype=torch.float32)
+        
+        # Add quaternion data if available
+        if self.quaternion_data is not None and valid_index < len(self.quaternion_data):
+            data['quaternion'] = torch.tensor(self.quaternion_data[valid_index], dtype=torch.float32)
+        
+        # Add linear acceleration data if available
+        if self.linear_acceleration_data is not None and valid_index < len(self.linear_acceleration_data):
+            data['linear_acceleration'] = torch.tensor(self.linear_acceleration_data[valid_index], dtype=torch.float32)
+        
+        # Add fusion features if available
+        if self.fusion_features_data is not None and valid_index < len(self.fusion_features_data):
+            data['fusion_features'] = torch.tensor(self.fusion_features_data[valid_index], dtype=torch.float32)
         
         # Get label
         label = self.labels[valid_index]
         
         return data, label, valid_index
+    
+    @staticmethod
+    def custom_collate_fn(batch):
+        """
+        Custom collate function to handle missing keys across samples.
+        
+        Args:
+            batch: List of (data, label, index) tuples
+            
+        Returns:
+            Collated batch with consistent keys
+        """
+        # Extract data dictionaries, labels, and indices
+        datas = [item[0] for item in batch]
+        labels = [item[1] for item in batch]
+        indices = [item[2] for item in batch]
+        
+        # Determine all keys present in any sample
+        all_keys = set()
+        for data in datas:
+            all_keys.update(data.keys())
+        
+        # Create consistent batch with all keys
+        batch_dict = {}
+        
+        # Process each key across all samples
+        for key in all_keys:
+            # Check if key exists in all samples
+            key_valid = True
+            tensors = []
+            
+            for data in datas:
+                if key in data and data[key] is not None:
+                    tensors.append(data[key])
+                else:
+                    key_valid = False
+                    break
+            
+            # If key is valid in all samples, stack the tensors
+            if key_valid and tensors:
+                try:
+                    batch_dict[key] = torch.stack(tensors)
+                except Exception as e:
+                    logger.warning(f"Error stacking {key} tensors: {e}. Skipping key.")
+                    continue
+            else:
+                # Handle missing keys by creating zeros
+                # First, find a sample that has this key
+                sample_tensor = None
+                for data in datas:
+                    if key in data and data[key] is not None:
+                        sample_tensor = data[key]
+                        break
+                
+                if sample_tensor is not None:
+                    # Create compatible tensors for all samples
+                    shape = list(sample_tensor.shape)
+                    dtype = sample_tensor.dtype
+                    device = sample_tensor.device
+                    
+                    tensors = []
+                    for data in datas:
+                        if key in data and data[key] is not None:
+                            tensors.append(data[key])
+                        else:
+                            tensors.append(torch.zeros(shape, dtype=dtype, device=device))
+                    
+                    try:
+                        batch_dict[key] = torch.stack(tensors)
+                    except Exception as e:
+                        logger.warning(f"Error stacking {key} tensors with zeros: {e}. Skipping key.")
+                        continue
+        
+        # Convert labels and indices to tensors
+        labels_tensor = torch.tensor(labels)
+        indices_tensor = torch.tensor(indices)
+        
+        return batch_dict, labels_tensor, indices_tensor
 
 
 def cal_smv(data):

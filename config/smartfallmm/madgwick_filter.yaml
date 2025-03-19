@@ -1,8 +1,8 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Include all subjects for better generalization
-subjects: [29,30,31,33,45,46,34,37,39,38,43,35,36,44,34,32]
+# Include relevant subjects for fall detection
+subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
 
 model_args:
   num_layers: 3
@@ -16,6 +16,8 @@ model_args:
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
+  # For concat fusion with 3 modalities: embed_dim * 3
+  feature_dim: 96
 
 dataset_args:
   mode: 'sliding_window'
@@ -41,15 +43,12 @@ num_epoch: 60
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 16
-  drop_last: true
 
 val_feeder_args:
   batch_size: 16
-  drop_last: true
 
 test_feeder_args:
   batch_size: 16
-  drop_last: false
 
 seed: 42
 optimizer: adamw
