@@ -615,4 +615,3 @@ class DatasetBuilder:
         elapsed_time = time.time() - start_time
         logger.info(f"Normalization complete in {elapsed_time:.2f}s")
         return self.data
-

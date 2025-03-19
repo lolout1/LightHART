@@ -1,5 +1,5 @@
 # utils/dataset.py
-from typing import List, Dict, Tuple, Union, Optional
+from typing import List, Dict, Tuple, Union, Optional, Any
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,10 +8,10 @@ from collections import defaultdict
 from utils.loader import DatasetBuilder
 # Import explicitly from utils.imu_fusion to verify imports work
 from utils.imu_fusion import (
-    align_sensor_data, 
     process_imu_data, 
+    align_sensor_data, 
     extract_features_from_window,
-    hybrid_interpolate  # Add any other functions needed
+    hybrid_interpolate
 )
 
 
@@ -342,7 +342,7 @@ class SmartFallMM:
         print(f"Sensors: {sensors}")
         print(f"Age groups: {age_group}")
         
-        if hasattr(self, 'fusion_options') and self.fusion_options.get('filter_type'):
+        if self.fusion_options and self.fusion_options.get('filter_type'):
             print(f"Using fusion with filter type: {self.fusion_options['filter_type']}")
 
 
@@ -406,7 +406,6 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
         visualize = fusion_options.get('visualize', False)
         
         print(f"Applying IMU fusion with filter type: {filter_type}")
-        print(f"Visualization enabled: {visualize}")
         
         # Create dataset with enhanced fusion options
         builder.make_dataset(subjects, True, filter_type=filter_type, visualize=visualize)
@@ -461,4 +460,3 @@ if __name__ == "__main__":
 
     # Match trials across the modalities
     dataset.match_trials()
-
