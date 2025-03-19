@@ -519,7 +519,7 @@ class MadgwickFilter(OrientationEstimator):
         return q
 
 
-class CompFilter(OrientationEstimator):
+class ComplementaryFilter(OrientationEstimator):
     """Simple complementary filter for IMU fusion."""
 
     def __init__(self, freq: float = 30.0, alpha: float = 0.98):
@@ -577,7 +577,177 @@ class CompFilter(OrientationEstimator):
         logger.debug(f"Updated orientation: q=[{result_q[0]:.4f}, {result_q[1]:.4f}, {result_q[2]:.4f}, {result_q[3]:.4f}]")
         return result_q
 
-
+class ComplementaryFilter(OrientationEstimator):
+    """
+    Complementary filter for orientation estimation.
+    
+    This filter combines accelerometer and gyroscope data in the frequency
+    domain, using a high-pass filter for gyro and low-pass for accelerometer.
+    It's computationally efficient and provides good results in many cases.
+    """
+    def __init__(self, freq: float = 30.0, alpha: float = 0.02):
+        """
+        Initialize Complementary filter.
+        
+        Args:
+            freq: Sample frequency in Hz
+            alpha: Filter weight (lower = more gyro influence)
+        """
+        super().__init__(freq)
+        self.alpha = alpha
+        self.name = "Complementary"
+        
+    def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
+        """
+        Update orientation using complementary filter algorithm.
+        
+        Args:
+            acc: Accelerometer reading [ax, ay, az]
+            gyro: Gyroscope reading [gx, gy, gz] in rad/s
+            dt: Time step in seconds
+            
+        Returns:
+            Updated quaternion [w, x, y, z]
+        """
+        # Get current orientation quaternion
+        q = self.orientation_q
+        
+        # Normalize accelerometer measurement
+        acc_norm = np.linalg.norm(acc)
+        if acc_norm < 1e-10:
+            # Skip correction if accelerometer data is invalid
+            return q
+        
+        acc_normalized = acc / acc_norm
+        
+        # Calculate quaternion from accelerometer (gravity)
+        # This assumes accelerometer measures gravity vector
+        acc_q = self._accel_to_quaternion(acc_normalized)
+        
+        # Integrate gyroscope data to get orientation change
+        gyro_q = self._integrate_gyro(q, gyro, dt)
+        
+        # Combine using complementary filter
+        # alpha determines balance between gyro and accel
+        # Lower alpha means more weight on gyro (good for short-term accuracy)
+        # Higher alpha means more weight on accel (good for drift correction)
+        result_q = self._slerp(gyro_q, acc_q, self.alpha)
+        
+        # Normalize and store result
+        result_q = result_q / np.linalg.norm(result_q)
+        self.orientation_q = result_q
+        
+        return result_q
+    
+    def _accel_to_quaternion(self, acc: np.ndarray) -> np.ndarray:
+        """
+        Convert accelerometer vector to orientation quaternion.
+        
+        Args:
+            acc: Normalized accelerometer vector [ax, ay, az]
+            
+        Returns:
+            Orientation quaternion [w, x, y, z] representing alignment with gravity
+        """
+        # Reference vector (global z-axis / gravity)
+        z_ref = np.array([0, 0, 1])
+        
+        # Get rotation axis via cross product
+        rotation_axis = np.cross(z_ref, acc)
+        axis_norm = np.linalg.norm(rotation_axis)
+        
+        if axis_norm < 1e-10:
+            # Handle case where vectors are parallel
+            if acc[2] > 0:
+                # Device pointing up, identity quaternion
+                return np.array([1.0, 0.0, 0.0, 0.0])
+            else:
+                # Device pointing down, 180° rotation around X
+                return np.array([0.0, 1.0, 0.0, 0.0])
+                
+        # Normalize rotation axis
+        rotation_axis = rotation_axis / axis_norm
+        
+        # Calculate rotation angle
+        angle = np.arccos(np.clip(np.dot(z_ref, acc), -1.0, 1.0))
+        
+        # Convert axis-angle to quaternion
+        q = np.zeros(4)
+        q[0] = np.cos(angle / 2)
+        q[1:4] = rotation_axis * np.sin(angle / 2)
+        
+        return q
+    
+    def _integrate_gyro(self, q: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
+        """
+        Integrate gyroscope data to update orientation quaternion.
+        
+        Args:
+            q: Current orientation quaternion [w, x, y, z]
+            gyro: Gyroscope reading [gx, gy, gz] in rad/s
+            dt: Time step in seconds
+            
+        Returns:
+            Updated quaternion after integration
+        """
+        # Quaternion derivative from angular velocity
+        q_dot = 0.5 * np.array([
+            -q[1]*gyro[0] - q[2]*gyro[1] - q[3]*gyro[2],
+            q[0]*gyro[0] + q[2]*gyro[2] - q[3]*gyro[1],
+            q[0]*gyro[1] - q[1]*gyro[2] + q[3]*gyro[0],
+            q[0]*gyro[2] + q[1]*gyro[1] - q[2]*gyro[0]
+        ])
+        
+        # Integrate to get new quaternion
+        q_new = q + q_dot * dt
+        
+        # Normalize and return
+        return q_new / np.linalg.norm(q_new)
+    
+    def _slerp(self, q1: np.ndarray, q2: np.ndarray, t: float) -> np.ndarray:
+        """
+        Spherical linear interpolation between quaternions.
+        
+        Args:
+            q1: First quaternion
+            q2: Second quaternion
+            t: Interpolation parameter [0-1]
+            
+        Returns:
+            Interpolated quaternion
+        """
+        # Ensure unit quaternions
+        q1 = q1 / np.linalg.norm(q1)
+        q2 = q2 / np.linalg.norm(q2)
+        
+        # Calculate dot product (cosine of angle between quaternions)
+        dot = np.sum(q1 * q2)
+        
+        # If dot < 0, negate one quaternion to ensure shortest path
+        if dot < 0.0:
+            q2 = -q2
+            dot = -dot
+        
+        # Clamp dot product to valid range
+        dot = np.clip(dot, -1.0, 1.0)
+        
+        # If quaternions are very close, use linear interpolation
+        if dot > 0.9995:
+            result = q1 + t * (q2 - q1)
+            return result / np.linalg.norm(result)
+        
+        # Calculate angle between quaternions
+        theta_0 = np.arccos(dot)
+        theta = theta_0 * t
+        
+        # SLERP formula
+        sin_theta = np.sin(theta)
+        sin_theta_0 = np.sin(theta_0)
+        
+        s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
+        s1 = sin_theta / sin_theta_0
+        
+        return (s0 * q1) + (s1 * q2)
 class KalmanFilter(OrientationEstimator):
     """Basic Kalman filter for orientation estimation."""
     
