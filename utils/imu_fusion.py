@@ -96,17 +96,23 @@ def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray,
     logger.info(f"Starting sensor alignment: acc shape={acc_data.shape}, gyro shape={gyro_data.shape}")
 
     # Extract timestamps
-    if isinstance(acc_data.iloc[0, 0], str):
-        logger.debug("Converting accelerometer timestamps from string to datetime")
-        acc_times = pd.to_datetime(acc_data.iloc[:, 0]).values
+    if isinstance(acc_data, pd.DataFrame):
+        # DataFrame input
+        if isinstance(acc_data.iloc[0, 0], str):
+            logger.debug("Converting accelerometer timestamps from string to datetime")
+            acc_times = pd.to_datetime(acc_data.iloc[:, 0]).values
+        else:
+            acc_times = acc_data.iloc[:, 0].values
+        
+        if isinstance(gyro_data.iloc[0, 0], str):
+            logger.debug("Converting gyroscope timestamps from string to datetime")
+            gyro_times = pd.to_datetime(gyro_data.iloc[:, 0]).values
+        else:
+            gyro_times = gyro_data.iloc[:, 0].values
     else:
-        acc_times = acc_data.iloc[:, 0].values
-
-    if isinstance(gyro_data.iloc[0, 0], str):
-        logger.debug("Converting gyroscope timestamps from string to datetime")
-        gyro_times = pd.to_datetime(gyro_data.iloc[:, 0]).values
-    else:
-        gyro_times = gyro_data.iloc[:, 0].values
+        # NumPy array input
+        acc_times = acc_data[:, 0]
+        gyro_times = gyro_data[:, 0]
 
     # Determine the later start time
     start_time_point = max(acc_times[0], gyro_times[0])
@@ -117,14 +123,26 @@ def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray,
     gyro_start_idx = np.searchsorted(gyro_times, start_time_point)
 
     logger.debug(f"Trimming data: acc from {acc_start_idx}, gyro from {gyro_start_idx}")
-    acc_data_filtered = acc_data.iloc[acc_start_idx:].reset_index(drop=True)
-    gyro_data_filtered = gyro_data.iloc[gyro_start_idx:].reset_index(drop=True)
-
-    # Extract updated timestamps
-    if isinstance(acc_data_filtered.iloc[0, 0], str):
-        acc_times = pd.to_datetime(acc_data_filtered.iloc[:, 0]).values
+    
+    if isinstance(acc_data, pd.DataFrame):
+        acc_data_filtered = acc_data.iloc[acc_start_idx:].reset_index(drop=True)
+        gyro_data_filtered = gyro_data.iloc[gyro_start_idx:].reset_index(drop=True)
+        
+        # Extract updated timestamps
+        if isinstance(acc_data_filtered.iloc[0, 0], str):
+            acc_times = pd.to_datetime(acc_data_filtered.iloc[:, 0]).values
+        else:
+            acc_times = acc_data_filtered.iloc[:, 0].values
+            
+        # Extract accelerometer and gyroscope data
+        acc_data_filtered = acc_data_filtered.iloc[:, 1:4].values
+        gyro_data_filtered = gyro_data_filtered.iloc[:, 1:4].values
     else:
-        acc_times = acc_data_filtered.iloc[:, 0].values
+        # NumPy array input
+        acc_data_filtered = acc_data[acc_start_idx:, 1:4]
+        gyro_data_filtered = gyro_data[gyro_start_idx:, 1:4]
+        acc_times = acc_times[acc_start_idx:]
+        gyro_times = gyro_times[gyro_start_idx:]
 
     # Convert timestamps to numeric values for faster computation
     acc_times_np = np.array([t.astype('int64') if hasattr(t, 'astype') else t for t in acc_times])
@@ -158,8 +176,8 @@ def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray,
                 
                 # If within tolerance, add to matched pairs
                 if time_diffs[closest_idx] <= tolerance_ns:
-                    local_acc.append(acc_data_filtered.iloc[i, 1:4].values)
-                    local_gyro.append(gyro_data_filtered.iloc[closest_idx, 1:4].values)
+                    local_acc.append(acc_data_filtered[i])
+                    local_gyro.append(gyro_data_filtered[closest_idx])
                     local_times.append(acc_times[i])
                     
             return local_acc, local_gyro, local_times
@@ -198,8 +216,8 @@ def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             
             # If within tolerance, add to matched pairs
             if time_diffs[closest_idx] <= tolerance_ns:
-                aligned_acc.append(acc_data_filtered.iloc[i, 1:4].values)
-                aligned_gyro.append(gyro_data_filtered.iloc[closest_idx, 1:4].values)
+                aligned_acc.append(acc_data_filtered[i])
+                aligned_gyro.append(gyro_data_filtered[closest_idx])
                 aligned_times.append(acc_time)
 
     # Convert to numpy arrays
@@ -547,7 +565,7 @@ class ComplementaryFilter(OrientationEstimator):
         
         return result_q
     
-    def _accel_to_quaternion(self, acc: np.ndarray) -> np.ndarray:
+def _accel_to_quaternion(self, acc: np.ndarray) -> np.ndarray:
         """
         Convert accelerometer vector to orientation quaternion.
         
@@ -1318,6 +1336,12 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             'quaternion': np.zeros((1, 4))
         }
     
+    # Validate filter type
+    valid_filters = ['madgwick', 'comp', 'kalman', 'ekf', 'ukf']
+    if filter_type not in valid_filters:
+        logger.warning(f"Unknown filter type: {filter_type}, defaulting to 'madgwick'")
+        filter_type = 'madgwick'
+    
     # Handle empty inputs
     if acc_data.shape[0] == 0 or gyro_data.shape[0] == 0:
         logger.error("Empty input data")
@@ -1362,6 +1386,7 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             orientation_filter = UnscentedKalmanFilter()
             logger.info("Using Unscented Kalman filter for orientation estimation")
         else:
+            # This case is handled above, but keeping it for robustness
             logger.warning(f"Unknown filter type: {filter_type}, defaulting to Madgwick filter")
             orientation_filter = MadgwickFilter()
             
@@ -1448,7 +1473,7 @@ def extract_features_from_window(data: Dict[str, np.ndarray]) -> np.ndarray:
         # Check if we have all needed data
         if acc_data is None:
             logger.error("Accelerometer data required for feature extraction")
-            return np.zeros(32)  # Return empty feature vector
+            return np.zeros(65, dtype=np.float32)  # Return empty feature vector
             
         # Get window length
         window_length = len(acc_data)
@@ -1531,9 +1556,32 @@ def extract_features_from_window(data: Dict[str, np.ndarray]) -> np.ndarray:
                     np.std(axis_data),                 # Standard deviation
                     np.max(axis_data) - np.min(axis_data),  # Range
                 ])
+            
+            # Additional features from gyroscope if available
+            if gyro_data is not None and len(gyro_data) > 0:
+                # Magnitude of angular velocity
+                gyro_mag = np.sqrt(np.sum(gyro_data**2, axis=1))
+                
+                features.extend([
+                    np.mean(gyro_mag),                 # Mean angular velocity magnitude
+                    np.max(gyro_mag),                  # Peak angular velocity
+                    np.std(gyro_mag),                  # Std of angular velocity
+                ])
+                
+                # Correlation between orientation and angular velocity
+                for i in range(3):
+                    try:
+                        corr = np.corrcoef(euler_angles[:, i], gyro_data[:, i])[0, 1]
+                        features.append(corr if not np.isnan(corr) else 0)
+                    except:
+                        features.append(0)
         else:
             # Pad with zeros if no quaternion data
             features.extend([0] * 9)  # 3 axes * 3 orientation features
+            
+            # Padding for gyro correlation features
+            if gyro_data is not None:
+                features.extend([0] * 6)  # 3 gyro stats + 3 correlations
         
         # Convert to numpy array
         feature_vector = np.array(features, dtype=np.float32)

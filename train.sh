@@ -199,19 +199,17 @@ with open('$output_dir/cv_summary.json', 'w') as f:
 print(f'Created summary file for {len(fold_metrics)} folds')
 "
         fi
-        
-        # Continue despite error so we can process other filters
-        log "WARNING" "Continuing to next filter despite training error"
     fi
     
     # Extract and log key metrics if summary exists
     if [ -f "$output_dir/cv_summary.json" ]; then
         log "INFO" "Cross-validation results for $model_name ($filter_type):"
         
-        # Extract metrics using Python
+        # Extract metrics using Python with better error handling
         python -c "
 import json
 import sys
+import os
 try:
     with open('$output_dir/cv_summary.json') as f:
         data = json.load(f)
@@ -222,52 +220,38 @@ try:
         print(f\"Recall: {metrics.get('recall', 0):.4f} ± {metrics.get('recall_std', 0):.4f}\")
         
         # Save to comparison CSV
+        os.makedirs(os.path.dirname('$RESULTS_DIR/comparison.csv'), exist_ok=True)
         with open('$RESULTS_DIR/comparison.csv', 'a') as csv:
             csv.write(f\"{model_name},{filter_type},{metrics.get('accuracy', 0):.6f},{metrics.get('f1', 0):.6f},{metrics.get('precision', 0):.6f},{metrics.get('recall', 0):.6f},{metrics.get('balanced_accuracy', 0):.6f}\\n\")
 except Exception as e:
     print(f\"Error reading CV summary: {str(e)}\")
     # Create an empty entry in the comparison table
+    os.makedirs(os.path.dirname('$RESULTS_DIR/comparison.csv'), exist_ok=True)
     with open('$RESULTS_DIR/comparison.csv', 'a') as csv:
         csv.write(f\"{model_name},{filter_type},0.0,0.0,0.0,0.0,0.0\\n\")
 "
     else
         log "ERROR" "No cross-validation summary found for $model_name"
         # Create an empty entry in the comparison table
+        mkdir -p "$(dirname "$RESULTS_DIR/comparison.csv")"
         echo "$model_name,$filter_type,0.0,0.0,0.0,0.0,0.0" >> "$RESULTS_DIR/comparison.csv"
     fi
     
     return 0
 }
 
-# Main function to run the filter comparison
-main() {
-    log "INFO" "Starting comprehensive filter comparison for IMU fusion"
-    
-    # Create comparison CSV header
-    echo "model,filter_type,accuracy,f1,precision,recall,balanced_accuracy" > "$RESULTS_DIR/comparison.csv"
-    
-    # Create configurations for each filter type
-    create_config "$CONFIG_DIR/madgwick.yaml" "madgwick"
-    create_config "$CONFIG_DIR/kalman.yaml" "kalman"
-    create_config "$CONFIG_DIR/ekf.yaml" "ekf"
-    
-    # Train models with different filter types
-    log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
-    train_model "$CONFIG_DIR/madgwick.yaml" "madgwick_model" "madgwick"
-    
-    log "INFO" "============= TRAINING WITH STANDARD KALMAN FILTER ============="
-    train_model "$CONFIG_DIR/kalman.yaml" "kalman_model" "kalman"
-    
-    log "INFO" "============= TRAINING WITH EXTENDED KALMAN FILTER ============="
-    train_model "$CONFIG_DIR/ekf.yaml" "ekf_model" "ekf"
-    
-    # Generate comparison visualizations and report
+# Generate comparison visualizations and report
+generate_comparison() {
     log "INFO" "Generating comparative analysis"
+    
+    # Use Python to create visualizations and report
     python -c "
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import json
+from scipy import stats
 
 # Create results directory
 os.makedirs('$RESULTS_DIR/visualizations', exist_ok=True)
@@ -321,6 +305,33 @@ try:
 except Exception as e:
     print(f'Error generating comparison: {str(e)}')
 "
+}
+
+# Main function to run the filter comparison
+main() {
+    log "INFO" "Starting comprehensive filter comparison for IMU fusion"
+    
+    # Create comparison CSV header
+    echo "model,filter_type,accuracy,f1,precision,recall,balanced_accuracy" > "$RESULTS_DIR/comparison.csv"
+    
+    # Create configurations for each filter type
+    create_config "$CONFIG_DIR/madgwick.yaml" "madgwick"
+    create_config "$CONFIG_DIR/kalman.yaml" "kalman"
+    create_config "$CONFIG_DIR/ekf.yaml" "ekf"
+    
+    # Train models with different filter types
+    log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
+    train_model "$CONFIG_DIR/madgwick.yaml" "madgwick_model" "madgwick"
+    
+    log "INFO" "============= TRAINING WITH STANDARD KALMAN FILTER ============="
+    train_model "$CONFIG_DIR/kalman.yaml" "kalman_model" "kalman"
+    
+    log "INFO" "============= TRAINING WITH EXTENDED KALMAN FILTER ============="
+    train_model "$CONFIG_DIR/ekf.yaml" "ekf_model" "ekf"
+    
+    # Generate comparison visualizations and report
+    log "INFO" "Generating comparative analysis"
+    generate_comparison
     
     log "INFO" "Filter comparison completed successfully"
     log "INFO" "Results available in $RESULTS_DIR"

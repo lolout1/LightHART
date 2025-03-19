@@ -10,8 +10,7 @@ import time
 import shutil
 import argparse
 import yaml
-import json  # Added json import here to fix the error
-from copy import deepcopy
+import json  # Added json import for cross-validation summary
 import numpy as np
 import pandas as pd
 import torch
@@ -20,8 +19,10 @@ import torch.nn as nn
 from tqdm import tqdm
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from scipy import stats
 from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_support, balanced_accuracy_score
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from utils.dataset import prepare_smartfallmm, split_by_subjects
 
 MAX_THREADS = 40
@@ -68,6 +69,7 @@ def get_args():
     parser.add_argument('--multi-gpu', type=str2bool, default=True, help='Whether to use multiple GPUs')
     parser.add_argument('--parallel-threads', type=int, default=4, help='Number of parallel threads for preprocessing')
     parser.add_argument('--verbose', type=str2bool, default=False, help='Whether to print verbose debugging info')
+    parser.add_argument('--run-comparison', type=str2bool, default=False, help='Whether to run filter comparison analysis')
     return parser
 
 def str2bool(v):
@@ -155,6 +157,11 @@ class Trainer:
         )
         self.fuse = self.has_fusion
         
+        # Get the filter type if specified
+        self.filter_type = "madgwick"  # Default filter
+        if 'fusion_options' in arg.dataset_args and arg.dataset_args['fusion_options'].get('enabled', False):
+            self.filter_type = arg.dataset_args['fusion_options'].get('filter_type', 'madgwick')
+            
         # Create working directory
         os.makedirs(self.arg.work_dir, exist_ok=True)
         self.save_config(arg.config, arg.work_dir)
@@ -183,12 +190,15 @@ class Trainer:
         # Set validation option
         self.include_val = arg.include_val
         
+        # Initialize patience counter for early stopping
+        self.patience_counter = 0
+        
         # Log model parameters
         num_params = self.count_parameters(self.model)
         self.print_log(f'# Parameters: {num_params}')
         self.print_log(f'Model size: {num_params / (1024 ** 2):.2f} MB')
         self.print_log(f'Sensor modalities: {self.inertial_modality}')
-        self.print_log(f'Using fusion: {self.fuse}')
+        self.print_log(f'Using fusion: {self.fuse} with filter type: {self.filter_type}')
         
         # Log GPU configuration
         if self.available_gpus:
@@ -221,18 +231,43 @@ class Trainer:
         model = Model(**model_args).to(device)
         return model
 
-    def early_stopping(self, current_val_loss, epoch):
-        if not hasattr(self, 'best_val_loss'):
-            self.best_val_loss = float('inf')
-            self.patience_counter = 0
-        if current_val_loss < self.best_val_loss:
-            self.best_val_loss = current_val_loss
+    def early_stopping(self, current_val_loss, current_val_f1, epoch):
+        """
+        Enhanced early stopping that monitors both validation loss and F1 score.
+        
+        Args:
+            current_val_loss: Current validation loss
+            current_val_f1: Current validation F1 score
+            epoch: Current epoch number
+            
+        Returns:
+            bool: True if training should stop, False otherwise
+        """
+        # Check if there's improvement in either metric
+        improved = False
+        
+        # Check for improvement in validation loss
+        if current_val_loss < self.best_loss:
+            self.best_loss = current_val_loss
+            improved = True
+            self.print_log(f"Validation loss improved to {current_val_loss:.4f}")
+        
+        # Check for improvement in F1 score
+        if current_val_f1 > self.best_f1:
+            self.best_f1 = current_val_f1
+            improved = True
+            self.print_log(f"Validation F1 improved to {current_val_f1:.2f}")
+        
+        # Reset or increment patience counter
+        if improved:
             self.patience_counter = 0
             return False
         else:
             self.patience_counter += 1
+            self.print_log(f"No improvement for {self.patience_counter} epochs (patience: {self.arg.patience})")
+            
             if self.patience_counter >= self.arg.patience:
-                self.print_log(f"Early stopping triggered after {epoch+1} epochs (no improvement for {self.arg.patience} epochs)")
+                self.print_log(f"Early stopping triggered after {epoch+1} epochs")
                 return True
             return False
 
@@ -485,9 +520,15 @@ class Trainer:
         accuracy = 0
         cnt = 0
         train_loss = 0
+        
+        # Additional metrics for training
+        y_true = []
+        y_pred = []
+        
         process = tqdm(loader, desc=f"Epoch {epoch+1}/{self.arg.num_epoch} (Train)")
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             with torch.no_grad():
+                # Load data to device
                 acc_data = inputs['accelerometer'].to(device)
                 targets = targets.to(device)
                 gyro_data = None
@@ -499,7 +540,10 @@ class Trainer:
                 quaternion = None
                 if 'quaternion' in inputs:
                     quaternion = inputs['quaternion'].to(device)
+            
             timer['dataloader'] += self.split_time()
+            
+            # Forward pass with appropriate model function based on available data
             self.optimizer.zero_grad()
             if hasattr(self.model, 'forward_fusion') and fusion_features is not None:
                 logits = self.model.forward_fusion(acc_data.float(), fusion_features.float())
@@ -509,58 +553,104 @@ class Trainer:
                 logits = self.model.forward_multi_sensor(acc_data.float(), gyro_data.float())
             else:
                 logits = self.model(acc_data.float())
+            
+            # Calculate loss and backpropagate
             loss = self.criterion(logits, targets)
             loss.mean().backward()
             self.optimizer.step()
             timer['model'] += self.split_time()
+            
+            # Calculate metrics
             with torch.no_grad():
                 train_loss += loss.mean().item()
-                accuracy += (torch.argmax(F.log_softmax(logits, dim=1), 1) == targets).sum().item()
+                predictions = torch.argmax(F.log_softmax(logits, dim=1), 1)
+                accuracy += (predictions == targets).sum().item()
+                
+                # Collect predictions and targets for F1 calculation
+                y_true.extend(targets.cpu().tolist())
+                y_pred.extend(predictions.cpu().tolist())
+            
             cnt += len(targets)
             timer['stats'] += self.split_time()
+            
+            # Update progress bar
             process.set_postfix({
                 'loss': f"{train_loss/(batch_idx+1):.4f}",
                 'acc': f"{100.0*accuracy/cnt:.2f}%"
             })
-        train_loss /= cnt
+        
+        # Calculate final metrics
+        train_loss /= len(loader)
         accuracy *= 100. / cnt
+        
+        # Calculate F1 score
+        f1 = f1_score(y_true, y_pred, average='macro') * 100
+        precision, recall, _, _ = precision_recall_fscore_support(y_true, y_pred, average='macro')
+        precision *= 100
+        recall *= 100
+        balanced_acc = balanced_accuracy_score(y_true, y_pred) * 100
+        
+        # Store training metrics
         self.train_loss_summary.append(train_loss)
         acc_value.append(accuracy)
+        
+        # Store detailed metrics
+        train_metrics = {
+            'accuracy': accuracy,
+            'f1': f1,
+            'precision': precision,
+            'recall': recall,
+            'balanced_accuracy': balanced_acc
+        }
+        self.train_metrics.append(train_metrics)
+        
+        # Log time consumption
         proportion = {
             k: f'{int(round(v * 100 / sum(timer.values()))):02d}%'
             for k, v in timer.items()
         }
         self.print_log(
             f'Epoch {epoch+1}/{self.arg.num_epoch} - '
-            f'Training Loss: {train_loss:.4f}, Training Acc: {accuracy:.2f}%'
+            f'Training Loss: {train_loss:.4f}, Training Acc: {accuracy:.2f}%, F1: {f1:.2f}%'
         )
         self.print_log(f'Time consumption: [Data]{proportion["dataloader"]}, '
                      f'[Network]{proportion["model"]}, [Stats]{proportion["stats"]}')
         
-        # Only run validation if include_val is True and val loader exists
+        # Run validation if available
         val_loss = train_loss  # Default to using training loss if no validation
+        val_f1 = f1  # Default to using training F1 if no validation
+        
         if self.include_val and 'val' in self.data_loader:
-            val_loss = self.eval(epoch, loader_name='val', result_file=self.arg.result_file)
+            val_metrics = self.eval(epoch, loader_name='val', result_file=self.arg.result_file)
+            val_loss = val_metrics['loss']
+            val_f1 = val_metrics['f1']
             self.val_loss_summary.append(val_loss)
+            self.val_metrics.append(val_metrics)
         else:
-            # No validation, use training loss for model selection
+            # No validation, use training metrics for model selection
             self.val_loss_summary.append(train_loss)
-            self.print_log("No validation data - using training loss for model selection")
+            self.val_metrics.append(train_metrics)
+            self.print_log("No validation data - using training metrics for model selection")
             
-            # Save model if this is the best training loss so far
-            if train_loss < self.best_loss:
+            # Save model if training metrics improve
+            save_model = False
+            if f1 > self.best_f1:
+                self.best_f1 = f1
+                save_model = True
+                self.print_log(f"New best model saved: improved training F1 to {f1:.2f}")
+            elif train_loss < self.best_loss:
                 self.best_loss = train_loss
+                save_model = True
+                self.print_log(f"New best model saved: improved training loss to {train_loss:.4f}")
+            
+            if save_model:
                 self.best_accuracy = accuracy
-                
-                # Save the model weights - handle DataParallel
                 if isinstance(self.model, nn.DataParallel):
                     torch.save(deepcopy(self.model.module.state_dict()), self.model_path)
                 else:
                     torch.save(deepcopy(self.model.state_dict()), self.model_path)
-                
-                self.print_log('New best model saved based on training loss')
         
-        return val_loss
+        return {'loss': val_loss, 'f1': val_f1}
 
     def eval(self, epoch, loader_name='val', result_file=None):
         use_cuda = torch.cuda.is_available()
@@ -638,7 +728,7 @@ class Trainer:
             f'Balanced Accuracy={balanced_acc:.2f}%'
         )
         
-        # Store metrics for validation
+        # Store metrics
         metrics = {
             'loss': loss,
             'accuracy': accuracy,
@@ -651,31 +741,35 @@ class Trainer:
         }
         
         if loader_name == 'val':
-            # Track metrics for validation set
-            self.val_metrics.append(metrics)
-            
             # Check if this is the best model so far
             save_model = False
             if f1 > self.best_f1:
                 self.best_f1 = f1
                 save_model = True
-                self.print_log(f'New best model saved: improved validation F1 to {f1:.2f}')
+                self.print_log(f"New best model saved: improved validation F1 to {f1:.2f}")
             elif loss < self.best_loss:
                 self.best_loss = loss
                 save_model = True
-                self.print_log(f'New best model saved: improved validation loss to {loss:.4f}')
+                self.print_log(f"New best model saved: improved validation loss to {loss:.4f}")
             
             # Save model if improved
             if save_model:
                 self.best_accuracy = accuracy
-                if isinstance(self.model, nn.DataParallel):
-                    torch.save(deepcopy(self.model.module.state_dict()), self.model_path)
-                else:
-                    torch.save(deepcopy(self.model.state_dict()), self.model_path)
+                try:
+                    if isinstance(self.model, nn.DataParallel):
+                        torch.save(deepcopy(self.model.module.state_dict()), self.model_path)
+                    else:
+                        torch.save(deepcopy(self.model.state_dict()), self.model_path)
+                    self.print_log(f"Successfully saved model to {self.model_path}")
+                except Exception as e:
+                    self.print_log(f"Error saving model: {str(e)}")
                 
                 # Create confusion matrix for best model
                 if len(np.unique(target)) > 1:
-                    self.cm_viz(y_pred, target)
+                    try:
+                        self.cm_viz(y_pred, target)
+                    except Exception as e:
+                        self.print_log(f"Error creating confusion matrix: {str(e)}")
         else:
             # Store test results
             self.test_accuracy = accuracy
@@ -685,9 +779,44 @@ class Trainer:
             self.test_balanced_accuracy = balanced_acc
             self.test_true = label_list
             self.test_pred = pred_list
+            
+            # Create confusion matrix for test set
+            try:
+                self.cm_viz(y_pred, target)
+            except Exception as e:
+                self.print_log(f"Error creating confusion matrix: {str(e)}")
         
-        return loss
+        return metrics
 
+    def generate_filter_comparison(self):
+        """Generate comprehensive filter performance comparison analysis."""
+        comparison_dir = os.path.join(self.arg.work_dir, 'filter_comparison')
+        os.makedirs(comparison_dir, exist_ok=True)
+        
+        # Get the cross-validation summary for this filter
+        cv_summary_path = os.path.join(self.arg.work_dir, 'cv_summary.json')
+        if not os.path.exists(cv_summary_path):
+            self.print_log(f"No cross-validation summary found at {cv_summary_path}")
+            return
+        
+        try:
+            # Save filter-specific results
+            with open(cv_summary_path, 'r') as f:
+                cv_summary = json.load(f)
+            
+            # Add filter type to summary if not present
+            if 'filter_type' not in cv_summary:
+                cv_summary['filter_type'] = self.filter_type
+            
+            # Save the summary with filter name
+            filter_summary_path = os.path.join(comparison_dir, f'{self.filter_type}_summary.json')
+            with open(filter_summary_path, 'w') as f:
+                json.dump(cv_summary, f, indent=2)
+            
+            self.print_log(f"Saved filter summary to {filter_summary_path}")
+        except Exception as e:
+            self.print_log(f"Error saving filter comparison data: {str(e)}")
+    
     def start(self):
         try:
             if self.arg.phase == 'train':
@@ -703,11 +832,7 @@ class Trainer:
                 # Log training parameters
                 self.print_log(f'Parameters:\n{str(vars(self.arg))}\n')
                 self.print_log(f'Starting training with {self.arg.optimizer} optimizer, LR={self.arg.base_lr}')
-                
-                # Log filter type if available
-                if hasattr(self.arg, 'dataset_args') and isinstance(self.arg.dataset_args, dict) and 'fusion_options' in self.arg.dataset_args:
-                    filter_type = self.arg.dataset_args['fusion_options'].get('filter_type', 'unknown')
-                    self.print_log(f"Using filter type: {filter_type}")
+                self.print_log(f'Using fusion with filter type: {self.filter_type}')
                 
                 # Create DataFrame for results
                 results = self.create_df(columns=['fold', 'test_subject', 'train_subjects', 'accuracy', 'f1_score', 'precision', 'recall'])
@@ -805,15 +930,21 @@ class Trainer:
                         
                         patience = self.arg.patience
                         for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
-                            val_loss = self.train(epoch)
-                            if self.early_stopping(val_loss, epoch):
+                            val_metrics = self.train(epoch)
+                            val_loss = val_metrics['loss']
+                            val_f1 = val_metrics['f1']
+                            
+                            if self.early_stopping(val_loss, val_f1, epoch):
                                 self.print_log(f"Early stopping triggered after {epoch+1} epochs")
                                 break
                         
                         # Create loss visualization for this fold
                         if len(self.train_loss_summary) > 0 and len(self.val_loss_summary) > 0:
-                            self.loss_viz(self.train_loss_summary, self.val_loss_summary)
-                            self.print_log(f"Loss curves saved to {self.arg.work_dir}/train_vs_val_loss.png")
+                            try:
+                                self.loss_viz(self.train_loss_summary, self.val_loss_summary)
+                                self.print_log(f"Loss curves saved to {self.arg.work_dir}/train_vs_val_loss.png")
+                            except Exception as e:
+                                self.print_log(f"Error creating loss visualization: {str(e)}")
                         
                         # Evaluate on test set using best model
                         self.print_log(f'Training complete for fold {fold_idx+1}, loading best model for testing')
@@ -846,7 +977,7 @@ class Trainer:
                         # Test on this fold's test set (if test data loader exists)
                         if 'test' in self.data_loader:
                             self.print_log(f'------ Testing on subjects {self.test_subject} ------')
-                            test_loss = self.eval(epoch=0, loader_name='test')
+                            test_metrics = self.eval(epoch=0, loader_name='test')
                             
                             # Store fold metrics
                             fold_result = {
@@ -905,48 +1036,55 @@ class Trainer:
                     
                     # After training all folds, create cross-validation summary
                     if use_kfold and fold_metrics:
-                        avg_metrics = {
-                            'accuracy': np.mean([m['accuracy'] for m in fold_metrics]),
-                            'accuracy_std': np.std([m['accuracy'] for m in fold_metrics]),
-                            'f1': np.mean([m['f1'] for m in fold_metrics]),
-                            'f1_std': np.std([m['f1'] for m in fold_metrics]),
-                            'precision': np.mean([m['precision'] for m in fold_metrics]),
-                            'precision_std': np.std([m['precision'] for m in fold_metrics]),
-                            'recall': np.mean([m['recall'] for m in fold_metrics]),
-                            'recall_std': np.std([m['recall'] for m in fold_metrics]),
-                            'balanced_accuracy': np.mean([m['balanced_accuracy'] for m in fold_metrics]),
-                            'balanced_accuracy_std': np.std([m['balanced_accuracy'] for m in fold_metrics])
-                        }
-                        
-                        # Create and save summary
-                        filter_type = "unknown"
-                        if hasattr(self.arg, 'dataset_args') and isinstance(self.arg.dataset_args, dict) and 'fusion_options' in self.arg.dataset_args:
-                            filter_type = self.arg.dataset_args['fusion_options'].get('filter_type', 'unknown')
+                        try:
+                            avg_metrics = {
+                                'accuracy': np.mean([m['accuracy'] for m in fold_metrics]),
+                                'accuracy_std': np.std([m['accuracy'] for m in fold_metrics]),
+                                'f1': np.mean([m['f1'] for m in fold_metrics]),
+                                'f1_std': np.std([m['f1'] for m in fold_metrics]),
+                                'precision': np.mean([m['precision'] for m in fold_metrics]),
+                                'precision_std': np.std([m['precision'] for m in fold_metrics]),
+                                'recall': np.mean([m['recall'] for m in fold_metrics]),
+                                'recall_std': np.std([m['recall'] for m in fold_metrics]),
+                                'balanced_accuracy': np.mean([m['balanced_accuracy'] for m in fold_metrics]),
+                                'balanced_accuracy_std': np.std([m['balanced_accuracy'] for m in fold_metrics])
+                            }
                             
-                        cv_summary = {
-                            'fold_metrics': fold_metrics,
-                            'average_metrics': avg_metrics,
-                            'filter_type': filter_type
-                        }
-                        
-                        # Save CV summary
-                        summary_path = os.path.join(self.arg.work_dir, 'cv_summary.json')
-                        with open(summary_path, 'w') as f:
-                            json.dump(cv_summary, f, indent=2)
+                            # Create and save summary
+                            cv_summary = {
+                                'fold_metrics': fold_metrics,
+                                'average_metrics': avg_metrics,
+                                'filter_type': self.filter_type
+                            }
                             
-                        self.print_log(f"Cross-validation summary saved to {summary_path}")
-                        
-                        # Print average performance metrics
-                        self.print_log(f'\n===== Cross-Validation Results =====')
-                        self.print_log(f'Mean accuracy: {avg_metrics["accuracy"]:.2f}% ± {avg_metrics["accuracy_std"]:.2f}%')
-                        self.print_log(f'Mean F1 score: {avg_metrics["f1"]:.2f} ± {avg_metrics["f1_std"]:.2f}')
-                        self.print_log(f'Mean precision: {avg_metrics["precision"]:.2f}% ± {avg_metrics["precision_std"]:.2f}%')
-                        self.print_log(f'Mean recall: {avg_metrics["recall"]:.2f}% ± {avg_metrics["recall_std"]:.2f}%')
-                        self.print_log(f'Mean balanced accuracy: {avg_metrics["balanced_accuracy"]:.2f}% ± {avg_metrics["balanced_accuracy_std"]:.2f}%')
+                            # Save CV summary
+                            summary_path = os.path.join(self.arg.work_dir, 'cv_summary.json')
+                            with open(summary_path, 'w') as f:
+                                json.dump(cv_summary, f, indent=2)
+                                
+                            self.print_log(f"Cross-validation summary saved to {summary_path}")
+                            
+                            # Print average performance metrics
+                            self.print_log(f'\n===== Cross-Validation Results =====')
+                            self.print_log(f'Mean accuracy: {avg_metrics["accuracy"]:.2f}% ± {avg_metrics["accuracy_std"]:.2f}%')
+                            self.print_log(f'Mean F1 score: {avg_metrics["f1"]:.2f} ± {avg_metrics["f1_std"]:.2f}')
+                            self.print_log(f'Mean precision: {avg_metrics["precision"]:.2f}% ± {avg_metrics["precision_std"]:.2f}%')
+                            self.print_log(f'Mean recall: {avg_metrics["recall"]:.2f}% ± {avg_metrics["recall_std"]:.2f}%')
+                            self.print_log(f'Mean balanced accuracy: {avg_metrics["balanced_accuracy"]:.2f}% ± {avg_metrics["balanced_accuracy_std"]:.2f}%')
+                            
+                            # Generate filter comparison if requested
+                            if hasattr(self.arg, 'run_comparison') and self.arg.run_comparison:
+                                self.generate_filter_comparison()
+                        except Exception as e:
+                            self.print_log(f"Error creating cross-validation summary: {str(e)}")
+                            self.print_log(traceback.format_exc())
                     
                     # Save all results
-                    results.to_csv(os.path.join(self.arg.work_dir, 'fold_scores.csv'), index=False)
-                    self.print_log(f"Fold-specific scores saved to {self.arg.work_dir}/fold_scores.csv")
+                    try:
+                        results.to_csv(os.path.join(self.arg.work_dir, 'fold_scores.csv'), index=False)
+                        self.print_log(f"Fold-specific scores saved to {self.arg.work_dir}/fold_scores.csv")
+                    except Exception as e:
+                        self.print_log(f"Error saving fold scores: {str(e)}")
                     
                 else:
                     # Regular training without cross-validation
@@ -978,16 +1116,21 @@ class Trainer:
                     
                     for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
                         # Train one epoch
-                        val_loss = self.train(epoch)
+                        val_metrics = self.train(epoch)
+                        val_loss = val_metrics['loss']
+                        val_f1 = val_metrics['f1']
                         
                         # Check for early stopping
-                        if self.early_stopping(val_loss, epoch):
+                        if self.early_stopping(val_loss, val_f1, epoch):
                             self.print_log(f"Early stopping triggered after {epoch+1} epochs")
                             break
                     
                     # Create loss visualization
                     if len(self.train_loss_summary) > 0 and len(self.val_loss_summary) > 0:
-                        self.loss_viz(self.train_loss_summary, self.val_loss_summary)
+                        try:
+                            self.loss_viz(self.train_loss_summary, self.val_loss_summary)
+                        except Exception as e:
+                            self.print_log(f"Error creating loss visualization: {str(e)}")
                     
                     # Evaluate on test set using best model
                     self.print_log('Training complete, loading best model for testing')
@@ -1020,7 +1163,7 @@ class Trainer:
                     # Test on the test set (if test data loader exists)
                     if 'test' in self.data_loader:
                         self.print_log(f'------ Testing on subjects {self.test_subject} ------')
-                        self.eval(epoch=0, loader_name='test')
+                        test_metrics = self.eval(epoch=0, loader_name='test')
                         
                         # Save test results
                         test_result = pd.Series({
@@ -1032,7 +1175,11 @@ class Trainer:
                             'recall': round(self.test_recall, 2)
                         })
                         results.loc[len(results)] = test_result
-                        results.to_csv(os.path.join(self.arg.work_dir, 'test_scores.csv'), index=False)
+                        
+                        try:
+                            results.to_csv(os.path.join(self.arg.work_dir, 'test_scores.csv'), index=False)
+                        except Exception as e:
+                            self.print_log(f"Error saving test scores: {str(e)}")
             
             else:
                 # Testing phase only
@@ -1055,23 +1202,22 @@ class Trainer:
                             f'Precision={self.test_precision:.4f}, Recall={self.test_recall:.4f}')
                 
                 # Save test results
-                filter_type = "unknown"
-                if hasattr(self.arg, 'dataset_args') and isinstance(self.arg.dataset_args, dict) and 'fusion_options' in self.arg.dataset_args:
-                    filter_type = self.arg.dataset_args['fusion_options'].get('filter_type', 'unknown')
-                
-                test_results = {
-                    'filter_type': filter_type,
-                    'accuracy': self.test_accuracy,
-                    'f1': self.test_f1,
-                    'precision': self.test_precision,
-                    'recall': self.test_recall,
-                    'balanced_accuracy': self.test_balanced_accuracy
-                }
-                
-                with open(os.path.join(self.arg.work_dir, 'test_results.json'), 'w') as f:
-                    json.dump(test_results, f, indent=2)
-                
-                self.print_log(f"Test results saved to {self.arg.work_dir}/test_results.json")
+                try:
+                    test_results = {
+                        'filter_type': self.filter_type,
+                        'accuracy': self.test_accuracy,
+                        'f1': self.test_f1,
+                        'precision': self.test_precision,
+                        'recall': self.test_recall,
+                        'balanced_accuracy': self.test_balanced_accuracy
+                    }
+                    
+                    with open(os.path.join(self.arg.work_dir, 'test_results.json'), 'w') as f:
+                        json.dump(test_results, f, indent=2)
+                    
+                    self.print_log(f"Test results saved to {self.arg.work_dir}/test_results.json")
+                except Exception as e:
+                    self.print_log(f"Error saving test results: {str(e)}")
                 
                 # Create confusion matrix visualization if available
                 if hasattr(self, 'cm_viz') and hasattr(self, 'test_pred') and hasattr(self, 'test_true'):
@@ -1096,87 +1242,6 @@ class Trainer:
                     self.print_log(f"Saved emergency checkpoint to {emergency_path}")
                 except Exception as save_error:
                     self.print_log(f"Could not save emergency checkpoint: {str(save_error)}")
-
-    def save_results(self):
-        try:
-            if not hasattr(self, 'train_losses'):
-                self.train_losses = []
-            if not hasattr(self, 'val_losses'):
-                self.val_losses = []
-            if not hasattr(self, 'train_metrics'):
-                self.train_metrics = []
-            if not hasattr(self, 'val_metrics'):
-                self.val_metrics = []
-            
-            max_len = max(
-                len(self.train_loss_summary) if hasattr(self, 'train_loss_summary') else 0,
-                len(self.val_loss_summary) if hasattr(self, 'val_loss_summary') else 0,
-                len(self.train_metrics) if hasattr(self, 'train_metrics') else 0,
-                len(self.val_metrics) if hasattr(self, 'val_metrics') else 0
-            )
-            
-            if max_len == 0:
-                return
-                
-            epochs = list(range(max_len))
-            train_loss = self.train_loss_summary + [None] * (max_len - len(self.train_loss_summary))
-            val_loss = self.val_loss_summary + [None] * (max_len - len(self.val_loss_summary))
-            train_acc = [m.get('accuracy', None) if m else None for m in self.train_metrics] + [None] * (max_len - len(self.train_metrics))
-            train_f1 = [m.get('f1', None) if m else None for m in self.train_metrics] + [None] * (max_len - len(self.train_metrics))
-            val_acc = [m.get('accuracy', None) if m else None for m in self.val_metrics] + [None] * (max_len - len(self.val_metrics))
-            val_f1 = [m.get('f1', None) if m else None for m in self.val_metrics] + [None] * (max_len - len(self.val_metrics))
-            
-            metrics_df = pd.DataFrame({
-                'epoch': epochs,
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'train_accuracy': train_acc,
-                'train_f1': train_f1,
-                'val_accuracy': val_acc,
-                'val_f1': val_f1
-            })
-            
-            metrics_path = os.path.join(self.arg.work_dir, 'training_metrics.csv')
-            metrics_df.to_csv(metrics_path, index=False)
-            self.print_log(f"Saved training metrics to {metrics_path}")
-            
-            self.plot_metric_curves()
-        except Exception as e:
-            self.print_log(f"Error saving results: {str(e)}")
-            self.print_log(traceback.format_exc())
-
-    def plot_metric_curves(self):
-        try:
-            metrics_to_plot = [
-                ('loss', 'Loss'),
-                ('accuracy', 'Accuracy'),
-                ('f1', 'F1 Score')
-            ]
-            
-            for metric, title in metrics_to_plot:
-                plt.figure(figsize=(10, 6))
-                
-                if metric == 'loss':
-                    plt.plot(self.train_loss_summary, 'b-', label=f'Training {title}')
-                    plt.plot(self.val_loss_summary, 'r-', label=f'Validation {title}')
-                else:
-                    rain_values = [m.get(metric, None) if m else None for m in self.train_metrics]
-                    val_values = [m.get(metric, None) if m else None for m in self.val_metrics]
-                    
-                    if any(v is not None for v in train_values):
-                        plt.plot(train_values, 'b-', label=f'Training {title}')
-                    if any(v is not None for v in val_values):
-                        plt.plot(val_values, 'r-', label=f'Validation {title}')
-                
-                plt.xlabel('Epoch')
-                plt.ylabel(title)
-                plt.title(f'Training and Validation {title}')
-                plt.legend()
-                plt.grid(True)
-                plt.savefig(os.path.join(self.arg.work_dir, f'{metric}_curve.png'))
-                plt.close()
-        except Exception as e:
-            self.print_log(f"Error plotting metric curves: {str(e)}")
 
 def main():
     parser = get_args()

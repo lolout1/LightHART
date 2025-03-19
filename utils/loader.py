@@ -218,10 +218,12 @@ def align_sequence(data):
         logger.error(f"Error in sequence alignment: {str(e)}")
         logger.error(traceback.format_exc())
         return data
+
+
 def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick'):
     """
-    Helper function to extract a window from data with proper quaternion handling.
-    Designed to be run in a separate thread.
+    Helper function to extract a window from sensor data with proper quaternion handling.
+    Applies specified filter type for IMU fusion.
     
     Args:
         data: Dictionary of sensor data arrays
@@ -229,7 +231,7 @@ def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick')
         end: End index for window
         window_size: Target window size
         fuse: Whether to apply fusion
-        filter_type: Type of filter to use
+        filter_type: Type of filter to use ('madgwick', 'kalman', 'ekf')
         
     Returns:
         Dictionary of windowed data
@@ -296,22 +298,27 @@ def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick')
                     timestamps = timestamps[:, 0] if timestamps.shape[1] > 0 else None
             
             # Process data using specified filter type
+            from utils.imu_fusion import process_imu_data
+            
             fusion_results = process_imu_data(
                 acc_data=acc_window,
                 gyro_data=gyro_window,
                 timestamps=timestamps,
                 filter_type=filter_type,  # Use the specified filter type
-                return_features=False
+                return_features=True      # Always include fusion features
             )
             
-            # Add quaternion data from fusion
+            # Add quaternion and fusion features to window data
             window_data['quaternion'] = fusion_results.get('quaternion', np.zeros((window_size, 4)))
+            if 'fusion_features' in fusion_results:
+                window_data['fusion_features'] = fusion_results['fusion_features']
                 
             logger.debug(f"Added fusion data to window using {filter_type} filter")
         except Exception as e:
             logger.error(f"Error in fusion processing: {str(e)}")
-            # Add empty quaternion as fallback
+            # Add empty quaternion and features as fallback
             window_data['quaternion'] = np.zeros((window_size, 4))
+            window_data['fusion_features'] = np.zeros((window_size, 64))  # Default feature size
     else:
         # Always add empty quaternion data as a fallback
         window_data['quaternion'] = np.zeros((window_size, 4))
@@ -329,6 +336,7 @@ def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick')
         window_data['quaternion'] = temp
     
     return window_data
+
 def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int, peaks: Union[List[int], np.ndarray],
                            label: int, fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
     start_time = time.time()
