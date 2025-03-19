@@ -1,625 +1,364 @@
-import os
-import time
-import traceback
-import logging
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple, Union, Optional, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from scipy.signal import find_peaks, savgol_filter
-import threading
+import numpy as np
+import math
+import torch
+import random
+import torch.nn.functional as F
+import scipy.stats as s
+from einops import rearrange
+from typing import Dict, Tuple, List, Union, Optional
+import logging
+import time
+import os
 
-from utils.imu_fusion import (
-    process_imu_data,
-    save_aligned_sensor_data,
-    align_sensor_data,
-    MAX_THREADS,
-    thread_pool,
-    file_semaphore
-)
+logger = logging.getLogger("make_dataset")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("loader")
-
-def csvloader(file_path: str, **kwargs) -> np.ndarray:
-    logger.debug(f"Loading CSV file: {file_path}")
-    try:
-        try:
-            file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
-        except:
-            file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
-        if 'skeleton' in file_path:
-            cols = 96
-        else:
-            if file_data.shape[1] > 4:
-                cols = file_data.shape[1] - 3
-                file_data = file_data.iloc[:, 3:]
-            else:
-                cols = 3
-        if file_data.shape[1] < cols:
-            logger.warning(f"File has fewer columns than expected: {file_data.shape[1]} < {cols}")
-            missing_cols = cols - file_data.shape[1]
-            for i in range(missing_cols):
-                file_data[f'missing_{i}'] = 0
-        if file_data.shape[0] > 2:
-            activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
-        else:
-            activity_data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
-        return activity_data
-    except Exception as e:
-        logger.error(f"Error loading CSV {file_path}: {str(e)}")
-        raise
-
-def matloader(file_path: str, **kwargs) -> np.ndarray:
-    logger.debug(f"Loading MAT file: {file_path}")
-    key = kwargs.get('key', None)
-    if key not in ['d_iner', 'd_skel']:
-        logger.error(f"Unsupported key for MatLab file: {key}")
-        raise ValueError(f"Unsupported {key} for matlab file")
-    try:
-        from scipy.io import loadmat
-        data = loadmat(file_path)[key]
-        logger.debug(f"Loaded MAT data with shape: {data.shape}")
-        return data
-    except Exception as e:
-        logger.error(f"Error loading MAT {file_path}: {str(e)}")
-        raise
-
-LOADER_MAP = {
-    'csv': csvloader,
-    'mat': matloader
-}
-
-def avg_pool(sequence: np.ndarray, window_size: int = 5, stride: int = 1,
-            max_length: int = 512, shape: Optional[Tuple] = None) -> np.ndarray:
-    logger.debug(f"Applying avg_pool with window_size={window_size}, stride={stride}, max_length={max_length}")
-    start_time = time.time()
-    shape = sequence.shape if shape is None else shape
-    sequence = sequence.reshape(shape[0], -1)
-    sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
-    import torch.nn.functional as F
-    import torch
-    sequence_tensor = torch.tensor(sequence, dtype=torch.float32)
-    if max_length < sequence_tensor.shape[2]:
-        stride = ((sequence_tensor.shape[2] // max_length) + 1)
-        logger.debug(f"Adjusted stride to {stride} for max_length={max_length}")
-    else:
-        stride = 1
-    pooled = F.avg_pool1d(sequence_tensor, kernel_size=window_size, stride=stride)
-    pooled_np = pooled.squeeze(0).numpy().transpose(1, 0)
-    result = pooled_np.reshape(-1, *shape[1:])
-    elapsed_time = time.time() - start_time
-    logger.debug(f"avg_pool complete: input shape {shape} → output shape {result.shape} in {elapsed_time:.4f}s")
-    return result
-
-def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int,
-                      input_shape: np.ndarray) -> np.ndarray:
-    logger.debug(f"Padding sequence to length {max_sequence_length}")
-    shape = list(input_shape)
-    shape[0] = max_sequence_length
-    pooled_sequence = avg_pool(sequence=sequence, max_length=max_sequence_length, shape=input_shape)
-    new_sequence = np.zeros(shape, sequence.dtype)
-    actual_length = min(len(pooled_sequence), max_sequence_length)
-    new_sequence[:actual_length] = pooled_sequence[:actual_length]
-    logger.debug(f"Padding complete: shape {input_shape} → {new_sequence.shape}")
-    return new_sequence
-
-def sliding_window(data: np.ndarray, clearing_time_index: int, max_time: int,
-                  sub_window_size: int, stride_size: int) -> np.ndarray:
-    logger.debug(f"Creating sliding windows with window_size={sub_window_size}, stride={stride_size}")
-    if clearing_time_index < sub_window_size - 1:
-        logger.error(f"Invalid clearing_time_index: {clearing_time_index} < {sub_window_size - 1}")
-        raise AssertionError("Clearing value needs to be greater or equal to (window size - 1)")
-    start = clearing_time_index - sub_window_size + 1
-    if max_time >= data.shape[0] - sub_window_size:
-        max_time = max_time - sub_window_size + 1
-        logger.debug(f"Adjusted max_time to {max_time}")
-    sub_windows = (
-        start +
-        np.expand_dims(np.arange(sub_window_size), 0) +
-        np.expand_dims(np.arange(max_time, step=stride_size), 0).T
-    )
-    result = data[sub_windows]
-    logger.debug(f"Created {result.shape[0]} windows from data with shape {data.shape}")
-    return result
-
-def hybrid_interpolate(x, y, x_new, threshold=2.0, window_size=5):
-    if len(x) < 2 or len(y) < 2:
-        logger.warning("Not enough points for interpolation")
-        return np.full_like(x_new, y[0] if len(y) > 0 else 0.0)
-    try:
-        from scipy.signal import savgol_filter
-        dy = np.diff(y)
-        dx = np.diff(x)
-        rates = np.abs(dy / np.maximum(dx, 1e-10))
-        if len(rates) >= window_size:
-            rates = savgol_filter(rates, window_size, 2)
-        rapid_changes = rates > threshold
-        if not np.any(rapid_changes):
-            try:
-                from scipy.interpolate import CubicSpline
-                cs = CubicSpline(x, y)
-                return cs(x_new)
-            except Exception as e:
-                logger.warning(f"Cubic spline failed: {e}, falling back to linear")
-                from scipy.interpolate import interp1d
-                linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-                return linear_interp(x_new)
-        if np.all(rapid_changes):
-            from scipy.interpolate import interp1d
-            linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-            return linear_interp(x_new)
-        from scipy.interpolate import interp1d, CubicSpline
-        linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-        try:
-            spline_interp = CubicSpline(x, y)
-        except Exception as e:
-            logger.warning(f"Cubic spline failed: {e}, using linear for all points")
-            return linear_interp(x_new)
-        y_interp = np.zeros_like(x_new, dtype=float)
-        segments = []
-        segment_start = None
-        for i in range(len(rapid_changes)):
-            if rapid_changes[i] and segment_start is None:
-                segment_start = i
-            elif not rapid_changes[i] and segment_start is not None:
-                segments.append((segment_start, i))
-                segment_start = None
-        if segment_start is not None:
-            segments.append((segment_start, len(rapid_changes)))
-        linear_mask = np.zeros_like(x_new, dtype=bool)
-        buffer = 0.05
-        for start_idx, end_idx in segments:
-            t_start = max(x[start_idx] - buffer, x[0])
-            t_end = min(x[min(end_idx, len(x)-1)] + buffer, x[-1])
-            linear_mask |= (x_new >= t_start) & (x_new <= t_end)
-        if np.any(linear_mask):
-            y_interp[linear_mask] = linear_interp(x_new[linear_mask])
-        if np.any(~linear_mask):
-            y_interp[~linear_mask] = spline_interp(x_new[~linear_mask])
-        return y_interp
-    except Exception as e:
-        logger.error(f"Hybrid interpolation failed: {e}")
-        from scipy.interpolate import interp1d
-        linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-        return linear_interp(x_new)
-
-def align_sequence(data):
-    try:
-        acc_data = data.get('accelerometer')
-        gyro_data = data.get('gyroscope')
-        skeleton_data = data.get('skeleton')
-        if acc_data is None or gyro_data is None:
-            return data
-        from utils.imu_fusion import align_sensor_data
-        aligned_acc, aligned_gyro, common_times = align_sensor_data(acc_data, gyro_data)
-        if len(aligned_acc) == 0 or len(aligned_gyro) == 0:
-            logger.warning("Sensor alignment failed, using original data")
-            return data
-        aligned_data = {
-            'accelerometer': aligned_acc,
-            'gyroscope': aligned_gyro,
-            'aligned_timestamps': common_times
-        }
-        if skeleton_data is not None:
-            skeleton_times = np.linspace(0, len(skeleton_data)/30.0, len(skeleton_data))
-            aligned_skeleton = np.zeros((len(common_times), skeleton_data.shape[1], skeleton_data.shape[2]))
-            for joint in range(skeleton_data.shape[1]):
-                for coord in range(skeleton_data.shape[2]):
-                    aligned_skeleton[:, joint, coord] = np.interp(
-                        common_times,
-                        skeleton_times,
-                        skeleton_data[:, joint, coord]
-                    )
-            aligned_data['skeleton'] = aligned_skeleton
-        return aligned_data
-    except Exception as e:
-        logger.error(f"Error in sequence alignment: {str(e)}")
-        logger.error(traceback.format_exc())
-        return data
-
-
-def _extract_window(data, start, end, window_size, fuse, filter_type='madgwick'):
-    """
-    Helper function to extract a window from sensor data with proper quaternion handling.
-    Applies specified filter type for IMU fusion.
+class Utd_Dataset(torch.utils.data.Dataset):
+    def __init__(self, npz_file):
+        dataset = np.load(npz_file)
+        self.dataset = dataset['data']
+        self.labels = dataset['labels']
+        self.num_samples = self.dataset.shape[0]
     
-    Args:
-        data: Dictionary of sensor data arrays
-        start: Start index for window
-        end: End index for window
-        window_size: Target window size
-        fuse: Whether to apply fusion
-        filter_type: Type of filter to use ('madgwick', 'kalman', 'ekf')
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, index):
+        data = self.dataset[index, :, : , :]
+        data = torch.tensor(data)
+        label = self.labels[index]
+        label = label - 1
+        label = torch.tensor(label).long()
+        return data, label
+
+class Berkley_mhad(torch.utils.data.Dataset):
+    def __init__(self, npz_file):
+        dataset = np.load(npz_file)
+        self.dataset = dataset['data']
+        self.labels = dataset['labels']
+        self.num_samples = self.dataset.shape[0]
+    
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, index):
+        data = self.dataset[index, :, :]
+        data = torch.tensor(data)
+        label = self.labels[index]
+        label = label - 1
+        label = torch.tensor(label).long()
+        return data, label
+
+class Bmhad_mm(torch.utils.data.Dataset):
+    def __init__(self, dataset, batch_size, transform = None):
+        self.acc_data = dataset['acc_data']
+        self.skl_data = dataset['skl_data']
+        self.labels = dataset['labels']
+        self.num_samples = self.acc_data.shape[0]
+        self.acc_seq = self.acc_data.shape[1]
+        self.batch_size = batch_size
+    
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, index):
+        data = dict()
+        skl_data = torch.tensor(self.skl_data[index, :, :, :])
+        acc_data = torch.tensor(self.acc_data[index, : , :])
+        data['skl_data'] = skl_data
+        data['acc_data'] =  acc_data
+        label = self.labels[index]
+        label = torch.tensor(label).long()
+        return data, label, index
+
+class UTD_mm(torch.utils.data.Dataset):
+    def __init__(self, dataset, batch_size, drop_last=False):
+        start_time = time.time()
+        self.available_modalities = []
+        self.valid_indices = []
         
-    Returns:
-        Dictionary of windowed data
-    """
-    window_data = {}
-    
-    # Extract window for each modality
-    for modality, modality_data in data.items():
-        if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
-            try:
-                # Special handling for one-dimensional arrays
-                if modality == 'aligned_timestamps':
-                    # Handle 1D array - no second dimension indexing
-                    if len(modality_data.shape) == 1:
-                        window_data_array = modality_data[start:min(end, len(modality_data))]
-                        
-                        # Pad if needed
-                        if len(window_data_array) < window_size:
-                            padded = np.zeros(window_size, dtype=window_data_array.dtype)
-                            padded[:len(window_data_array)] = window_data_array
-                            window_data_array = padded
-                    else:
-                        window_data_array = modality_data[start:min(end, len(modality_data)), :]
-                        if window_data_array.shape[0] < window_size:
-                            padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                            padded[:window_data_array.shape[0]] = window_data_array
-                            window_data_array = padded
-                else:
-                    # Regular handling for 2D arrays
-                    window_data_array = modality_data[start:min(end, len(modality_data)), :]
-                    
-                    # Pad if needed
-                    if window_data_array.shape[0] < window_size:
-                        padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                        padded[:window_data_array.shape[0]] = window_data_array
-                        window_data_array = padded
-                
-                window_data[modality] = window_data_array
-            except Exception as e:
-                logger.error(f"Error extracting {modality} window: {str(e)}")
-                # Add empty data with correct shape
-                if modality == 'accelerometer':
-                    window_data[modality] = np.zeros((window_size, 3))
-                elif modality == 'gyroscope':
-                    window_data[modality] = np.zeros((window_size, 3))
-                elif modality == 'quaternion':
-                    window_data[modality] = np.zeros((window_size, 4))
-                else:
-                    window_data[modality] = None
-
-    # Apply fusion if requested and we have both accelerometer and gyroscope
-    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
-        try:
-            # Extract the window data
-            acc_window = window_data['accelerometer']
-            gyro_window = window_data['gyroscope']
-            
-            # Extract timestamps if available
-            timestamps = None
-            if 'aligned_timestamps' in window_data:
-                timestamps = window_data['aligned_timestamps']
-                # Convert to 1D array if needed
-                if len(timestamps.shape) > 1:
-                    timestamps = timestamps[:, 0] if timestamps.shape[1] > 0 else None
-            
-            # Process data using specified filter type
-            from utils.imu_fusion import process_imu_data
-            
-            fusion_results = process_imu_data(
-                acc_data=acc_window,
-                gyro_data=gyro_window,
-                timestamps=timestamps,
-                filter_type=filter_type,  # Use the specified filter type
-                return_features=True      # Always include fusion features
-            )
-            
-            # Add quaternion and fusion features to window data
-            window_data['quaternion'] = fusion_results.get('quaternion', np.zeros((window_size, 4)))
-            if 'fusion_features' in fusion_results:
-                window_data['fusion_features'] = fusion_results['fusion_features']
-                
-            logger.debug(f"Added fusion data to window using {filter_type} filter")
-        except Exception as e:
-            logger.error(f"Error in fusion processing: {str(e)}")
-            # Add empty quaternion and features as fallback
-            window_data['quaternion'] = np.zeros((window_size, 4))
-            window_data['fusion_features'] = np.zeros((window_size, 64))  # Default feature size
-    else:
-        # Always add empty quaternion data as a fallback
-        window_data['quaternion'] = np.zeros((window_size, 4))
-    
-    # Final validation of quaternion data
-    if 'quaternion' not in window_data or window_data['quaternion'] is None:
-        window_data['quaternion'] = np.zeros((window_size, 4))
-    elif window_data['quaternion'].shape[0] != window_size:
-        # Fix quaternion shape if needed
-        temp = np.zeros((window_size, 4))
-        if window_data['quaternion'].shape[0] < window_size:
-            temp[:window_data['quaternion'].shape[0]] = window_data['quaternion']
+        if 'labels' not in dataset or dataset['labels'] is None:
+            logger.error("No labels found in dataset")
+            self.labels = np.zeros(1)
+            self.total_samples = 1
         else:
-            temp = window_data['quaternion'][:window_size]
-        window_data['quaternion'] = temp
-    
-    return window_data
-
-def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int, peaks: Union[List[int], np.ndarray],
-                           label: int, fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
-    start_time = time.time()
-    logger.info(f"Creating {len(peaks)} selective windows with {filter_type} fusion")
-    from collections import defaultdict
-    windowed_data = defaultdict(list)
-    has_gyro = 'gyroscope' in data and data['gyroscope'] is not None and len(data['gyroscope']) > 0
-    has_acc = 'accelerometer' in data and data['accelerometer'] is not None and len(data['accelerometer']) > 0
-    if not has_acc:
-        logger.error("Missing accelerometer data - required for processing")
-        return {'labels': np.array([label])}
-    if fuse and not has_gyro:
-        logger.warning("Fusion requested but gyroscope data not available")
-        fuse = False
-    max_workers = min(30, len(peaks)) if len(peaks) > 0 else 1
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for peak_idx, peak in enumerate(peaks):
-            start = max(0, peak - window_size // 2)
-            end = min(len(data['accelerometer']), start + window_size)
-            if end - start < window_size // 2:
-                logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size//2})")
-                continue
-            futures.append((
-                peak_idx,
-                peak,
-                executor.submit(
-                    _extract_window,
-                    data,
-                    start,
-                    end,
-                    window_size,
-                    fuse,
-                    filter_type
-                )
-            ))
-        from tqdm import tqdm
-        windows_created = 0
-        collection_iterator = tqdm(futures, desc="Processing windows") if len(futures) > 5 else futures
-        for peak_idx, peak, future in collection_iterator:
-            try:
-                window_data = future.result()
-                if fuse and ('quaternion' not in window_data or window_data['quaternion'] is None):
-                    logger.warning(f"Window at peak {peak} missing quaternion data, adding zeros")
-                    window_data['quaternion'] = np.zeros((window_size, 4))
-                for modality, modality_window in window_data.items():
-                    if modality_window is not None:
-                        windowed_data[modality].append(modality_window)
-                windows_created += 1
-            except Exception as e:
-                logger.error(f"Error processing window at peak {peak}: {str(e)}")
-    for modality in windowed_data:
-        if modality != 'labels' and len(windowed_data[modality]) > 0:
-            try:
-                windowed_data[modality] = np.array(windowed_data[modality])
-                logger.debug(f"Converted {modality} windows to array with shape {windowed_data[modality].shape}")
-            except Exception as e:
-                logger.error(f"Error converting {modality} windows to array: {str(e)}")
-                if modality == 'quaternion':
-                    windowed_data[modality] = np.zeros((windows_created, window_size, 4))
-    windowed_data['labels'] = np.repeat(label, windows_created)
-    if fuse and ('quaternion' not in windowed_data or len(windowed_data['quaternion']) == 0):
-        logger.warning("No quaternion data in final windows, adding zeros")
-        if 'accelerometer' in windowed_data and len(windowed_data['accelerometer']) > 0:
-            num_windows = len(windowed_data['accelerometer'])
-            windowed_data['quaternion'] = np.zeros((num_windows, window_size, 4))
-    elapsed_time = time.time() - start_time
-    logger.info(f"Created {windows_created} windows in {elapsed_time:.2f}s")
-    return windowed_data
-
-class DatasetBuilder:
-    def __init__(self, dataset, mode, max_length, task='fd', fusion_options=None, **kwargs):
-        logger.info(f"Initializing DatasetBuilder with mode={mode}, task={task}")
-        if mode not in ['avg_pool', 'sliding_window']:
-            logger.error(f"Unsupported processing method: {mode}")
-            raise ValueError(f"Unsupported processing method {mode}")
-        self.dataset = dataset
-        self.data = {}
-        self.kwargs = kwargs
-        self.mode = mode
-        self.max_length = max_length
-        self.task = task
-        self.fuse = None
-        self.fusion_options = fusion_options or {}
-        self.aligned_data_dir = os.path.join(os.getcwd(), "data/aligned")
-        for dir_name in ["accelerometer", "gyroscope", "skeleton"]:
-            os.makedirs(os.path.join(self.aligned_data_dir, dir_name), exist_ok=True)
-        if fusion_options:
-            fusion_enabled = fusion_options.get('enabled', False)
-            filter_type = fusion_options.get('filter_type', 'madgwick')
-            logger.info(f"Fusion options: enabled={fusion_enabled}, filter_type={filter_type}")
-
-    def load_file(self, file_path):
-        logger.debug(f"Loading file: {file_path}")
-        try:
-            file_type = file_path.split('.')[-1]
-            if file_type not in ['csv', 'mat']:
-                logger.error(f"Unsupported file type: {file_type}")
-                raise ValueError(f"Unsupported file type {file_type}")
-            loader = LOADER_MAP[file_type]
-            data = loader(file_path, **self.kwargs)
-            return data
-        except Exception as e:
-            logger.error(f"Error loading file {file_path}: {str(e)}")
-            raise
-
-    def process(self, data, label, fuse=False, filter_type='madgwick', visualize=False):
-        logger.info(f"Processing data for label {label} with mode={self.mode}, fusion={fuse}")
-        if self.mode == 'avg_pool':
-            logger.debug("Applying average pooling")
-            processed_data = {}
-            for modality, modality_data in data.items():
-                if modality != 'labels':
-                    processed_data[modality] = pad_sequence_numpy(
-                        sequence=modality_data,
-                        max_sequence_length=self.max_length,
-                        input_shape=modality_data.shape
-                    )
-            processed_data['labels'] = np.array([label])
-            if fuse and 'accelerometer' in processed_data and 'gyroscope' in processed_data:
-                try:
-                    logger.debug(f"Applying sensor fusion with {filter_type} filter")
-                    timestamps = processed_data.get('aligned_timestamps', None)
-                    fusion_result = process_imu_data(
-                        acc_data=processed_data['accelerometer'],
-                        gyro_data=processed_data['gyroscope'],
-                        timestamps=timestamps,
-                        filter_type=filter_type,
-                        return_features=False
-                    )
-                    processed_data.update(fusion_result)
-                except Exception as e:
-                    logger.error(f"Fusion processing failed: {str(e)}")
-                    processed_data['quaternion'] = np.zeros((self.max_length, 4))
-            if 'quaternion' not in processed_data:
-                processed_data['quaternion'] = np.zeros((self.max_length, 4))
-            return processed_data
+            self.labels = dataset['labels']
+            self.total_samples = len(self.labels)
+        
+        if 'accelerometer' not in dataset or dataset['accelerometer'] is None:
+            logger.error("Accelerometer data is required but not provided")
+            self.acc_data = np.zeros((self.total_samples, 64, 3))
         else:
-            logger.debug("Using peak detection for windowing")
-            sqrt_sum = np.sqrt(np.sum(data['accelerometer']**2, axis=1))
-            if label == 1:
-                peaks, _ = find_peaks(sqrt_sum, height=12, distance=10)
-            else:
-                peaks, _ = find_peaks(sqrt_sum, height=10, distance=20)
-            logger.debug(f"Found {len(peaks)} peaks")
-            processed_data = selective_sliding_window(
-                data=data,
-                window_size=self.max_length,
-                peaks=peaks,
-                label=label,
-                fuse=fuse,
-                filter_type=filter_type
-            )
-            return processed_data
-
-    def _add_trial_data(self, trial_data):
-        logger.debug("Adding trial data to dataset")
-        for modality, modality_data in trial_data.items():
-            if isinstance(modality_data, np.ndarray) and modality_data.size > 0:
-                if modality not in self.data:
-                    self.data[modality] = []
-                self.data[modality].append(modality_data)
-                logger.debug(f"Appended {modality} data with shape {modality_data.shape}")
-
-    def _len_check(self, d):
-        return all(len(v) > 0 for v in d.values())
-
-    def _process_trial(self, trial, label, fuse, filter_type, visualize, save_aligned=False):
-        try:
-            trial_data = {}
-            for modality_name, file_path in trial.files.items():
-                try:
-                    unimodal_data = self.load_file(file_path)
-                    trial_data[modality_name] = unimodal_data
-                except Exception as e:
-                    logger.error(f"Error loading {modality_name} from {file_path}: {str(e)}")
-                    return None
-            from utils.loader import align_sequence
-            trial_data = align_sequence(trial_data)
-            if save_aligned:
-                aligned_acc = trial_data.get('accelerometer')
-                aligned_gyro = trial_data.get('gyroscope')
-                aligned_skl = trial_data.get('skeleton')
-                aligned_timestamps = trial_data.get('aligned_timestamps')
-                if aligned_acc is not None and aligned_gyro is not None:
-                    save_aligned_sensor_data(
-                        trial.subject_id,
-                        trial.action_id,
-                        trial.sequence_number,
-                        aligned_acc,
-                        aligned_gyro,
-                        aligned_skl,
-                        aligned_timestamps if aligned_timestamps is not None else np.arange(len(aligned_acc))
-                    )
-            processed_data = self.process(trial_data, label, fuse, filter_type, visualize)
-            return processed_data
-        except Exception as e:
-            logger.error(f"Trial processing failed: {str(e)}")
-            logger.error(traceback.format_exc())
-            return None
-
-    def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick',
-                    visualize: bool = False, save_aligned: bool = False):
-        logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
-        start_time = time.time()
-        self.data = {}
-        self.fuse = fuse
-        if hasattr(self, 'fusion_options'):
-            save_aligned = save_aligned or self.fusion_options.get('save_aligned', False)
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        future_to_trial = {}
-        with ThreadPoolExecutor(max_workers=min(8, len(self.dataset.matched_trials))) as executor:
-            count = 0
-            processed_count = 0
-            skipped_count = 0
-            for trial in self.dataset.matched_trials:
-                if trial.subject_id not in subjects:
+            self.acc_data = dataset['accelerometer']
+            self.available_modalities.append('accelerometer')
+        
+        if 'gyroscope' in dataset and dataset['gyroscope'] is not None and len(dataset['gyroscope']) > 0:
+            self.gyro_data = dataset['gyroscope']
+            self.available_modalities.append('gyroscope')
+        else:
+            self.gyro_data = None
+            logger.info("Gyroscope data not available")
+            
+        if 'skeleton' in dataset and dataset['skeleton'] is not None and len(dataset['skeleton']) > 0:
+            self.skl_data = dataset['skeleton']
+            try:
+                if len(self.skl_data.shape) == 3:
+                    self.skl_seq, self.skl_length, self.skl_features = self.skl_data.shape
+                    if self.skl_features % 3 == 0:
+                        n_joints = self.skl_features // 3
+                        self.skl_data = self.skl_data.reshape(self.skl_seq, self.skl_length, n_joints, 3)
+                self.available_modalities.append('skeleton')
+            except Exception as e:
+                logger.error(f"Error reshaping skeleton data: {str(e)}")
+                self.skl_data = None
+        else:
+            self.skl_data = None
+            
+        if 'quaternion' in dataset and dataset['quaternion'] is not None and len(dataset['quaternion']) > 0:
+            self.quaternion_data = dataset['quaternion']
+            self.available_modalities.append('quaternion')
+        else:
+            self.quaternion_data = None
+            
+        if 'linear_acceleration' in dataset and dataset['linear_acceleration'] is not None:
+            self.linear_acceleration_data = dataset['linear_acceleration']
+            self.available_modalities.append('linear_acceleration')
+        else:
+            self.linear_acceleration_data = None
+            
+        if 'fusion_features' in dataset and dataset['fusion_features'] is not None:
+            self.fusion_features_data = dataset['fusion_features']
+            self.available_modalities.append('fusion_features')
+        else:
+            self.fusion_features_data = None
+            
+        self.acc_seq = self.acc_data.shape[1] if hasattr(self.acc_data, 'shape') and len(self.acc_data.shape) > 1 else 64
+        self.channels = self.acc_data.shape[2] if hasattr(self.acc_data, 'shape') and len(self.acc_data.shape) > 2 else 3
+        self.batch_size = batch_size
+        self.transform = None
+        self.crop_size = 64
+        
+        for i in range(self.total_samples):
+            try:
+                valid = True
+                if i >= len(self.acc_data) or len(self.acc_data[i]) == 0:
+                    logger.warning(f"Sample {i}: Missing accelerometer data")
+                    valid = False
                     continue
-                if self.task == 'fd':
-                    label = int(trial.action_id > 9)
-                elif self.task == 'age':
-                    label = int(trial.subject_id < 29 or trial.subject_id > 46)
+                
+                if 'gyroscope' in self.available_modalities and (i >= len(self.gyro_data) or len(self.gyro_data[i]) == 0):
+                    logger.warning(f"Sample {i}: Missing gyroscope data")
+                    valid = False
+                    continue
+                
+                # Ensure data is 3D for accelerometer and 3D for gyroscope
+                if len(self.acc_data[i].shape) < 2 or self.acc_data[i].shape[1] < 3:
+                    logger.warning(f"Sample {i}: Invalid accelerometer dimensions {self.acc_data[i].shape}")
+                    valid = False
+                    continue
+                
+                if valid:
+                    self.valid_indices.append(i)
+            except Exception as e:
+                logger.error(f"Error validating sample {i}: {str(e)}")
+        
+        self.num_samples = len(self.valid_indices)
+        if self.num_samples == 0:
+            logger.warning("No valid samples found - creating fallback sample")
+            self.valid_indices = [0]
+            self.num_samples = 1
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"Initialized UTD_mm dataset with {self.num_samples} valid samples from {self.total_samples} total")
+        logger.info(f"Available modalities: {self.available_modalities}")
+    
+    def random_crop(self, data: torch.Tensor) -> torch.Tensor:
+        length = data.shape[0]
+        if length <= self.crop_size:
+            return data
+        start_idx = np.random.randint(0, length - self.crop_size)
+        return data[start_idx : start_idx + self.crop_size, :]
+    
+    def cal_smv(self, sample: torch.Tensor) -> torch.Tensor:
+        mean = torch.mean(sample, dim=-2, keepdim=True)
+        zero_mean = sample - mean
+        sum_squared = torch.sum(torch.square(zero_mean), dim=-1, keepdim=True)
+        smv = torch.sqrt(sum_squared)
+        return smv
+    
+    def calculate_weight(self, data):
+        return torch.sqrt(torch.sum(data**2, dim=-1, keepdim=True))
+    
+    def calculate_pitch(self, data):
+        ax = data[:, 0]
+        ay = data[:, 1]
+        az = data[:, 2]
+        return torch.atan2(ay, torch.sqrt(ax**2 + az**2))
+    
+    def calculate_roll(self, data):
+        ax = data[:, 0]
+        ay = data[:, 1]
+        az = data[:, 2]
+        return torch.atan2(ax, torch.sqrt(ay**2 + az**2))
+    
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, index):
+        try:
+            valid_index = self.valid_indices[index % len(self.valid_indices)]
+            data = {}
+            
+            if not hasattr(self, 'acc_data') or self.acc_data is None or valid_index >= len(self.acc_data):
+                logger.error(f"Invalid accelerometer data for index {valid_index}")
+                return self._create_fallback_sample()
+                
+            # Ensure accelerometer data is 3D
+            try:
+                acc_data = np.zeros((self.acc_seq, 3), dtype=np.float32)
+                source_acc = self.acc_data[valid_index]
+                
+                if len(source_acc) == 0:
+                    logger.error(f"Empty accelerometer data for index {valid_index}")
+                    return self._create_fallback_sample()
+                
+                # Handle different shapes
+                if len(source_acc.shape) == 1:
+                    # Single vector - pad to 3D
+                    acc_data[:min(len(source_acc), self.acc_seq), 0] = source_acc[:min(len(source_acc), self.acc_seq)]
+                elif source_acc.shape[1] == 1:
+                    # 2D with single feature - pad to 3D
+                    acc_data[:min(len(source_acc), self.acc_seq), 0] = source_acc[:min(len(source_acc), self.acc_seq), 0]
+                elif source_acc.shape[1] == 2:
+                    # 2D with 2 features - pad to 3D
+                    acc_data[:min(len(source_acc), self.acc_seq), :2] = source_acc[:min(len(source_acc), self.acc_seq), :2]
                 else:
-                    label = trial.action_id - 1
-                future = executor.submit(
-                    self._process_trial,
-                    trial,
-                    label,
-                    fuse,
-                    filter_type,
-                    False,
-                    save_aligned
-                )
-                future_to_trial[future] = trial
-            from tqdm import tqdm
-            for future in tqdm(as_completed(future_to_trial), total=len(future_to_trial), desc="Processing trials"):
-                trial = future_to_trial[future]
-                count += 1
+                    # 2D with 3+ features - use first 3
+                    acc_data[:min(len(source_acc), self.acc_seq), :] = source_acc[:min(len(source_acc), self.acc_seq), :3]
+                
+                data['accelerometer'] = torch.tensor(acc_data, dtype=torch.float32)
+            except Exception as e:
+                logger.error(f"Error processing accelerometer data at index {valid_index}: {str(e)}")
+                return self._create_fallback_sample()
+            
+            # Handle gyroscope data
+            if 'gyroscope' in self.available_modalities:
                 try:
-                    trial_data = future.result()
-                    if trial_data is not None and self._len_check(trial_data):
-                        self._add_trial_data(trial_data)
-                        processed_count += 1
+                    gyro_data = np.zeros((self.acc_seq, 3), dtype=np.float32)
+                    source_gyro = self.gyro_data[valid_index]
+                    
+                    if len(source_gyro) == 0:
+                        logger.warning(f"Empty gyroscope data for index {valid_index}")
                     else:
-                        skipped_count += 1
+                        # Handle different shapes
+                        if len(source_gyro.shape) == 1:
+                            gyro_data[:min(len(source_gyro), self.acc_seq), 0] = source_gyro[:min(len(source_gyro), self.acc_seq)]
+                        elif source_gyro.shape[1] == 1:
+                            gyro_data[:min(len(source_gyro), self.acc_seq), 0] = source_gyro[:min(len(source_gyro), self.acc_seq), 0]
+                        elif source_gyro.shape[1] == 2:
+                            gyro_data[:min(len(source_gyro), self.acc_seq), :2] = source_gyro[:min(len(source_gyro), self.acc_seq), :2]
+                        else:
+                            gyro_data[:min(len(source_gyro), self.acc_seq), :] = source_gyro[:min(len(source_gyro), self.acc_seq), :3]
+                    
+                    data['gyroscope'] = torch.tensor(gyro_data, dtype=torch.float32)
                 except Exception as e:
-                    logger.error(f"Error processing trial {trial.subject_id}-{trial.action_id}-{trial.sequence_number}: {str(e)}")
-                    skipped_count += 1
-        for key in self.data:
-            values = self.data[key]
-            if all(isinstance(x, np.ndarray) for x in values):
+                    logger.error(f"Error processing gyroscope data at index {valid_index}: {str(e)}")
+                    data['gyroscope'] = torch.zeros((self.acc_seq, 3), dtype=torch.float32)
+            
+            # Handle other modalities
+            if 'skeleton' in self.available_modalities:
                 try:
-                    self.data[key] = np.concatenate(values, axis=0)
-                    logger.info(f"Concatenated {key} data with shape {self.data[key].shape}")
+                    data['skeleton'] = torch.tensor(self.skl_data[valid_index], dtype=torch.float32)
                 except Exception as e:
-                    logger.error(f"Error concatenating {key} data: {str(e)}")
-            else:
-                logger.warning(f"Cannot concatenate {key} data - mixed types")
-        if 'quaternion' not in self.data and 'accelerometer' in self.data:
-            logger.warning("Adding empty quaternion data to final dataset")
-            acc_shape = self.data['accelerometer'].shape
-            self.data['quaternion'] = np.zeros((acc_shape[0], acc_shape[1], 4))
-        elapsed_time = time.time() - start_time
-        logger.info(f"Dataset creation complete: processed {processed_count}/{count} trials, skipped {skipped_count} in {elapsed_time:.2f}s")
-
-    def normalization(self) -> Dict[str, np.ndarray]:
-        logger.info("Normalizing dataset")
-        start_time = time.time()
-        from sklearn.preprocessing import StandardScaler
-        for key, value in self.data.items():
-            if key != 'labels' and len(value) > 0:
+                    logger.error(f"Error processing skeleton data: {str(e)}")
+            
+            if 'quaternion' in self.available_modalities:
                 try:
-                    if key in ['accelerometer', 'gyroscope', 'quaternion', 'linear_acceleration'] and len(value.shape) >= 2:
-                        num_samples, length = value.shape[:2]
-                        reshaped_data = value.reshape(num_samples * length, -1)
-                        norm_data = StandardScaler().fit_transform(reshaped_data)
-                        self.data[key] = norm_data.reshape(value.shape)
-                        logger.debug(f"Normalized {key} data: shape={self.data[key].shape}")
-                    elif key == 'fusion_features' and len(value.shape) == 2:
-                        self.data[key] = StandardScaler().fit_transform(value)
-                        logger.debug(f"Normalized {key} features: shape={self.data[key].shape}")
+                    data['quaternion'] = torch.tensor(self.quaternion_data[valid_index], dtype=torch.float32)
                 except Exception as e:
-                    logger.error(f"Error normalizing {key} data: {str(e)}")
-        elapsed_time = time.time() - start_time
-        logger.info(f"Normalization complete in {elapsed_time:.2f}s")
-        return self.data
+                    logger.error(f"Error processing quaternion data: {str(e)}")
+                    data['quaternion'] = torch.zeros((self.acc_seq, 4), dtype=torch.float32)
+            
+            if 'linear_acceleration' in self.available_modalities:
+                try:
+                    data['linear_acceleration'] = torch.tensor(self.linear_acceleration_data[valid_index], dtype=torch.float32)
+                except Exception as e:
+                    logger.error(f"Error processing linear acceleration data: {str(e)}")
+            
+            if 'fusion_features' in self.available_modalities:
+                try:
+                    data['fusion_features'] = torch.tensor(self.fusion_features_data[valid_index], dtype=torch.float32)
+                except Exception as e:
+                    logger.error(f"Error processing fusion features: {str(e)}")
+            
+            label = self.labels[valid_index]
+            
+            # Final validation - ensure 3D shape for accelerometer and gyroscope
+            for key in ['accelerometer', 'gyroscope']:
+                if key in data and len(data[key].shape) < 2:
+                    logger.warning(f"Reshaping {key} data from {data[key].shape} to 3D")
+                    if key == 'accelerometer':
+                        data[key] = torch.zeros((self.acc_seq, 3), dtype=torch.float32)
+                    elif key == 'gyroscope':
+                        data[key] = torch.zeros((self.acc_seq, 3), dtype=torch.float32)
+            
+            return data, label, valid_index
+            
+        except Exception as e:
+            logger.error(f"Error fetching data at index {index}: {str(e)}")
+            return self._create_fallback_sample()
+    
+    def _create_fallback_sample(self):
+        emergency_data = {'accelerometer': torch.zeros((self.acc_seq, 3), dtype=torch.float32)}
+        
+        if 'gyroscope' in self.available_modalities:
+            emergency_data['gyroscope'] = torch.zeros((self.acc_seq, 3), dtype=torch.float32)
+        
+        if 'quaternion' in self.available_modalities:
+            quat = torch.zeros((self.acc_seq, 4), dtype=torch.float32)
+            quat[:, 0] = 1.0
+            emergency_data['quaternion'] = quat
+        
+        return emergency_data, 0, 0
+    
+    @staticmethod
+    def custom_collate_fn(batch):
+        try:
+            datas = [item[0] for item in batch]
+            labels = [item[1] for item in batch]
+            indices = [item[2] for item in batch]
+            
+            all_keys = set()
+            for data in datas:
+                all_keys.update(data.keys())
+            
+            batch_dict = {}
+            for key in all_keys:
+                valid_tensors = []
+                valid_shapes = []
+                first_shape = None
+                
+                for data in datas:
+                    if key in data:
+                        tensor = data[key]
+                        if first_shape is None:
+                            first_shape = tensor.shape
+                            valid_shapes.append(first_shape)
+                        if tensor.shape == first_shape:
+                            valid_tensors.append(tensor)
+                
+                if len(valid_tensors) == len(datas):
+                    try:
+                        batch_dict[key] = torch.stack(valid_tensors)
+                    except Exception as e:
+                        logger.error(f"Error stacking tensors for {key}: {e}")
+            
+            labels_tensor = torch.tensor(labels)
+            indices_tensor = torch.tensor(indices)
+            
+            return batch_dict, labels_tensor, indices_tensor
+        
+        except Exception as e:
+            logger.error(f"Error in collate function: {str(e)}")
+            fallback_dict = {'accelerometer': torch.zeros((1, 64, 3))}
+            return fallback_dict, torch.tensor([0]), torch.tensor([0])
