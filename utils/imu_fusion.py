@@ -53,6 +53,9 @@ logger.addHandler(console_handler)
 MAX_THREADS = 4
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 
+# Semaphore for file operations
+file_semaphore = threading.Semaphore(4)
+
 # GPU Configuration
 def setup_gpu_environment():
     """Configure environment for dual GPU usage"""
@@ -75,7 +78,7 @@ def setup_gpu_environment():
 USE_GPU, GPU_DEVICES = setup_gpu_environment()
 
 
-def align_sensor_data(acc_data: pd.DataFrame, gyro_data: pd.DataFrame,
+def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray,
                      time_tolerance: float = 0.05) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Align accelerometer and gyroscope data based on timestamps.
@@ -263,6 +266,7 @@ def save_aligned_sensor_data(subject_id: int, action_id: int, trial_id: int,
         
     except Exception as e:
         logger.error(f"Error saving aligned data: {e}")
+
 def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
                       threshold: float = 2.0, window_size: int = 5) -> np.ndarray:
     """
@@ -384,68 +388,33 @@ class OrientationEstimator:
 
     def update(self, acc: np.ndarray, gyro: np.ndarray, timestamp: float = None) -> np.ndarray:
         """Update orientation estimate with new sensor readings."""
-        # Calculate actual sampling interval if timestamps are provided
-        dt = 1.0 / self.freq
-        if timestamp is not None and self.last_time is not None:
-            dt = timestamp - self.last_time
-            self.last_time = timestamp
-        elif timestamp is not None:
-            self.last_time = timestamp
+        try:
+            # Calculate actual sampling interval if timestamps are provided
+            dt = 1.0 / self.freq
+            if timestamp is not None and self.last_time is not None:
+                dt = timestamp - self.last_time
+                self.last_time = timestamp
+            elif timestamp is not None:
+                self.last_time = timestamp
 
-        logger.debug(f"Updating orientation with dt={dt:.6f}s")
-        return self._update_impl(acc, gyro, dt)
+            # Call the specific implementation
+            new_orientation = self._update_impl(acc, gyro, dt)
+            
+            # Ensure the quaternion is normalized
+            norm = np.linalg.norm(new_orientation)
+            if norm > 1e-10:
+                self.orientation_q = new_orientation / norm
+            
+            return self.orientation_q
+            
+        except Exception as e:
+            logger.error(f"Error in orientation update: {e}")
+            logger.error(traceback.format_exc())
+            return self.orientation_q
 
     def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
-        """
-        Update orientation using EKF algorithm, tailored for linear acceleration input.
-        
-        Args:
-            acc: Linear accelerometer reading [ax, ay, az]
-            gyro: Gyroscope reading [gx, gy, gz] in rad/s
-            dt: Time step in seconds
-            
-        Returns:
-            Updated quaternion [w, x, y, z]
-        """
-        try:
-            # Extract current state
-            q = self.x[:4]  # Quaternion
-            bias = self.x[4:]  # Gyroscope bias
-            
-            # Normalize quaternion
-            q_norm = np.linalg.norm(q)
-            if q_norm > 0:
-                q = q / q_norm
-            
-            # Correct gyroscope measurements with bias
-            gyro_corrected = gyro - bias
-
-            # When using linear acceleration, we should estimate the direction of gravity
-            # based on our current orientation estimate to update the filter
-            R_q = self._quaternion_to_rotation_matrix(q)
-            gravity_global = np.array([0, 0, 9.81])  # Gravity in global frame
-            expected_gravity = R_q.T @ gravity_global  # Gravity in sensor frame
-            
-            # Normalize gravity for direction comparison
-            gravity_norm = np.linalg.norm(expected_gravity)
-            if gravity_norm > 0:
-                gravity_direction = expected_gravity / gravity_norm
-            else:
-                gravity_direction = np.array([0, 0, 1])
-                
-            # The rest of the EKF implementation follows...
-            # [... EKF prediction and update steps ...]
-            
-            # Update orientation quaternion
-            self.orientation_q = self.x[:4]
-            
-            return self.orientation_q
-                
-        except Exception as e:
-            logger.error(f"EKF update error: {e}")
-            logger.error(traceback.format_exc())
-            # Return last valid orientation if processing fails
-            return self.orientation_q
+        """Implementation to be overridden by subclasses."""
+        raise NotImplementedError("Subclasses must implement _update_impl")
 
     def reset(self):
         """Reset the filter state."""
@@ -513,69 +482,9 @@ class MadgwickFilter(OrientationEstimator):
         # Normalize quaternion
         q = q / np.linalg.norm(q)
 
-        self.orientation_q = q
-
         logger.debug(f"Updated orientation: q=[{q[0]:.4f}, {q[1]:.4f}, {q[2]:.4f}, {q[3]:.4f}]")
         return q
 
-
-class ComplementaryFilter(OrientationEstimator):
-    """Simple complementary filter for IMU fusion."""
-
-    def __init__(self, freq: float = 30.0, alpha: float = 0.98):
-        super().__init__(freq)
-        self.alpha = alpha  # Weight for gyroscope integration
-        logger.debug(f"Initialized ComplementaryFilter with alpha={alpha}")
-
-    def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
-        """Update orientation using complementary filter."""
-        q = self.orientation_q
-
-        # Normalize accelerometer
-        acc_norm = np.linalg.norm(acc)
-        if acc_norm > 1e-10:
-            acc_norm = acc / acc_norm
-
-            # Convert accelerometer to orientation (roll and pitch only)
-            roll = np.arctan2(acc_norm[1], acc_norm[2])
-            pitch = np.arctan2(-acc_norm[0], np.sqrt(acc_norm[1]**2 + acc_norm[2]**2))
-
-            # Convert to quaternion (assuming yaw=0)
-            acc_q = Rotation.from_euler('xyz', [roll, pitch, 0]).as_quat()
-            # Switch from scalar-last (x, y, z, w) to scalar-first (w, x, y, z)
-            acc_q = np.array([acc_q[3], acc_q[0], acc_q[1], acc_q[2]])
-        else:
-            logger.warning("Zero acceleration detected, using previous orientation")
-            acc_q = q
-
-        # Integrate gyroscope
-        gyro_q = 0.5 * np.array([
-            -q[1] * gyro[0] - q[2] * gyro[1] - q[3] * gyro[2],
-             q[0] * gyro[0] + q[2] * gyro[2] - q[3] * gyro[1],
-             q[0] * gyro[1] - q[1] * gyro[2] + q[3] * gyro[0],
-             q[0] * gyro[2] + q[1] * gyro[1] - q[2] * gyro[0]
-        ])
-
-        # Integrate rotation
-        q_gyro = q + gyro_q * dt
-
-        # Normalize
-        q_gyro_norm = np.linalg.norm(q_gyro)
-        if q_gyro_norm > 0:
-            q_gyro = q_gyro / q_gyro_norm
-
-        # Complementary filter: combine accelerometer and gyroscope information
-        result_q = self.alpha * q_gyro + (1.0 - self.alpha) * acc_q
-
-        # Normalize
-        result_q_norm = np.linalg.norm(result_q)
-        if result_q_norm > 0:
-            result_q = result_q / result_q_norm
-
-        self.orientation_q = result_q
-
-        logger.debug(f"Updated orientation: q=[{result_q[0]:.4f}, {result_q[1]:.4f}, {result_q[2]:.4f}, {result_q[3]:.4f}]")
-        return result_q
 
 class ComplementaryFilter(OrientationEstimator):
     """
@@ -635,7 +544,6 @@ class ComplementaryFilter(OrientationEstimator):
         
         # Normalize and store result
         result_q = result_q / np.linalg.norm(result_q)
-        self.orientation_q = result_q
         
         return result_q
     
@@ -748,6 +656,7 @@ class ComplementaryFilter(OrientationEstimator):
         s1 = sin_theta / sin_theta_0
         
         return (s0 * q1) + (s1 * q2)
+
 class KalmanFilter(OrientationEstimator):
     """Basic Kalman filter for orientation estimation."""
     
@@ -845,11 +754,9 @@ class KalmanFilter(OrientationEstimator):
             self.x[:4] = self.x[:4] / q_norm
         
         # Update orientation
-        self.orientation_q = self.x[:4]
-        
-        logger.debug(f"Updated orientation: q=[{self.orientation_q[0]:.4f}, {self.orientation_q[1]:.4f}, "
-                    f"{self.orientation_q[2]:.4f}, {self.orientation_q[3]:.4f}]")
-        return self.orientation_q
+        logger.debug(f"Updated orientation: q=[{self.x[0]:.4f}, {self.x[1]:.4f}, "
+                    f"{self.x[2]:.4f}, {self.x[3]:.4f}]")
+        return self.x[:4]
     
     def _quaternion_multiply(self, q1, q2):
         """Multiply two quaternions."""
@@ -938,81 +845,85 @@ class ExtendedKalmanFilter(OrientationEstimator):
     
     def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
         """Update orientation using EKF."""
-        # Extract current state
-        q = self.x[:4]  # Quaternion
-        bias = self.x[4:]  # Gyro bias
-        
-        # Normalize quaternion
-        q_norm = np.linalg.norm(q)
-        if q_norm > 0:
-            q = q / q_norm
-        
-        # Correct gyro with estimated bias
-        gyro_corrected = gyro - bias
-        
-        # Prediction step - state transition function
-        q_dot = 0.5 * self._quaternion_product_matrix(q) @ np.array([0, gyro_corrected[0], gyro_corrected[1], gyro_corrected[2]])
-        q_pred = q + q_dot * dt
-        q_pred = q_pred / np.linalg.norm(q_pred)  # Normalize
-        
-        x_pred = np.zeros_like(self.x)
-        x_pred[:4] = q_pred
-        x_pred[4:] = bias  # Bias assumed constant
-        
-        # Jacobian of state transition function
-        F = np.eye(self.state_dim)
-        F[:4, :4] = self._quaternion_update_jacobian(q, gyro_corrected, dt)
-        F[:4, 4:] = -0.5 * dt * self._quaternion_product_matrix(q)[:, 1:]  # Jacobian w.r.t bias
-        
-        # Predict covariance
-        P_pred = F @ self.P @ F.T + self.Q
-        
-        # Measurement update with accelerometer
-        acc_norm = np.linalg.norm(acc)
-        if acc_norm > 1e-10:
-            # Normalize accelerometer
-            acc_norm = acc / acc_norm
+        try:
+            # Extract current state
+            q = self.x[:4]  # Quaternion
+            bias = self.x[4:]  # Gyro bias
             
-            # Expected gravity direction from orientation
-            R_q = self._quaternion_to_rotation_matrix(x_pred[:4])
-            g_pred = R_q @ self.g_ref
+            # Normalize quaternion
+            q_norm = np.linalg.norm(q)
+            if q_norm > 0:
+                q = q / q_norm
             
-            # Create measurement vector and prediction
-            z = acc_norm
-            h = g_pred
+            # Correct gyro with estimated bias
+            gyro_corrected = gyro - bias
             
-            # Measurement Jacobian
-            H = self._measurement_jacobian(x_pred[:4])
+            # Prediction step - state transition function
+            q_dot = 0.5 * self._quaternion_product_matrix(q) @ np.array([0, gyro_corrected[0], gyro_corrected[1], gyro_corrected[2]])
+            q_pred = q + q_dot * dt
+            q_pred = q_pred / np.linalg.norm(q_pred)  # Normalize
             
-            # Innovation
-            y = z - h
+            x_pred = np.zeros_like(self.x)
+            x_pred[:4] = q_pred
+            x_pred[4:] = bias  # Bias assumed constant
             
-            # Innovation covariance
-            S = H @ P_pred @ H.T + self.R
+            # Jacobian of state transition function
+            F = np.eye(self.state_dim)
+            F[:4, :4] = self._quaternion_update_jacobian(q, gyro_corrected, dt)
+            F[:4, 4:] = -0.5 * dt * self._quaternion_product_matrix(q)[:, 1:]  # Jacobian w.r.t bias
             
-            # Kalman gain
-            K = P_pred @ H.T @ np.linalg.inv(S)
+            # Predict covariance
+            P_pred = F @ self.P @ F.T + self.Q
             
-            # Update state
-            self.x = x_pred + K @ y
+            # Measurement update with accelerometer
+            acc_norm = np.linalg.norm(acc)
+            if acc_norm > 1e-10:
+                # Normalize accelerometer
+                acc_norm = acc / acc_norm
+                
+                # Expected gravity direction from orientation
+                R_q = self._quaternion_to_rotation_matrix(x_pred[:4])
+                g_pred = R_q @ self.g_ref
+                
+                # Create measurement vector and prediction
+                z = acc_norm
+                h = g_pred
+                
+                # Measurement Jacobian
+                H = self._measurement_jacobian(x_pred[:4])
+                
+                # Innovation
+                y = z - h
+                
+                # Innovation covariance
+                S = H @ P_pred @ H.T + self.R
+                
+                # Kalman gain
+                K = P_pred @ H.T @ np.linalg.inv(S)
+                
+                # Update state
+                self.x = x_pred + K @ y
+                
+                # Update covariance with Joseph form for numerical stability
+                I_KH = np.eye(self.state_dim) - K @ H
+                self.P = I_KH @ P_pred @ I_KH.T + K @ self.R @ K.T
+            else:
+                # No measurement update
+                self.x = x_pred
+                self.P = P_pred
             
-            # Update covariance with Joseph form for numerical stability
-            I_KH = np.eye(self.state_dim) - K @ H
-            self.P = I_KH @ P_pred @ I_KH.T + K @ self.R @ K.T
-        else:
-            # No measurement update
-            self.x = x_pred
-            self.P = P_pred
+            # Ensure quaternion is normalized
+            self.x[:4] = self.x[:4] / np.linalg.norm(self.x[:4])
+            
+            logger.debug(f"Updated orientation: q=[{self.x[0]:.4f}, {self.x[1]:.4f}, "
+                         f"{self.x[2]:.4f}, {self.x[3]:.4f}]")
+            return self.x[:4]
         
-        # Ensure quaternion is normalized
-        self.x[:4] = self.x[:4] / np.linalg.norm(self.x[:4])
-        
-        # Set orientation quaternion
-        self.orientation_q = self.x[:4]
-        
-        logger.debug(f"Updated orientation: q=[{self.orientation_q[0]:.4f}, {self.orientation_q[1]:.4f}, "
-                     f"{self.orientation_q[2]:.4f}, {self.orientation_q[3]:.4f}]")
-        return self.orientation_q
+        except Exception as e:
+            logger.error(f"EKF update error: {e}")
+            logger.error(traceback.format_exc())
+            # Return last valid orientation if processing fails
+            return self.orientation_q
     
     def _quaternion_product_matrix(self, q):
         """Create matrix for quaternion multiplication: p ⊗ q = [q]_L * p."""
@@ -1182,94 +1093,97 @@ class UnscentedKalmanFilter(OrientationEstimator):
     
     def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
         """Update orientation using UKF."""
-        # Prediction step
-        
-        # Generate sigma points
-        sigma_points = self._generate_sigma_points()
-        
-        # Propagate sigma points through process model
-        sigma_points_pred = np.zeros_like(sigma_points)
-        for i in range(self.num_sigma_points):
-            sigma_points_pred[i] = self._process_model(sigma_points[i], gyro, dt)
-        
-        # Calculate predicted mean
-        x_pred = np.zeros(self.state_dim)
-        for i in range(self.num_sigma_points):
-            x_pred += self.Wm[i] * sigma_points_pred[i]
-        
-        # Ensure quaternion is normalized
-        x_pred[:4] = self._quaternion_normalize(x_pred[:4])
-        
-        # Calculate predicted covariance
-        P_pred = np.zeros((self.state_dim, self.state_dim))
-        for i in range(self.num_sigma_points):
-            diff = sigma_points_pred[i] - x_pred
-            # Quaternion difference needs special handling
-            diff[:4] = self._quaternion_error(sigma_points_pred[i, :4], x_pred[:4])
-            P_pred += self.Wc[i] * np.outer(diff, diff)
-        
-        # Add process noise
-        P_pred += self.Q
-        
-        # Skip measurement update if acceleration is too small
-        acc_norm = np.linalg.norm(acc)
-        if acc_norm < 1e-10:
-            self.x = x_pred
-            self.P = P_pred
-            self.orientation_q = self.x[:4]
+        try:
+            # Prediction step
+            
+            # Generate sigma points
+            sigma_points = self._generate_sigma_points()
+            
+            # Propagate sigma points through process model
+            sigma_points_pred = np.zeros_like(sigma_points)
+            for i in range(self.num_sigma_points):
+                sigma_points_pred[i] = self._process_model(sigma_points[i], gyro, dt)
+            
+            # Calculate predicted mean
+            x_pred = np.zeros(self.state_dim)
+            for i in range(self.num_sigma_points):
+                x_pred += self.Wm[i] * sigma_points_pred[i]
+            
+            # Ensure quaternion is normalized
+            x_pred[:4] = self._quaternion_normalize(x_pred[:4])
+            
+            # Calculate predicted covariance
+            P_pred = np.zeros((self.state_dim, self.state_dim))
+            for i in range(self.num_sigma_points):
+                diff = sigma_points_pred[i] - x_pred
+                # Quaternion difference needs special handling
+                diff[:4] = self._quaternion_error(sigma_points_pred[i, :4], x_pred[:4])
+                P_pred += self.Wc[i] * np.outer(diff, diff)
+            
+            # Add process noise
+            P_pred += self.Q
+            
+            # Skip measurement update if acceleration is too small
+            acc_norm = np.linalg.norm(acc)
+            if acc_norm < 1e-10:
+                self.x = x_pred
+                self.P = P_pred
+                return self.x[:4]
+            
+            # Measurement update
+            
+            # Normalize accelerometer
+            acc_norm = acc / acc_norm
+            
+            # Propagate sigma points through measurement model
+            z_pred = np.zeros((self.num_sigma_points, 3))
+            for i in range(self.num_sigma_points):
+                z_pred[i] = self._measurement_model(sigma_points_pred[i])
+            
+            # Calculate predicted measurement
+            z_mean = np.zeros(3)
+            for i in range(self.num_sigma_points):
+                z_mean += self.Wm[i] * z_pred[i]
+            
+            # Innovation covariance
+            Pzz = np.zeros((3, 3))
+            for i in range(self.num_sigma_points):
+                diff = z_pred[i] - z_mean
+                Pzz += self.Wc[i] * np.outer(diff, diff)
+            
+            # Add measurement noise
+            Pzz += self.R
+            
+            # Cross-correlation matrix
+            Pxz = np.zeros((self.state_dim, 3))
+            for i in range(self.num_sigma_points):
+                diff_x = sigma_points_pred[i] - x_pred
+                diff_x[:4] = self._quaternion_error(sigma_points_pred[i, :4], x_pred[:4])
+                diff_z = z_pred[i] - z_mean
+                Pxz += self.Wc[i] * np.outer(diff_x, diff_z)
+            
+            # Kalman gain
+            K = Pxz @ np.linalg.inv(Pzz)
+            
+            # Update state
+            innovation = acc_norm - z_mean
+            self.x = x_pred + K @ innovation
+            
+            # Normalize quaternion
+            self.x[:4] = self._quaternion_normalize(self.x[:4])
+            
+            # Update covariance
+            self.P = P_pred - K @ Pzz @ K.T
+            
+            logger.debug(f"Updated orientation: q=[{self.x[0]:.4f}, {self.x[1]:.4f}, "
+                        f"{self.x[2]:.4f}, {self.x[3]:.4f}]")
+            return self.x[:4]
+            
+        except Exception as e:
+            logger.error(f"UKF update error: {e}")
+            logger.error(traceback.format_exc())
+            # Return last valid orientation if processing fails
             return self.orientation_q
-        
-        # Measurement update
-        
-        # Normalize accelerometer
-        acc_norm = acc / acc_norm
-        
-        # Propagate sigma points through measurement model
-        z_pred = np.zeros((self.num_sigma_points, 3))
-        for i in range(self.num_sigma_points):
-            z_pred[i] = self._measurement_model(sigma_points_pred[i])
-        
-        # Calculate predicted measurement
-        z_mean = np.zeros(3)
-        for i in range(self.num_sigma_points):
-            z_mean += self.Wm[i] * z_pred[i]
-        
-        # Innovation covariance
-        Pzz = np.zeros((3, 3))
-        for i in range(self.num_sigma_points):
-            diff = z_pred[i] - z_mean
-            Pzz += self.Wc[i] * np.outer(diff, diff)
-        
-        # Add measurement noise
-        Pzz += self.R
-        
-        # Cross-correlation matrix
-        Pxz = np.zeros((self.state_dim, 3))
-        for i in range(self.num_sigma_points):
-            diff_x = sigma_points_pred[i] - x_pred
-            diff_x[:4] = self._quaternion_error(sigma_points_pred[i, :4], x_pred[:4])
-            diff_z = z_pred[i] - z_mean
-            Pxz += self.Wc[i] * np.outer(diff_x, diff_z)
-        
-        # Kalman gain
-        K = Pxz @ np.linalg.inv(Pzz)
-        
-        # Update state
-        innovation = acc_norm - z_mean
-        self.x = x_pred + K @ innovation
-        
-        # Normalize quaternion
-        self.x[:4] = self._quaternion_normalize(self.x[:4])
-        
-        # Update covariance
-        self.P = P_pred - K @ Pzz @ K.T
-        
-        # Set orientation quaternion
-        self.orientation_q = self.x[:4]
-        
-        logger.debug(f"Updated orientation: q=[{self.orientation_q[0]:.4f}, {self.orientation_q[1]:.4f}, "
-                    f"{self.orientation_q[2]:.4f}, {self.orientation_q[3]:.4f}]")
-        return self.orientation_q
     
     def _quaternion_multiply(self, q1, q2):
         """Multiply two quaternions."""
@@ -1490,12 +1404,12 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
         
         # Extract features if requested
         if return_features:
-            window_data = {
+            features = extract_features_from_window({
                 'quaternion': quaternions,
-                'accelerometer': acc_data,  # Already linear acceleration
+                'accelerometer': acc_data,
                 'gyroscope': gyro_data
-            }
-            results['fusion_features'] = extract_features_from_window(window_data)
+            })
+            results['fusion_features'] = features
         
         elapsed_time = time.time() - start_time
         logger.info(f"IMU processing with {filter_type} filter completed in {elapsed_time:.2f}s")
@@ -1512,82 +1426,131 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray,
             'quaternion': np.zeros((sample_size, 4))
         }
 
-def extract_features_from_window(data, start, end, window_size, fuse, filter_type='madgwick'):
+def extract_features_from_window(data: Dict[str, np.ndarray]) -> np.ndarray:
     """
-    Helper function to extract a window from data with proper quaternion handling.
-    Designed to be run in a separate thread.
+    Extract features from windowed sensor data.
     
     Args:
-        data: Dictionary of sensor data arrays
-        start: Start index for window
-        end: End index for window
-        window_size: Target window size
-        fuse: Whether to apply fusion
-        filter_type: Type of filter to use
+        data: Dictionary with 'accelerometer', 'gyroscope', and 'quaternion' arrays
         
     Returns:
-        Dictionary of windowed data
+        Feature vector for the window
     """
-    window_data = {}
-    
-    # Extract window for each modality
-    for modality, modality_data in data.items():
-        if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
-            try:
-                # Extract appropriate window
-                # [... existing window extraction code ...]
-                window_data[modality] = window_data_array
-            except Exception as e:
-                logger.error(f"Error extracting {modality} window: {str(e)}")
-                # Add empty data with correct shape
-                # [... error handling code ...]
-
-    # Apply fusion if requested and we have both accelerometer and gyroscope
-    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
-        try:
-            # Extract the window data
-            acc_window = window_data['accelerometer']  # This is already linear acceleration
-            gyro_window = window_data['gyroscope']
+    try:
+        # Extract data from dictionary
+        acc_data = data['accelerometer']
+        gyro_data = data.get('gyroscope')
+        quat_data = data.get('quaternion')
+        
+        # Initialize feature list
+        features = []
+        
+        # Check if we have all needed data
+        if acc_data is None:
+            logger.error("Accelerometer data required for feature extraction")
+            return np.zeros(32)  # Return empty feature vector
             
-            # Extract timestamps if available
-            timestamps = None
-            if 'aligned_timestamps' in window_data:
-                timestamps = window_data['aligned_timestamps']
-                # Convert to 1D array if needed
-                if len(timestamps.shape) > 1:
-                    timestamps = timestamps[:, 0] if timestamps.shape[1] > 0 else None
-            
-            # Process data using the specified filter
-            fusion_results = process_imu_data(
-                acc_data=acc_window,
-                gyro_data=gyro_window,
-                timestamps=timestamps,
-                filter_type=filter_type,  # Use the specified filter type
-                return_features=False
-            )
-            
-            # Add fusion results to window data
-            window_data['quaternion'] = fusion_results.get('quaternion', np.zeros((window_size, 4)))
+        # Get window length
+        window_length = len(acc_data)
+        
+        # 1. Time-domain features from accelerometer
+        
+        # Magnitude of acceleration
+        acc_mag = np.sqrt(np.sum(acc_data**2, axis=1))
+        
+        # Statistical features
+        features.extend([
+            np.mean(acc_mag),                    # Mean magnitude
+            np.std(acc_mag),                     # Standard deviation
+            np.max(acc_mag),                     # Maximum magnitude
+            np.min(acc_mag),                     # Minimum magnitude
+            np.percentile(acc_mag, 25),          # 25th percentile
+            np.percentile(acc_mag, 75),          # 75th percentile
+            np.max(acc_mag) - np.min(acc_mag),   # Range
+        ])
+        
+        # Per-axis statistics
+        for axis in range(3):
+            axis_data = acc_data[:, axis]
+            features.extend([
+                np.mean(axis_data),                # Mean
+                np.std(axis_data),                 # Standard deviation
+                np.max(axis_data),                 # Maximum
+                np.min(axis_data),                 # Minimum
+            ])
+        
+        # 2. Frequency-domain features (if window is large enough)
+        if window_length >= 16:  # Minimum size for meaningful FFT
+            # Compute FFT for each axis
+            for axis in range(3):
+                axis_data = acc_data[:, axis]
                 
-            logger.debug(f"Added fusion data to window using {filter_type} filter")
-        except Exception as e:
-            logger.error(f"Error in fusion processing: {str(e)}")
-            # Add empty quaternion as fallback
-            window_data['quaternion'] = np.zeros((window_size, 4))
-    else:
-        # Always add empty quaternion data as a fallback
-        window_data['quaternion'] = np.zeros((window_size, 4))
-    
-    # Final validation of quaternion data
-    if 'quaternion' not in window_data or window_data['quaternion'] is None:
-        window_data['quaternion'] = np.zeros((window_size, 4))
-    elif window_data['quaternion'].shape[0] != window_size:
-        # Fix quaternion shape if needed
-        temp = np.zeros((window_size, 4))
-        if window_data['quaternion'].shape[0] < window_size:
-            temp[:window_data['quaternion'].shape[0]] = window_data['quaternion']
+                # Apply Hanning window to reduce spectral leakage
+                window = np.hanning(len(axis_data))
+                windowed_data = axis_data * window
+                
+                # Compute FFT
+                fft_data = np.abs(np.fft.rfft(windowed_data))
+                
+                # Extract key frequency components
+                if len(fft_data) >= 5:
+                    features.extend([
+                        np.sum(fft_data),                  # Total energy
+                        np.max(fft_data),                  # Peak magnitude
+                        np.argmax(fft_data),               # Peak frequency bin
+                        np.mean(fft_data),                 # Mean magnitude
+                        np.std(fft_data),                  # Spectral spread
+                    ])
+                else:
+                    # Pad with zeros if FFT too small
+                    features.extend([0, 0, 0, 0, 0])
         else:
-            temp = window_data['quaternion'][:window_size]
-        window_data['quaternion'] = temp
-    
-    return window_data
+            # Pad with zeros if window too small
+            features.extend([0] * 15)  # 3 axes * 5 frequency features
+        
+        # 3. Orientation features (if quaternion data available)
+        if quat_data is not None and len(quat_data) > 0:
+            # Calculate Euler angles from quaternions (roll, pitch, yaw)
+            euler_angles = np.zeros((len(quat_data), 3))
+            
+            for i, q in enumerate(quat_data):
+                # Convert quaternion to rotation object (w, x, y, z) -> (x, y, z, w)
+                try:
+                    # Make sure this matches your quaternion convention!
+                    rot = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                    euler_angles[i] = rot.as_euler('xyz', degrees=True)
+                except Exception as e:
+                    logger.warning(f"Error converting quaternion to Euler angles: {e}")
+                    euler_angles[i] = [0, 0, 0]
+            
+            # Statistical features from Euler angles
+            for axis in range(3):
+                axis_data = euler_angles[:, axis]
+                features.extend([
+                    np.mean(axis_data),                # Mean
+                    np.std(axis_data),                 # Standard deviation
+                    np.max(axis_data) - np.min(axis_data),  # Range
+                ])
+        else:
+            # Pad with zeros if no quaternion data
+            features.extend([0] * 9)  # 3 axes * 3 orientation features
+        
+        # Convert to numpy array
+        feature_vector = np.array(features, dtype=np.float32)
+        
+        # Ensure we have a consistent feature length
+        expected_length = 65  # Total number of features calculated above
+        if len(feature_vector) < expected_length:
+            # Pad with zeros if needed
+            padding = np.zeros(expected_length - len(feature_vector), dtype=np.float32)
+            feature_vector = np.concatenate([feature_vector, padding])
+        elif len(feature_vector) > expected_length:
+            # Truncate if needed
+            feature_vector = feature_vector[:expected_length]
+        
+        return feature_vector
+        
+    except Exception as e:
+        logger.error(f"Error extracting features: {e}")
+        logger.error(traceback.format_exc())
+        return np.zeros(65, dtype=np.float32)  # Return empty feature vector
