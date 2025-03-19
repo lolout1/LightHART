@@ -1,59 +1,59 @@
 #!/bin/bash
 
-# Enhanced debugging script for IMU filter training
-# Adds improved diagnostics to identify why training isn't proceeding
+# Script to compare different filter types for IMU fusion in fall detection
+# Ensures correct propagation of filter type through the pipeline
 
-# Set error handling
+# Set strict error handling
 set -e
 
 # Configuration
-DEVICE="0,1"
+DEVICE="0,1"  # GPU devices
 BASE_LR=0.0005
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=60
-OUTPUT_DIR="filter_training_debug"
-CONFIG_DIR="config/filter_debug"
+RESULTS_DIR="filter_comparison_results"
+CONFIG_DIR="config/filter_comparison"
 
 # Create directories
-mkdir -p $OUTPUT_DIR
+mkdir -p $RESULTS_DIR
 mkdir -p $CONFIG_DIR
-mkdir -p "$OUTPUT_DIR/logs"
+mkdir -p "$RESULTS_DIR/logs"
+mkdir -p "$RESULTS_DIR/visualizations"
 
 # Log function with timestamp
 log() {
     local level=$1
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $2"
     echo "$msg"
-    echo "$msg" >> "$OUTPUT_DIR/logs/debug.log"
+    echo "$msg" >> "$RESULTS_DIR/logs/main.log"
 }
 
-# Create simplified test configuration for debugging
-create_debug_config() {
+# Create configuration file for a specific filter
+create_config() {
     local config_file=$1
     local filter_type=$2
     
-    log "INFO" "Creating debug config for $filter_type filter: $config_file"
+    log "INFO" "Creating config for $filter_type filter: $config_file"
     
     cat > $config_file << EOL
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
 
-# Using a small subset of subjects for debugging
-subjects: [29, 30, 31]
+subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
 
 model_args:
-  num_layers: 2
-  embed_dim: 32
+  num_layers: 3
+  embed_dim: 48
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 4
+  num_heads: 8
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
-  feature_dim: 96
+  feature_dim: 144  # 48 * 3 for concat fusion
 
 dataset_args:
   mode: 'sliding_window'
@@ -67,12 +67,13 @@ dataset_args:
     filter_type: '${filter_type}'
     acc_threshold: 3.0
     gyro_threshold: 1.0
-    visualize: false
+    visualize: true
+    save_aligned: true
 
 batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
-num_epoch: 10
+num_epoch: ${NUM_EPOCHS}
 
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
@@ -92,157 +93,106 @@ optimizer: adamw
 base_lr: ${BASE_LR}
 weight_decay: ${WEIGHT_DECAY}
 
-# Disable k-fold for simpler debugging
 kfold:
-  enabled: false
+  enabled: true
+  num_folds: 5
+  fold_assignments:
+    - [43, 35, 36]  # Fold 1: ~38.3% falls
+    - [44, 34, 32]  # Fold 2: ~39.7% falls
+    - [45, 37, 38]  # Fold 3: ~44.8% falls
+    - [46, 29, 31]  # Fold 4: ~41.4% falls
+    - [30, 39]      # Fold 5: ~43.3% falls
 EOL
 }
 
-# Run training with extra debug flags
-debug_train_model() {
+# Train a model with a specific filter
+train_model() {
     local config_file=$1
     local model_name=$2
     local filter_type=$3
-    local output_dir="$OUTPUT_DIR/${model_name}"
+    local output_dir="$RESULTS_DIR/$model_name"
     
-    log "INFO" "Starting debug training for $filter_type filter"
-    log "INFO" "Model: $model_name, Config: $config_file"
-    
+    log "INFO" "Training model with $filter_type filter: $model_name"
     mkdir -p "$output_dir"
     
-    # First, try to identify the dataset loading issue
-    log "DEBUG" "Testing dataset loading only..."
-    
-    CUDA_VISIBLE_DEVICES=$DEVICE python -c "
-import yaml
-import sys
-
-try:
-    from utils.dataset import prepare_smartfallmm, split_by_subjects
-    
-    # Load config
-    with open('$config_file', 'r') as f:
-        config = yaml.safe_load(f)
-    
-    # Create a dummy arg object
-    class Args:
-        pass
-    args = Args()
-    
-    # Copy config to args
-    for key, value in config.items():
-        setattr(args, key, value)
-    
-    # Try dataset preparation
-    print('Preparing dataset...')
-    builder = prepare_smartfallmm(args)
-    
-    # Try data splitting
-    print('Splitting data for subjects:', args.subjects)
-    fuse = args.dataset_args['fusion_options']['enabled']
-    data = split_by_subjects(builder, args.subjects, fuse)
-    
-    # Check if any data was loaded
-    if data:
-        print('Data keys:', data.keys())
-        for key, value in data.items():
-            if hasattr(value, 'shape'):
-                print(f'{key} shape: {value.shape}')
-            elif isinstance(value, list):
-                print(f'{key} length: {len(value)}')
-    else:
-        print('No data was loaded!')
-    
-    print('Dataset test completed successfully')
-    
-except Exception as e:
-    print(f'Error in dataset loading: {str(e)}')
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-" 2>&1 | tee "$OUTPUT_DIR/logs/${model_name}_dataset_test.log"
-    
-    dataset_status=$?
-    if [ $dataset_status -ne 0 ]; then
-        log "ERROR" "Dataset loading failed for $model_name - see log for details"
-        return 1
-    fi
-    
-    # Now run the actual training with verbose output
-    log "INFO" "Starting training with verbose output..."
-    
-    # Flag to help trace execution path
-    export PYTHONPATH=$(pwd):$PYTHONPATH
-    
+    # Run training with cross-validation
     CUDA_VISIBLE_DEVICES=$DEVICE python main.py \
         --config $config_file \
         --work-dir $output_dir \
         --model-saved-name $model_name \
         --device 0 1 \
         --multi-gpu True \
-        --kfold False \
-        --parallel-threads 48 \
-        --num-epoch 10 \
-        --print-log True \
-        --phase train \
-        --verbose True 2>&1 | tee "$OUTPUT_DIR/logs/${model_name}_train.log"
+        --kfold True \
+        --parallel-threads 12 \
+        --num-epoch $NUM_EPOCHS \
+        --patience 15 2>&1 | tee "$RESULTS_DIR/logs/${model_name}_train.log"
     
-    exit_code=$?
-    log "INFO" "Training process completed with exit code: $exit_code"
-    
-    # Check for model file
-    if [ -f "$output_dir/${model_name}.pt" ]; then
-        log "SUCCESS" "Model file successfully created: $output_dir/${model_name}.pt"
-        return 0
-    else
-        log "ERROR" "Model file was not created after training"
-        
-        # Check if any Python errors were logged
-        if grep -q "Error\|Exception\|Traceback" "$OUTPUT_DIR/logs/${model_name}_train.log"; then
-            log "ERROR" "Found error in training log:"
-            grep -A 10 "Error\|Exception\|Traceback" "$OUTPUT_DIR/logs/${model_name}_train.log" | head -15
-        fi
-        
-        # Check for log file created by the trainer
-        if [ -f "$output_dir/log.txt" ]; then
-            log "DEBUG" "Contents of trainer log file (last 20 lines):"
-            tail -20 "$output_dir/log.txt" >> "$OUTPUT_DIR/logs/debug.log"
-        else
-            log "WARNING" "No trainer log file was created"
-        fi
-        
+    local status=$?
+    if [ $status -ne 0 ]; then
+        log "ERROR" "Training failed with exit code $status"
         return 1
     fi
-}
-
-# Main debug function
-main() {
-    log "INFO" "Starting IMU filter debugging process"
     
-    # Diagnostics: Check environment
-    log "DEBUG" "Python version:"
-    python --version 2>&1 | tee -a "$OUTPUT_DIR/logs/debug.log"
+    # Extract and log key metrics
+    if [ -f "$output_dir/cv_summary.json" ]; then
+        log "INFO" "Cross-validation results for $model_name ($filter_type):"
+        
+        # Extract metrics using Python
+        python -c "
+import json
+import sys
+with open('$output_dir/cv_summary.json') as f:
+    data = json.load(f)
+    metrics = data['average_metrics']
+    print(f\"Accuracy: {metrics.get('accuracy', 0):.4f} ± {metrics.get('accuracy_std', 0):.4f}\")
+    print(f\"F1 score: {metrics.get('f1', 0):.4f} ± {metrics.get('f1_std', 0):.4f}\")
+    print(f\"Precision: {metrics.get('precision', 0):.4f} ± {metrics.get('precision_std', 0):.4f}\")
+    print(f\"Recall: {metrics.get('recall', 0):.4f} ± {metrics.get('recall_std', 0):.4f}\")
     
-    log "DEBUG" "PyTorch version and CUDA availability:"
-    python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>&1 | tee -a "$OUTPUT_DIR/logs/debug.log"
-    
-    # Test with just one filter to simplify debugging
-    create_debug_config "$CONFIG_DIR/madgwick_debug.yaml" "madgwick"
-    
-    # Check that the config file was created correctly
-    log "DEBUG" "Config file content:"
-    cat "$CONFIG_DIR/madgwick_debug.yaml" | tee -a "$OUTPUT_DIR/logs/debug.log"
-    
-    # Try running the debug training
-    log "INFO" "=== STARTING DEBUG TRAINING WITH MADGWICK FILTER ==="
-    if debug_train_model "$CONFIG_DIR/madgwick_debug.yaml" "madgwick_debug" "madgwick"; then
-        log "SUCCESS" "Debug training completed successfully!"
+    # Save to comparison CSV
+    with open('$RESULTS_DIR/comparison.csv', 'a') as csv:
+        csv.write(f\"{model_name},{filter_type},{metrics.get('accuracy', 0):.6f},{metrics.get('f1', 0):.6f},{metrics.get('precision', 0):.6f},{metrics.get('recall', 0):.6f},{metrics.get('balanced_accuracy', 0):.6f}\\n\")
+"
     else
-        log "ERROR" "Debug training failed - check logs for details"
+        log "ERROR" "No cross-validation summary found for $model_name"
     fi
     
-    log "INFO" "Debug session complete. Check $OUTPUT_DIR/logs for detailed information."
+    return 0
 }
 
-# Run the debug session
+# Main function to run the filter comparison
+main() {
+    log "INFO" "Starting comprehensive filter comparison for IMU fusion"
+    
+    # Create comparison CSV header
+    echo "model,filter_type,accuracy,f1,precision,recall,balanced_accuracy" > "$RESULTS_DIR/comparison.csv"
+    
+    # Create configurations for each filter type
+    create_config "$CONFIG_DIR/madgwick.yaml" "madgwick"
+    create_config "$CONFIG_DIR/kalman.yaml" "kalman"
+    create_config "$CONFIG_DIR/ekf.yaml" "ekf"
+    
+    # Train models with different filter types
+    log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
+    train_model "$CONFIG_DIR/madgwick.yaml" "madgwick_model" "madgwick"
+    
+    log "INFO" "============= TRAINING WITH STANDARD KALMAN FILTER ============="
+    train_model "$CONFIG_DIR/kalman.yaml" "kalman_model" "kalman"
+    
+    log "INFO" "============= TRAINING WITH EXTENDED KALMAN FILTER ============="
+    train_model "$CONFIG_DIR/ekf.yaml" "ekf_model" "ekf"
+    
+    # Generate comparison visualizations and report
+    log "INFO" "Generating comparative analysis"
+    python -c "
+from utils.filter_comparison import process_comparison_results
+process_comparison_results('$RESULTS_DIR')
+"
+    
+    log "INFO" "Filter comparison completed successfully"
+    log "INFO" "Results available in $RESULTS_DIR"
+    log "INFO" "See $RESULTS_DIR/visualizations for comparative analysis"
+}
+
+# Run the main function
 main
