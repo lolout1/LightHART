@@ -8,7 +8,7 @@ set -e
 
 # Set common parameters
 DEVICE="0,1"  # Use both GPUs
-BASE_LR=0.0005
+BASE_LR=0.005
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=120
 RESULT_DIR="results_comparison"

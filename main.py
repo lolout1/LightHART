@@ -1,99 +1,99 @@
 #!/usr/bin/env python3
-import argparse
+import traceback
+from typing import List, Dict, Tuple, Union, Optional, Any
+import random
 import sys
 import os
 import time
 import shutil
+import argparse
 import yaml
+from copy import deepcopy
 import json
 import logging
-import random
-import traceback
 from collections import defaultdict
 import numpy as np
+import pandas as pd
 import torch
 import torch.optim as optim
 import torch.nn as nn
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_support, balanced_accuracy_score
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_support
+from sklearn.exceptions import UndefinedMetricWarning
 import warnings
 from utils.dataset import prepare_smartfallmm, split_by_subjects
 from utils.imu_fusion import cleanup_resources, update_thread_configuration
 
-# Register cleanup function to ensure resources are released
 import atexit
-atexit.register(cleanup_resources)
+def cleanup_on_exit():
+    cleanup_resources()
+atexit.register(cleanup_on_exit)
 
-# Configure logging
 logger = logging.getLogger('fall_detection')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 def str2bool(v):
-    if isinstance(v, bool): return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'): return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
-    else: raise argparse.ArgumentTypeError('Boolean value expected.')
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Unsupported value encountered.')
 
 def get_args():
-    parser = argparse.ArgumentParser(description='Fall Detection Training')
+    parser = argparse.ArgumentParser(description='Fall Detection and Human Activity Recognition')
     
-    # Configuration
-    parser.add_argument('--config', default='./config/smartfallmm/madgwick_fusion.yaml', help='Path to config file')
-    parser.add_argument('--dataset', type=str, default='smartfallmm', help='Dataset name')
+    parser.add_argument('--config', default='./config/smartfallmm/ekf_fusion.yaml', help='Path to the configuration file')
+    parser.add_argument('--dataset', type=str, default='smartfallmm', help='Dataset name to use')
     parser.add_argument('--phase', type=str, default='train', help='Phase: train or test')
-    parser.add_argument('--work-dir', type=str, default='work_dir', help='Working directory')
+    parser.add_argument('--work-dir', type=str, default='work_dir', help='Working directory for outputs')
     
-    # Model configuration
-    parser.add_argument('--model', default=None, help='Model class path')
-    parser.add_argument('--model-args', default=None, help='Model arguments')
-    parser.add_argument('--weights', type=str, help='Pretrained weights path')
-    parser.add_argument('--model-saved-name', type=str, default='model', help='Model save name')
+    parser.add_argument('--model', default=None, help='Model class path to load')
+    parser.add_argument('--model-args', default=None, help='Dictionary of model arguments')
+    parser.add_argument('--weights', type=str, help='Path to pretrained weights file')
+    parser.add_argument('--model-saved-name', type=str, default='model', help='Name for saving the trained model')
     
-    # Training parameters
-    parser.add_argument('--batch-size', type=int, default=16, metavar='N', help='Training batch size')
-    parser.add_argument('--test-batch-size', type=int, default=16, metavar='N', help='Testing batch size')
-    parser.add_argument('--val-batch-size', type=int, default=16, metavar='N', help='Validation batch size')
-    parser.add_argument('--num-epoch', type=int, default=120, metavar='N', help='Training epochs')
-    parser.add_argument('--start-epoch', type=int, default=0, help='Starting epoch number')
-    parser.add_argument('--patience', type=int, default=15, help='Early stopping patience')
+    parser.add_argument('--batch-size', type=int, default=16, metavar='N', help='Input batch size for training (default: 16)')
+    parser.add_argument('--test-batch-size', type=int, default=16, metavar='N', help='Input batch size for testing (default: 16)')
+    parser.add_argument('--val-batch-size', type=int, default=16, metavar='N', help='Input batch size for validation (default: 16)')
+    parser.add_argument('--num-epoch', type=int, default=60, metavar='N', help='Number of epochs to train (default: 60)')
+    parser.add_argument('--start-epoch', type=int, default=0, help='Starting epoch number (default: 0)')
+    parser.add_argument('--patience', type=int, default=15, help='Patience for early stopping (default: 15)')
     
-    # Optimizer settings
-    parser.add_argument('--optimizer', type=str, default='adamw', help='Optimizer to use')
-    parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR', help='Base learning rate')
-    parser.add_argument('--weight-decay', type=float, default=0.001, help='Weight decay factor')
-    parser.add_argument('--scheduler', type=str, default='plateau', help='LR scheduler type')
-    parser.add_argument('--grad-clip', type=float, default=1.0, help='Gradient clipping value')
+    parser.add_argument('--optimizer', type=str, default='adamw', help='Optimizer to use (adamw, adam, sgd)')
+    parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR', help='Base learning rate (default: 0.0005)')
+    parser.add_argument('--weight-decay', type=float, default=0.001, help='Weight decay factor (default: 0.001)')
+    parser.add_argument('--scheduler', type=str, default='plateau', help='Learning rate scheduler (plateau, cosine)')
+    parser.add_argument('--grad-clip', type=float, default=1.0, help='Gradient clipping value (default: 1.0)')
     
-    # Loss function
-    parser.add_argument('--loss', default='torch.nn.CrossEntropyLoss', help='Loss function')
-    parser.add_argument('--loss-args', default="{}", type=str, help='Loss function arguments')
+    parser.add_argument('--loss', default='torch.nn.CrossEntropyLoss', help='Loss function class path')
+    parser.add_argument('--loss-args', default="{}", type=str, help='Dictionary of loss function arguments')
     
-    # Dataset configuration
-    parser.add_argument('--dataset-args', default=None, help='Dataset arguments')
+    parser.add_argument('--dataset-args', default=None, help='Arguments for the dataset')
     parser.add_argument('--subjects', nargs='+', type=int, help='Subject IDs to include')
-    parser.add_argument('--feeder', default=None, help='DataLoader class')
-    parser.add_argument('--train-feeder-args', default=None, help='Training dataloader args')
-    parser.add_argument('--val-feeder-args', default=None, help='Validation dataloader args')
-    parser.add_argument('--test-feeder-args', default=None, help='Test dataloader args')
+    parser.add_argument('--feeder', default=None, help='DataLoader class path')
+    parser.add_argument('--train-feeder-args', default=None, help='Arguments for training data loader')
+    parser.add_argument('--val-feeder-args', default=None, help='Arguments for validation data loader')
+    parser.add_argument('--test-feeder-args', default=None, help='Arguments for test data loader')
     
-    # Hardware and environment
-    parser.add_argument('--device', nargs='+', default=[0, 1], type=int, help='CUDA device IDs')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed')
-    parser.add_argument('--num-worker', type=int, default=8, help='Data loading workers')
-    parser.add_argument('--multi-gpu', type=str2bool, default=True, help='Use multiple GPUs')
-    parser.add_argument('--parallel-threads', type=int, default=48, help='Preprocessing threads')
+    parser.add_argument('--device', nargs='+', default=[0, 1], type=int, help='CUDA device IDs to use')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed (default: 42)')
+    parser.add_argument('--num-worker', type=int, default=8, help='Number of workers for data loading')
+    parser.add_argument('--multi-gpu', type=str2bool, default=True, help='Whether to use multiple GPUs when available')
+    parser.add_argument('--parallel-threads', type=int, default=48, help='Number of parallel threads for preprocessing')
     
-    # Evaluation and validation
-    parser.add_argument('--include-val', type=str2bool, default=True, help='Include validation')
-    parser.add_argument('--result-file', type=str, help='Results file path')
+    parser.add_argument('--include-val', type=str2bool, default=True, help='Whether to include validation set')
+    parser.add_argument('--result-file', type=str, help='File to save results to')
     
-    # Cross-validation
-    parser.add_argument('--kfold', type=str2bool, default=True, help='Use k-fold cross-validation')
-    parser.add_argument('--num-folds', type=int, default=5, help='Number of CV folds')
+    parser.add_argument('--kfold', type=str2bool, default=True, help='Whether to use k-fold cross-validation')
+    parser.add_argument('--num-folds', type=int, default=5, help='Number of folds for cross-validation')
     
-    # Logging
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='Log interval')
-    parser.add_argument('--print-log', type=str2bool, default=True, help='Print and save logs')
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='How many batches to wait before logging training status')
+    parser.add_argument('--print-log', type=str2bool, default=True, help='Whether to print and save logs')
     
     return parser
 
@@ -111,7 +111,7 @@ def import_class(import_str):
         __import__(mod_str)
         return getattr(sys.modules[mod_str], class_str)
     except (ImportError, AttributeError) as e:
-        raise ImportError(f'Class {import_str} cannot be found ({e})')
+        raise ImportError(f'Class {class_str} cannot be found ({str(e)})')
 
 def setup_gpu_environment(args):
     if torch.cuda.is_available():
@@ -159,11 +159,67 @@ def configure_parallel_processing(args):
         update_thread_configuration(max_files, threads_per_file)
         logger.info(f"Configured parallel processing: {max_files} files × {threads_per_file} threads = {new_total} total")
 
+def load_model_safely(path, device):
+    try:
+        # First try normal loading
+        return torch.load(path, map_location=device)
+    except Exception as e:
+        try:
+            # Try with weights_only=False
+            return torch.load(path, map_location=device, weights_only=False)
+        except Exception:
+            try:
+                # Try with add_safe_globals for numpy.core.multiarray.scalar
+                import torch.serialization
+                import numpy as np
+                with torch.serialization.safe_globals([np.core.multiarray.scalar]):
+                    return torch.load(path, map_location=device)
+            except Exception as e2:
+                logger.error(f"All model loading attempts failed: {str(e2)}")
+                raise
+
+class WeightedCrossEntropyLoss(nn.Module):
+    def __init__(self, class_weights=None):
+        super().__init__()
+        self.class_weights = class_weights
+        
+    def forward(self, logits, targets):
+        if self.class_weights is None:
+            device = logits.device
+            class_counts = torch.bincount(targets)
+            total = class_counts.sum()
+            weights = total / (class_counts * len(class_counts))
+            weights = weights.to(device)
+        else:
+            weights = self.class_weights
+            
+        return F.cross_entropy(logits, targets, weight=weights)
+
+class EnhancedDistillationLoss(nn.Module):
+    def __init__(self, temperature=2.0, alpha=0.5, class_weights=None):
+        super().__init__()
+        self.temperature = temperature
+        self.alpha = alpha
+        
+        if class_weights is not None:
+            self.ce_loss = nn.CrossEntropyLoss(weight=class_weights)
+        else:
+            self.ce_loss = nn.CrossEntropyLoss()
+        
+    def forward(self, student_logits, teacher_logits, labels):
+        hard_loss = self.ce_loss(student_logits, labels)
+        
+        soft_targets = F.softmax(teacher_logits / self.temperature, dim=-1)
+        soft_prob = F.log_softmax(student_logits / self.temperature, dim=-1)
+        soft_loss = torch.sum(soft_targets * (torch.log(soft_targets + 1e-10) - soft_prob)) / soft_prob.size()[0] * (self.temperature**2)
+        
+        loss = self.alpha * soft_loss + (1-self.alpha) * hard_loss
+        return loss
+
 class Trainer:
     def __init__(self, arg):
         self.arg = arg
         
-        # Initialize tracking variables
         self.train_loss_summary = []
         self.val_loss_summary = []
         self.train_metrics_history = []
@@ -176,12 +232,10 @@ class Trainer:
         self.patience_counter = 0
         self.fold_metrics = []
         
-        # Subject information
         self.train_subjects = []
         self.val_subject = None
         self.test_subject = None
         
-        # Resources
         self.optimizer = None
         self.scheduler = None
         self.scaler = None
@@ -192,52 +246,40 @@ class Trainer:
         
         self.model_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}.pt'
         
-        # Determine modalities and fusion settings
-        self.inertial_modality = [modality for modality in arg.dataset_args['modalities']
-                                 if modality != 'skeleton']
+        self.inertial_modality = [modality for modality in arg.dataset_args['modalities'] if modality != 'skeleton']
         self.has_gyro = 'gyroscope' in self.inertial_modality
         self.has_fusion = len(self.inertial_modality) > 1 or (
             'fusion_options' in arg.dataset_args and
             arg.dataset_args['fusion_options'].get('enabled', False)
         )
         self.fuse = self.has_fusion
-        self.filter_type = arg.dataset_args.get('fusion_options', {}).get('filter_type', 'madgwick')
+        self.filter_type = arg.dataset_args.get('fusion_options', {}).get('filter_type', 'ekf')
 
-        # Setup work directory
         if not os.path.exists(self.arg.work_dir):
             os.makedirs(self.arg.work_dir)
             if arg.config:
                 self.save_config(arg.config, arg.work_dir)
 
-        # Configure GPU environment
         self.available_gpus, self.use_amp = setup_gpu_environment(arg)
         arg.device = self.available_gpus if self.available_gpus else arg.device
         self.output_device = arg.device[0] if isinstance(arg.device, list) and len(arg.device) > 0 else arg.device
         
-        # Configure mixed precision
         if self.use_amp:
             self.scaler = torch.amp.GradScaler() if torch.__version__ >= '1.6.0' else None
             self.print_log("Using Automatic Mixed Precision (AMP) training")
         
-        # Load model
         if self.arg.phase == 'train':
             self.model = self.load_model(arg.model, arg.model_args)
         else:
             self.model = self.load_weights()
 
-        # Configure multi-GPU
         if len(self.available_gpus) > 1 and arg.multi_gpu:
-            self.model = nn.DataParallel(
-                self.model, 
-                device_ids=self.available_gpus
-            )
+            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
 
-        # Load loss function
         self.load_loss()
         self.include_val = arg.include_val
 
-        # Log model info
-        num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        num_params = self.count_parameters(self.model)
         self.print_log(f'# Parameters: {num_params:,}')
         self.print_log(f'Model size: {num_params / (1024 ** 2):.2f} MB')
         self.print_log(f'Sensor modalities: {self.inertial_modality}')
@@ -248,7 +290,6 @@ class Trainer:
         else:
             self.print_log('Using CPU for computation')
             
-        # Configure cross-validation
         if hasattr(self.arg, 'kfold') and self.arg.kfold:
             self.use_kfold = True
             self.num_folds = self.arg.num_folds
@@ -263,6 +304,9 @@ class Trainer:
         self.print_log(f'Saving config to {desc_path}/{config_file}')
         shutil.copy(src_path, f'{desc_path}/{config_file}')
 
+    def count_parameters(self, model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
     def load_model(self, model_path, model_args):
         use_cuda = torch.cuda.is_available()
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
@@ -270,15 +314,13 @@ class Trainer:
         Model = import_class(model_path)
         self.print_log(f"Loading model: {model_path}")
         
-        # Fix feature dimension for fusion models
         if 'feature_dim' not in model_args and 'embed_dim' in model_args:
-            if model_args.get('fusion_type', 'concat') == 'concat':
+            if model_args.get('fusion_type', 'enhanced') == 'concat':
                 model_args['feature_dim'] = model_args['embed_dim'] * 3
             else:
                 model_args['feature_dim'] = model_args['embed_dim']
             self.print_log(f"Auto-setting feature_dim to {model_args['feature_dim']}")
         
-        # Ensure num_heads divides feature_dim evenly
         if 'num_heads' in model_args and 'feature_dim' in model_args:
             if model_args['feature_dim'] % model_args['num_heads'] != 0:
                 old_heads = model_args['num_heads']
@@ -292,7 +334,6 @@ class Trainer:
             model = Model(**model_args).to(device)
         except Exception as e:
             self.print_log(f"Error instantiating model: {str(e)}")
-            self.print_log(f"Attempting to fix dimension issue and retry...")
             
             if 'feature_dim' in model_args and 'num_heads' in model_args:
                 heads = model_args['num_heads']
@@ -316,7 +357,7 @@ class Trainer:
         self.print_log(f"Loading weights from: {self.arg.weights}")
         
         try:
-            model = torch.load(self.arg.weights, map_location=device)
+            model = load_model_safely(self.arg.weights, device)
             self.print_log("Loaded complete model")
             return model
         except Exception as e:
@@ -324,7 +365,7 @@ class Trainer:
                 Model = import_class(self.arg.model)
                 model = Model(**self.arg.model_args).to(device)
                 
-                state_dict = torch.load(self.arg.weights, map_location=device)
+                state_dict = load_model_safely(self.arg.weights, device)
                 
                 if isinstance(state_dict, dict):
                     if 'model_state_dict' in state_dict:
@@ -365,8 +406,10 @@ class Trainer:
             
         except Exception as e:
             self.print_log(f"Error loading loss function: {str(e)}")
-            self.criterion = torch.nn.CrossEntropyLoss()
-            self.print_log("Fallback to CrossEntropyLoss")
+            
+            # Use weighted cross entropy as a robust fallback
+            self.criterion = WeightedCrossEntropyLoss()
+            self.print_log("Fallback to WeightedCrossEntropyLoss")
 
     def load_optimizer(self):
         optimizer_name = self.arg.optimizer.lower()
@@ -401,7 +444,7 @@ class Trainer:
         if scheduler_name == 'plateau':
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
-                mode='max',  # Changed to 'max' since we're optimizing F1 score
+                mode='min',
                 factor=0.1,
                 patience=10,
                 verbose=True
@@ -441,7 +484,6 @@ class Trainer:
                 
                 return folds
         
-        # Default fold assignments
         fold_assignments = [
             ([43, 35, 36], "Fold 1: 38.3% falls"),
             ([44, 34, 32], "Fold 2: 39.7% falls"),
@@ -469,7 +511,6 @@ class Trainer:
 
     def distribution_viz(self, labels, work_dir, mode):
         try:
-            import matplotlib.pyplot as plt
             values, count = np.unique(labels, return_counts=True)
             plt.figure(figsize=(10, 6))
             plt.bar(values, count)
@@ -494,14 +535,13 @@ class Trainer:
         
         data_dict = {}
         
-        # Handle modalities - ignore linear_acceleration since it's redundant with accelerometer
         if 'accelerometer' in inputs:
             data_dict['accelerometer'] = inputs['accelerometer'].to(device).float()
         
         if 'gyroscope' in inputs:
             data_dict['gyroscope'] = inputs['gyroscope'].to(device).float()
         
-        for modality in ['quaternion', 'skeleton']:
+        for modality in ['quaternion', 'linear_acceleration', 'fusion_features', 'skeleton']:
             if modality in inputs:
                 data_dict[modality] = inputs[modality].to(device).float()
         
@@ -523,7 +563,6 @@ class Trainer:
                 self.print_log(f"Splitting data for subjects: train={train_subjects}, val={val_subjects}")
                 
                 try:
-                    # Split data by subjects
                     self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
                     self.norm_val = split_by_subjects(builder, val_subjects, self.fuse)
 
@@ -531,7 +570,6 @@ class Trainer:
                         self.print_log("ERROR: Split produced empty datasets")
                         return False
                     
-                    # Check that required modalities are present
                     required_keys = ['accelerometer', 'labels']
                     
                     for dataset_name, dataset in [("training", self.norm_train), ("validation", self.norm_val)]:
@@ -545,7 +583,6 @@ class Trainer:
                         present_keys = [key for key in dataset.keys() if key != 'labels']
                         self.print_log(f"{dataset_name.capitalize()} modalities: {present_keys}")
                         
-                        # Log shape information
                         for key, value in dataset.items():
                             self.print_log(f"  {key}: {value.shape if hasattr(value, 'shape') else len(value)}")
                 except Exception as e:
@@ -554,7 +591,17 @@ class Trainer:
                     return False
 
                 try:
-                    # Create training data loader
+                    # Set up class weights for loss function based on training data
+                    if isinstance(self.criterion, (WeightedCrossEntropyLoss, EnhancedDistillationLoss)):
+                        train_labels = self.norm_train['labels']
+                        unique_labels, counts = np.unique(train_labels, return_counts=True)
+                        class_weights = torch.FloatTensor(counts.sum() / (counts * len(counts)))
+                        use_cuda = torch.cuda.is_available()
+                        device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
+                        class_weights = class_weights.to(device)
+                        self.criterion.class_weights = class_weights
+                        self.print_log(f"Set class weights for loss function: {class_weights}")
+                        
                     train_dataset = Feeder(dataset=self.norm_train, batch_size=self.arg.batch_size)
                     
                     drop_last = True
@@ -573,7 +620,6 @@ class Trainer:
                         collate_fn=getattr(Feeder, 'custom_collate_fn', None)
                     )
                     
-                    # Create validation data loader
                     val_dataset = Feeder(dataset=self.norm_val, batch_size=self.arg.val_batch_size)
                     
                     val_feeder_args = getattr(self.arg, 'val_feeder_args', {}) or {}
@@ -595,11 +641,9 @@ class Trainer:
                     self.print_log(traceback.format_exc())
                     return False
 
-                # Visualize label distributions
                 self.distribution_viz(self.norm_train['labels'], self.arg.work_dir, 'train')
                 self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
 
-                # Prepare test data (using val subjects for testing)
                 self.print_log(f"Preparing test data for subjects {val_subjects}")
                 try:
                     self.norm_test = split_by_subjects(builder, val_subjects, self.fuse)
@@ -628,7 +672,6 @@ class Trainer:
                 return True
             
             else:
-                # Testing phase - only load test data
                 self.print_log(f"Preparing test data for subjects {self.arg.subjects}")
                 try:
                     builder = prepare_smartfallmm(self.arg)
@@ -687,100 +730,87 @@ class Trainer:
             self.print_log("WARNING: Missing loss data for visualization")
             return
             
-        try:
-            import matplotlib.pyplot as plt
-            epochs = range(len(train_loss))
-            plt.figure(figsize=(12, 8))
-            plt.plot(epochs, train_loss, 'b-', label="Training Loss", marker='o', markersize=4, linewidth=2)
-            plt.plot(epochs, val_loss, 'r-', label="Validation Loss", marker='s', markersize=4, linewidth=2)
-            plt.title('Training vs Validation Loss')
-            plt.legend()
-            plt.xlabel('Epochs')
-            plt.ylabel('Loss')
-            plt.grid(True, alpha=0.3)
+        epochs = range(len(train_loss))
+        plt.figure(figsize=(12, 8))
+        plt.plot(epochs, train_loss, 'b-', label="Training Loss", marker='o', markersize=4, linewidth=2)
+        plt.plot(epochs, val_loss, 'r-', label="Validation Loss", marker='s', markersize=4, linewidth=2)
+        plt.title('Training vs Validation Loss')
+        plt.legend()
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.grid(True, alpha=0.3)
+        
+        min_train_idx = np.argmin(train_loss)
+        min_val_idx = np.argmin(val_loss)
+        plt.annotate(f'Min: {train_loss[min_train_idx]:.4f}', 
+                    xy=(min_train_idx, train_loss[min_train_idx]),
+                    xytext=(min_train_idx+0.5, train_loss[min_train_idx]*1.1),
+                    arrowprops=dict(facecolor='blue', shrink=0.05),
+                    color='blue')
+        plt.annotate(f'Min: {val_loss[min_val_idx]:.4f}', 
+                    xy=(min_val_idx, val_loss[min_val_idx]),
+                    xytext=(min_val_idx+0.5, val_loss[min_val_idx]*1.1),
+                    arrowprops=dict(facecolor='red', shrink=0.05),
+                    color='red')
+        
+        save_path = f'{self.arg.work_dir}/train_vs_val_loss.png'
+        if fold is not None:
+            fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
+            os.makedirs(fold_dir, exist_ok=True)
+            save_path = f'{fold_dir}/train_vs_val_loss.png'
             
-            # Annotate minimum loss points
-            min_train_idx = np.argmin(train_loss)
-            min_val_idx = np.argmin(val_loss)
-            plt.annotate(f'Min: {train_loss[min_train_idx]:.4f}', 
-                        xy=(min_train_idx, train_loss[min_train_idx]),
-                        xytext=(min_train_idx+0.5, train_loss[min_train_idx]*1.1),
-                        arrowprops=dict(facecolor='blue', shrink=0.05),
-                        color='blue')
-            plt.annotate(f'Min: {val_loss[min_val_idx]:.4f}', 
-                        xy=(min_val_idx, val_loss[min_val_idx]),
-                        xytext=(min_val_idx+0.5, val_loss[min_val_idx]*1.1),
-                        arrowprops=dict(facecolor='red', shrink=0.05),
-                        color='red')
-            
-            # Save to appropriate location
-            save_path = f'{self.arg.work_dir}/train_vs_val_loss.png'
-            if fold is not None:
-                fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
-                os.makedirs(fold_dir, exist_ok=True)
-                save_path = f'{fold_dir}/train_vs_val_loss.png'
-                
-            plt.savefig(save_path)
-            plt.close()
-        except Exception as e:
-            self.print_log(f"Error creating loss visualization: {str(e)}")
+        plt.savefig(save_path)
+        plt.close()
 
     def metrics_viz(self, train_metrics, val_metrics, fold=None):
         if not train_metrics or not val_metrics:
             return
             
-        try:
-            import matplotlib.pyplot as plt
-            epochs = range(len(train_metrics))
-            metrics = ['accuracy', 'precision', 'recall', 'f1']
+        epochs = range(len(train_metrics))
+        metrics = ['accuracy', 'precision', 'recall', 'f1']
+        
+        plt.figure(figsize=(15, 10))
+        
+        for i, metric in enumerate(metrics):
+            plt.subplot(2, 2, i+1)
             
-            plt.figure(figsize=(15, 10))
+            train_values = [m.get(metric, 0) for m in train_metrics]
+            val_values = [m.get(metric, 0) for m in val_metrics]
             
-            for i, metric in enumerate(metrics):
-                plt.subplot(2, 2, i+1)
-                
-                train_values = [m.get(metric, 0) for m in train_metrics]
-                val_values = [m.get(metric, 0) for m in val_metrics]
-                
-                plt.plot(epochs, train_values, 'b-', label=f'Train {metric}', marker='o', markersize=3)
-                plt.plot(epochs, val_values, 'r-', label=f'Val {metric}', marker='s', markersize=3)
-                plt.title(f'{metric.capitalize()} vs Epochs')
-                plt.xlabel('Epochs')
-                plt.ylabel(metric.capitalize())
-                plt.legend()
-                plt.grid(True, alpha=0.3)
-                
-                # Annotate maximum metric points
-                max_train_idx = np.argmax(train_values)
-                max_val_idx = np.argmax(val_values)
-                plt.annotate(f'Max: {train_values[max_train_idx]:.4f}', 
-                            xy=(max_train_idx, train_values[max_train_idx]),
-                            xytext=(max_train_idx+0.5, min(train_values[max_train_idx]*1.05, 1.0)),
-                            arrowprops=dict(facecolor='blue', shrink=0.05, alpha=0.7),
-                            color='blue')
-                plt.annotate(f'Max: {val_values[max_val_idx]:.4f}', 
-                            xy=(max_val_idx, val_values[max_val_idx]),
-                            xytext=(max_val_idx+0.5, min(val_values[max_val_idx]*1.05, 1.0)),
-                            arrowprops=dict(facecolor='red', shrink=0.05, alpha=0.7),
-                            color='red')
+            plt.plot(epochs, train_values, 'b-', label=f'Train {metric}', marker='o', markersize=3)
+            plt.plot(epochs, val_values, 'r-', label=f'Val {metric}', marker='s', markersize=3)
+            plt.title(f'{metric.capitalize()} vs Epochs')
+            plt.xlabel('Epochs')
+            plt.ylabel(metric.capitalize())
+            plt.legend()
+            plt.grid(True, alpha=0.3)
             
-            plt.tight_layout()
+            max_train_idx = np.argmax(train_values)
+            max_val_idx = np.argmax(val_values)
+            plt.annotate(f'Max: {train_values[max_train_idx]:.4f}', 
+                        xy=(max_train_idx, train_values[max_train_idx]),
+                        xytext=(max_train_idx+0.5, min(train_values[max_train_idx]*1.05, 1.0)),
+                        arrowprops=dict(facecolor='blue', shrink=0.05, alpha=0.7),
+                        color='blue')
+            plt.annotate(f'Max: {val_values[max_val_idx]:.4f}', 
+                        xy=(max_val_idx, val_values[max_val_idx]),
+                        xytext=(max_val_idx+0.5, min(val_values[max_val_idx]*1.05, 1.0)),
+                        arrowprops=dict(facecolor='red', shrink=0.05, alpha=0.7),
+                        color='red')
+        
+        plt.tight_layout()
+        
+        save_path = f'{self.arg.work_dir}/metrics.png'
+        if fold is not None:
+            fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
+            os.makedirs(fold_dir, exist_ok=True)
+            save_path = f'{fold_dir}/metrics.png'
             
-            # Save to appropriate location
-            save_path = f'{self.arg.work_dir}/metrics.png'
-            if fold is not None:
-                fold_dir = os.path.join(self.arg.work_dir, f'fold_{fold}')
-                os.makedirs(fold_dir, exist_ok=True)
-                save_path = f'{fold_dir}/metrics.png'
-                
-            plt.savefig(save_path)
-            plt.close()
-        except Exception as e:
-            self.print_log(f"Error creating metrics visualization: {str(e)}")
+        plt.savefig(save_path)
+        plt.close()
 
     def cm_viz(self, y_pred, y_true, fold=None):
         try:
-            import matplotlib.pyplot as plt
             cm = confusion_matrix(y_true, y_pred)
             plt.figure(figsize=(10, 8))
             plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
@@ -811,7 +841,6 @@ class Trainer:
             plt.savefig(save_path)
             plt.close()
             
-            # Calculate metrics from confusion matrix
             tn, fp, fn, tp = cm.ravel()
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
             sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -849,10 +878,8 @@ class Trainer:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=UndefinedMetricWarning)
             
-            # Calculate accuracy
             accuracy = np.mean(predictions_np == targets_np)
             
-            # Calculate precision, recall, F1
             try:
                 precision, recall, f1, _ = precision_recall_fscore_support(
                     targets_np, predictions_np, average='binary', zero_division=0
@@ -860,7 +887,6 @@ class Trainer:
             except Exception as e:
                 precision = recall = f1 = 0.0
                 
-        # Calculate confusion matrix metrics
         try:
             tn, fp, fn, tp = confusion_matrix(targets_np, predictions_np, labels=[0, 1]).ravel()
             false_alarm_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
@@ -893,48 +919,37 @@ class Trainer:
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
         device_type = 'cuda' if use_cuda else 'cpu'
 
-        # Set model to training mode
         self.model.train()
         self.record_time()
 
-        # Get data loader
         loader = self.data_loader['train']
         
-        # Initialize tracking variables
         timer = dict(dataloader=0.001, model=0.001, stats=0.001)
         train_metrics = defaultdict(float)
         per_class_metrics = defaultdict(lambda: defaultdict(int))
         total_samples = 0
         batch_count = 0
 
-        # Process each batch with progress bar
         process = tqdm(loader, desc=f"Epoch {epoch+1}/{self.arg.num_epoch} (Train)")
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             batch_count += 1
             batch_size = targets.size(0)
             total_samples += batch_size
             
-            # Prepare data - remove linear_acceleration as it's redundant
-            if 'linear_acceleration' in inputs:
-                del inputs['linear_acceleration']
-                
             data_dict = self._prepare_input_data(inputs)
             targets = targets.to(device).long()
 
             timer['dataloader'] += self.split_time()
 
-            # Forward pass and backward pass
             self.optimizer.zero_grad()
 
             if self.use_amp and self.scaler is not None:
-                # Use mixed precision training if available
                 with torch.amp.autocast(device_type=device_type):
                     outputs = self.model(data_dict)
                     loss = self.criterion(outputs, targets)
                 
                 self.scaler.scale(loss).backward()
                 
-                # Apply gradient clipping if configured
                 if hasattr(self.arg, 'grad_clip') and self.arg.grad_clip > 0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.arg.grad_clip)
@@ -942,12 +957,10 @@ class Trainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                # Standard training
                 outputs = self.model(data_dict)
                 loss = self.criterion(outputs, targets)
                 loss.backward()
                 
-                # Apply gradient clipping if configured
                 if hasattr(self.arg, 'grad_clip') and self.arg.grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.arg.grad_clip)
                 
@@ -955,13 +968,11 @@ class Trainer:
 
             timer['model'] += self.split_time()
 
-            # Calculate metrics for this batch
             batch_metrics = self.compute_metrics(outputs, targets)
             for k, v in batch_metrics.items():
                 train_metrics[k] += v * batch_size
             train_metrics['loss'] += loss.item() * batch_size
 
-            # Track per-class accuracy
             predictions = torch.argmax(outputs, dim=1) if outputs.shape[1] > 1 else (torch.sigmoid(outputs) > 0.5).long()
             for pred, target in zip(predictions.cpu(), targets.cpu()):
                 pred, target = pred.item(), target.item()
@@ -969,26 +980,22 @@ class Trainer:
                 if pred == target:
                     per_class_metrics[target]['correct'] += 1
 
-            # Update progress bar
             process.set_postfix({
                 'loss': f"{train_metrics['loss']/total_samples:.4f}",
-                'acc': f"{100.0*train_metrics['accuracy']/batch_count:.2f}%",
+                'acc': f"{100.0*train_metrics['accuracy']/total_samples:.2f}%",
                 'f1': f"{train_metrics['f1']/batch_count:.4f}"
             })
             
             timer['stats'] += self.split_time()
             
-        # Calculate final metrics
         for k in train_metrics:
             train_metrics[k] /= total_samples
 
-        # Calculate time proportions
         proportion = {
             k: f'{int(round(v * 100 / sum(timer.values()))):02d}%'
             for k, v in timer.items()
         }
 
-        # Log epoch summary
         self.print_log(
             f'Epoch {epoch+1}/{self.arg.num_epoch} - '
             f"Training - Loss: {train_metrics['loss']:.4f}, "
@@ -998,17 +1005,14 @@ class Trainer:
             f"F1: {train_metrics['f1']:.4f}"
         )
         
-        # Log per-class metrics
-        for class_idx, metrics in sorted(per_class_metrics.items()):
+        for class_idx, metrics in per_class_metrics.items():
             class_acc = metrics["correct"] / max(1, metrics["total"])
             self.print_log(f"  Class {class_idx}: {metrics['correct']}/{metrics['total']} = {class_acc:.4f}")
 
-        # Store metrics for visualization
         self.train_metrics = train_metrics
         self.train_metrics_history.append(train_metrics)
         self.train_loss_summary.append(train_metrics['loss'])
 
-        # Run evaluation on validation set
         val_metrics = self.eval(epoch, loader_name='val', fold=fold)
         self.val_metrics_history.append(val_metrics)
         self.val_loss_summary.append(val_metrics['loss'])
@@ -1020,22 +1024,18 @@ class Trainer:
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
         device_type = 'cuda' if use_cuda else 'cpu'
 
-        # Open result file if specified
         if result_file is not None:
             f_r = open(result_file, 'w', encoding='utf-8')
 
-        # Set model to evaluation mode
         self.model.eval()
         self.print_log(f'Evaluating on {loader_name} set (Epoch {epoch+1})')
 
-        # Initialize tracking variables
         val_metrics = defaultdict(float)
         total_samples = 0
         batch_count = 0
         all_predictions = []
         all_targets = []
 
-        # Process each batch with progress bar
         process = tqdm(self.data_loader[loader_name], desc=f"Epoch {epoch+1} ({loader_name.capitalize()})")
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
@@ -1043,14 +1043,9 @@ class Trainer:
                 batch_size = targets.size(0)
                 total_samples += batch_size
                 
-                # Prepare data - remove linear_acceleration as it's redundant
-                if 'linear_acceleration' in inputs:
-                    del inputs['linear_acceleration']
-                    
                 data_dict = self._prepare_input_data(inputs)
                 targets = targets.to(device).long()
 
-                # Forward pass
                 if self.use_amp and self.scaler is not None:
                     with torch.amp.autocast(device_type=device_type):
                         outputs = self.model(data_dict)
@@ -1059,43 +1054,35 @@ class Trainer:
                     outputs = self.model(data_dict)
                     loss = self.criterion(outputs, targets)
 
-                # Calculate metrics for this batch
                 batch_metrics = self.compute_metrics(outputs, targets)
                 for k, v in batch_metrics.items():
                     val_metrics[k] += v * batch_size
                 
                 val_metrics['loss'] += loss.item() * batch_size
                 
-                # Collect predictions for confusion matrix
                 predictions = torch.argmax(outputs, dim=1)
                 all_predictions.extend(predictions.cpu().numpy())
                 all_targets.extend(targets.cpu().numpy())
                 
-                # Update progress bar
                 process.set_postfix({
                     'loss': f"{val_metrics['loss']/total_samples:.4f}",
                     'acc': f"{100.0*val_metrics['accuracy']/total_samples:.2f}%",
                     'f1': f"{val_metrics['f1']/batch_count:.4f}"
                 })
                 
-                # Write predictions to result file if specified
                 if result_file is not None and f_r is not None:
                     for i, (pred, target) in enumerate(zip(predictions.cpu(), targets.cpu())):
                         f_r.write(f"{int(pred.item())} ==> {int(target.item())}\n")
 
-        # Close result file if open
         if result_file is not None and f_r is not None:
             f_r.close()
 
-        # Calculate final metrics
         for k in val_metrics:
             val_metrics[k] /= total_samples
             
-        # Create confusion matrix visualization
         if all_predictions and all_targets:
             self.cm_viz(all_predictions, all_targets, fold)
 
-        # Log evaluation summary
         self.print_log(
             f'{loader_name.capitalize()} metrics: Loss={val_metrics["loss"]:.4f}, '
             f'Accuracy={val_metrics["accuracy"]:.4f}, '
@@ -1105,7 +1092,6 @@ class Trainer:
             f'BAcc={val_metrics["balanced_accuracy"]:.4f}'
         )
 
-        # Save metrics to file
         if loader_name in ['val', 'test']:
             metrics_file = f'{self.arg.work_dir}/{loader_name}_result.txt'
             if fold is not None:
@@ -1122,7 +1108,6 @@ class Trainer:
                 f.write(f"miss_rate {val_metrics['miss_rate']:.6f}\n")
                 f.write(f"balanced_accuracy {val_metrics['balanced_accuracy']:.6f}\n")
 
-        # Update best model if validation F1 improved
         if loader_name == 'val':
             if val_metrics['f1'] > self.best_f1:
                 self.best_f1 = val_metrics['f1']
@@ -1134,17 +1119,17 @@ class Trainer:
                 self.patience_counter += 1
                 self.print_log(f'No improvement for {self.patience_counter} epochs (patience: {self.arg.patience})')
                 
-            # Update learning rate scheduler
             if self.scheduler is not None:
                 if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_metrics['f1'])  # Use F1 score for scheduler
+                    self.scheduler.step(val_metrics['loss'])
                 else:
                     self.scheduler.step()
         else:
-            # Update test metrics
             self.test_accuracy = val_metrics['accuracy']
             self.test_f1 = val_metrics['f1']
 
+        self.val_metrics = val_metrics
+        
         return val_metrics
 
     def save_best_model(self, epoch, metrics, fold=None):
@@ -1155,11 +1140,10 @@ class Trainer:
         else:
             save_path = self.model_path
         
-        # Prepare model state dictionary
         state_dict = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict() if not isinstance(self.model, nn.DataParallel) 
-                               else self.model.module.state_dict(),
+                              else self.model.module.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'best_f1': self.best_f1,
@@ -1167,13 +1151,11 @@ class Trainer:
             'metrics': metrics
         }
         
-        # Save model
         try:
             torch.save(state_dict, save_path)
         except Exception as e:
             self.print_log(f"Error saving model: {str(e)}")
             try:
-                # Fallback to save just the model state
                 model_state = self.model.state_dict() if not isinstance(self.model, nn.DataParallel) else self.model.module.state_dict()
                 torch.save(model_state, save_path)
             except Exception as e2:
@@ -1187,19 +1169,13 @@ class Trainer:
         self.print_log(f"Training subjects: {train_subjects}")
         self.print_log(f"Validation subjects: {val_subjects}")
         
-        # Initialize new model for this fold
         self.model = self.load_model(self.arg.model, self.arg.model_args)
         
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
-            self.model = nn.DataParallel(
-                self.model, 
-                device_ids=self.available_gpus
-            )
+            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
             
-        # Initialize optimizer and scheduler
         self.load_optimizer()
         
-        # Reset tracking variables
         self.best_f1 = 0
         self.best_accuracy = 0
         self.best_loss = float('inf')
@@ -1210,18 +1186,15 @@ class Trainer:
         self.train_metrics_history = []
         self.val_metrics_history = []
         
-        # Load data for this fold
         loaded = self.load_data(train_subjects, val_subjects)
         if not loaded:
             self.print_log(f"Error loading data for fold {fold_idx}, skipping")
             return {'fold': fold_idx, 'f1': 0, 'accuracy': 0, 'epochs_trained': 0, 'error': True}
         
-        # Train for specified number of epochs
         for epoch in range(self.arg.num_epoch):
             try:
                 val_loss = self.train(epoch, fold=fold_idx)
                 
-                # Check early stopping
                 if self.patience_counter >= self.arg.patience:
                     self.print_log(f"Early stopping triggered at epoch {epoch}")
                     break
@@ -1230,31 +1203,32 @@ class Trainer:
                 self.print_log(traceback.format_exc())
                 break
                 
-        # Create visualizations
         self.loss_viz(self.train_loss_summary, self.val_loss_summary, fold=fold_idx)
         self.metrics_viz(self.train_metrics_history, self.val_metrics_history, fold=fold_idx)
         
         # Load the best model for testing
         best_model_path = os.path.join(fold_dir, f"{self.arg.model_saved_name}.pt")
-        if os.path.exists(best_model_path):
-            self.print_log(f"Loading best model with F1={self.best_f1:.4f} for testing")
-            checkpoint = torch.load(best_model_path)
-            if 'model_state_dict' in checkpoint:
+        self.print_log(f"Loading best model with F1={self.best_f1:.4f} for testing")
+        
+        try:
+            checkpoint = load_model_safely(best_model_path, f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
+            
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
                 if isinstance(self.model, nn.DataParallel):
                     self.model.module.load_state_dict(checkpoint['model_state_dict'])
                 else:
                     self.model.load_state_dict(checkpoint['model_state_dict'])
-            else:
+            elif isinstance(checkpoint, dict):
                 if isinstance(self.model, nn.DataParallel):
                     self.model.module.load_state_dict(checkpoint)
                 else:
                     self.model.load_state_dict(checkpoint)
+        except Exception as e:
+            self.print_log(f"Error loading best model for testing: {str(e)}")
         
-        # Evaluate on test set
         test_metrics = self.eval(0, loader_name='test', fold=fold_idx, 
-                               result_file=os.path.join(fold_dir, "test_predictions.txt"))
+                              result_file=os.path.join(fold_dir, "test_predictions.txt"))
         
-        # Collect metrics
         best_metrics = {
             'fold': fold_idx,
             'f1': self.best_f1,
@@ -1273,22 +1247,129 @@ class Trainer:
         
         return best_metrics
 
+    def compare_filters(self, subjects=None, filter_types=None):
+        if filter_types is None:
+            filter_types = ['madgwick', 'comp', 'kalman', 'ekf', 'ukf']
+            
+        if subjects is None:
+            subjects = self.arg.subjects
+            
+        self.print_log(f"Comparing filter types: {filter_types}")
+        self.print_log(f"Using subjects: {subjects}")
+        
+        results = {}
+        
+        for filter_type in filter_types:
+            try:
+                self.print_log(f"\n{'='*20} Testing with {filter_type} filter {'='*20}")
+                
+                # Set filter type for this run
+                if hasattr(self.arg.dataset_args, 'fusion_options'):
+                    self.arg.dataset_args['fusion_options']['filter_type'] = filter_type
+                else:
+                    self.arg.dataset_args['fusion_options'] = {'enabled': True, 'filter_type': filter_type}
+                
+                self.filter_type = filter_type
+                
+                # Reload model to reset weights
+                self.model = self.load_model(self.arg.model, self.arg.model_args)
+                if len(self.available_gpus) > 1 and self.arg.multi_gpu:
+                    self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
+                
+                # Load data
+                loaded = self.load_data(subjects, subjects)
+                if not loaded:
+                    self.print_log(f"Error loading data for filter type {filter_type}, skipping")
+                    continue
+                
+                # Train model
+                self.load_optimizer()
+                best_val_f1 = 0
+                
+                for epoch in range(min(self.arg.num_epoch, 20)):  # 20 epochs for comparison
+                    val_loss = self.train(epoch)
+                    if self.val_metrics['f1'] > best_val_f1:
+                        best_val_f1 = self.val_metrics['f1']
+                
+                # Evaluate on test set
+                test_metrics = self.eval(0, loader_name='test', 
+                                     result_file=os.path.join(self.arg.work_dir, f"{filter_type}_predictions.txt"))
+                
+                # Store results
+                results[filter_type] = {
+                    'accuracy': test_metrics['accuracy'],
+                    'f1': test_metrics['f1'],
+                    'precision': test_metrics['precision'],
+                    'recall': test_metrics['recall'],
+                    'balanced_accuracy': test_metrics['balanced_accuracy']
+                }
+                
+            except Exception as e:
+                self.print_log(f"Error testing filter type {filter_type}: {str(e)}")
+                self.print_log(traceback.format_exc())
+        
+        # Create comparison visualization
+        if results:
+            self.visualize_filter_comparison(results)
+            
+        return results
+    
+    def visualize_filter_comparison(self, results):
+        filter_types = list(results.keys())
+        
+        # Create metrics bar chart
+        plt.figure(figsize=(12, 8))
+        x = np.arange(len(filter_types))
+        width = 0.15
+        
+        metrics = ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy']
+        colors = ['blue', 'green', 'red', 'orange', 'purple']
+        
+        for i, (metric, color) in enumerate(zip(metrics, colors)):
+            values = [results[f].get(metric, 0) for f in filter_types]
+            plt.bar(x + (i - 2) * width, values, width, label=metric.capitalize(), color=color)
+        
+        plt.xlabel('Filter Type')
+        plt.ylabel('Score')
+        plt.title('Filter Performance Comparison')
+        plt.xticks(x, filter_types)
+        plt.legend()
+        plt.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.arg.work_dir, 'filter_comparison.png'))
+        plt.close()
+        
+        # Save results to CSV
+        df = pd.DataFrame(results).T
+        df.index.name = 'filter_type'
+        df.to_csv(os.path.join(self.arg.work_dir, 'filter_comparison.csv'))
+        
+        # Find best filter
+        best_filter = max(filter_types, key=lambda f: results[f]['f1'])
+        
+        self.print_log(f"\n{'='*20} Filter Comparison Results {'='*20}")
+        self.print_log(f"Best filter by F1 score: {best_filter} (F1={results[best_filter]['f1']:.4f})")
+        
+        for ft in filter_types:
+            metrics = results[ft]
+            self.print_log(f"{ft}: F1={metrics['f1']:.4f}, Acc={metrics['accuracy']:.4f}, BAcc={metrics['balanced_accuracy']:.4f}")
+        
+        return best_filter
+
     def kfold_cross_validation(self):
         self.print_log(f"\n{'='*20} K-Fold Cross-Validation {'='*20}")
         
-        # Create folds
         folds = self.create_folds(self.arg.subjects, self.num_folds)
         all_fold_metrics = []
         
-        # Train and evaluate each fold
         for fold_idx, (train_subjects, val_subjects) in enumerate(folds, 1):
             fold_metrics = self.train_fold(fold_idx, train_subjects, val_subjects)
             all_fold_metrics.append(fold_metrics)
             
-        # Calculate average metrics across folds
         avg_metrics = {}
         metric_keys = ['f1', 'accuracy', 'precision', 'recall', 'false_alarm_rate', 
-                       'miss_rate', 'balanced_accuracy', 'test_f1', 'epochs_trained']
+                      'miss_rate', 'balanced_accuracy', 'test_f1', 'epochs_trained']
         
         for key in metric_keys:
             valid_values = [m.get(key, 0) for m in all_fold_metrics if not m.get('error', False)]
@@ -1300,13 +1381,11 @@ class Trainer:
                 avg_metrics[key] = 0
                 avg_metrics[f'{key}_std'] = 0
         
-        # Log summary
         self.print_log(f"\n{'='*20} Cross-Validation Results {'='*20}")
         for key in ['accuracy', 'f1', 'balanced_accuracy', 'precision', 'recall']:
             if key in avg_metrics:
                 self.print_log(f"Average {key.capitalize()}: {avg_metrics[key]:.4f} ± {avg_metrics[f'{key}_std']:.4f}")
         
-        # Save summary to file
         summary = {
             'fold_metrics': all_fold_metrics,
             'average_metrics': avg_metrics
@@ -1315,7 +1394,6 @@ class Trainer:
         with open(os.path.join(self.arg.work_dir, 'cv_summary.json'), 'w') as f:
             json.dump(summary, f, indent=4)
             
-        # Create summary visualization
         self.create_cv_summary_plot(all_fold_metrics)
         
         return summary
@@ -1327,88 +1405,83 @@ class Trainer:
             self.print_log("No valid fold metrics available for visualization")
             return
             
-        try:
-            import matplotlib.pyplot as plt
-            plt.figure(figsize=(12, 8))
-            
-            # Extract metrics for visualization
-            folds = [m['fold'] for m in valid_metrics]
-            f1_scores = [m['f1'] for m in valid_metrics]
-            accuracies = [m['accuracy'] for m in valid_metrics]
-            balanced_accs = [m.get('balanced_accuracy', 0) for m in valid_metrics]
-            test_f1s = [m.get('test_f1', 0) for m in valid_metrics]
-            
-            # Set up bar positions
-            x = np.arange(len(folds))
-            width = 0.2
-            
-            # Create grouped bar chart
-            ax = plt.subplot(111)
-            bars1 = ax.bar(x - width*1.5, f1_scores, width, label='Val F1 Score')
-            bars2 = ax.bar(x - width/2, test_f1s, width, label='Test F1 Score')
-            bars3 = ax.bar(x + width/2, accuracies, width, label='Accuracy')
-            bars4 = ax.bar(x + width*1.5, balanced_accs, width, label='Balanced Acc')
-            
-            # Add labels and formatting
-            ax.set_xlabel('Fold')
-            ax.set_ylabel('Score')
-            ax.set_title('Cross-Validation Results by Fold')
-            ax.set_xticks(x)
-            ax.set_xticklabels([f'Fold {f}' for f in folds])
-            ax.legend()
-            plt.grid(axis='y', alpha=0.3)
-            
-            # Add value labels on bars
-            def add_labels(bars):
-                for bar in bars:
-                    height = bar.get_height()
-                    ax.annotate(f'{height:.4f}',
-                              xy=(bar.get_x() + bar.get_width() / 2, height),
-                              xytext=(0, 3),
-                              textcoords="offset points",
-                              ha='center', va='bottom',
-                              fontsize=8)
-                    
-            add_labels(bars1)
-            add_labels(bars2)
-            add_labels(bars3)
-            add_labels(bars4)
-            
-            # Add average lines
-            avg_f1 = np.mean(f1_scores)
-            avg_test_f1 = np.mean(test_f1s)
-            avg_acc = np.mean(accuracies)
-            avg_balanced = np.mean(balanced_accs)
-            
-            ax.axhline(y=avg_f1, color='C0', linestyle='--', alpha=0.7)
-            ax.axhline(y=avg_test_f1, color='C1', linestyle='--', alpha=0.7)
-            ax.axhline(y=avg_acc, color='C2', linestyle='--', alpha=0.7)
-            ax.axhline(y=avg_balanced, color='C3', linestyle='--', alpha=0.7)
-            
-            # Adjust legend position
-            ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.15), ncol=4)
-            
-            # Save figure
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.arg.work_dir, 'cv_summary.png'), bbox_inches='tight')
-            plt.close()
-        except Exception as e:
-            self.print_log(f"Error creating CV summary plot: {str(e)}")
+        plt.figure(figsize=(12, 8))
+        
+        folds = [m['fold'] for m in valid_metrics]
+        f1_scores = [m['f1'] for m in valid_metrics]
+        accuracies = [m['accuracy'] for m in valid_metrics]
+        balanced_accs = [m.get('balanced_accuracy', 0) for m in valid_metrics]
+        test_f1s = [m.get('test_f1', 0) for m in valid_metrics]
+        
+        x = np.arange(len(folds))
+        width = 0.2
+        
+        ax = plt.subplot(111)
+        bars1 = ax.bar(x - width*1.5, f1_scores, width, label='Val F1 Score')
+        bars2 = ax.bar(x - width/2, test_f1s, width, label='Test F1 Score')
+        bars3 = ax.bar(x + width/2, accuracies, width, label='Accuracy')
+        bars4 = ax.bar(x + width*1.5, balanced_accs, width, label='Balanced Acc')
+        
+        ax.set_xlabel('Fold')
+        ax.set_ylabel('Score')
+        ax.set_title('Cross-Validation Results by Fold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'Fold {f}' for f in folds])
+        ax.legend()
+        plt.grid(axis='y', alpha=0.3)
+        
+        def add_labels(bars):
+            for bar in bars:
+                height = bar.get_height()
+                ax.annotate(f'{height:.4f}',
+                          xy=(bar.get_x() + bar.get_width() / 2, height),
+                          xytext=(0, 3),
+                          textcoords="offset points",
+                          ha='center', va='bottom',
+                          fontsize=8)
+                
+        add_labels(bars1)
+        add_labels(bars2)
+        add_labels(bars3)
+        add_labels(bars4)
+        
+        avg_f1 = np.mean(f1_scores)
+        avg_test_f1 = np.mean(test_f1s)
+        avg_acc = np.mean(accuracies)
+        avg_balanced = np.mean(balanced_accs)
+        
+        ax.axhline(y=avg_f1, color='C0', linestyle='--', alpha=0.7)
+        ax.axhline(y=avg_test_f1, color='C1', linestyle='--', alpha=0.7)
+        ax.axhline(y=avg_acc, color='C2', linestyle='--', alpha=0.7)
+        ax.axhline(y=avg_balanced, color='C3', linestyle='--', alpha=0.7)
+        
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.15), ncol=4)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.arg.work_dir, 'cv_summary.png'), bbox_inches='tight')
+        plt.close()
 
     def train_final_model(self, best_fold_idx=None):
         self.print_log(f"\n{'='*20} Training Final Model {'='*20}")
         
-        # Determine best fold to use as reference
         if best_fold_idx:
             self.print_log(f"Using configuration from fold {best_fold_idx} as reference")
             fold_dir = os.path.join(self.arg.work_dir, f'fold_{best_fold_idx}')
             best_model_path = os.path.join(fold_dir, f"{self.arg.model_saved_name}.pt")
             
             if os.path.exists(best_model_path):
-                best_state = torch.load(best_model_path)
-                best_epoch = best_state['epoch']
-                self.print_log(f"Best fold reached optimal performance at epoch {best_epoch}")
-                num_epochs = best_epoch + 1
+                try:
+                    best_state = load_model_safely(best_model_path, f'cuda:{self.output_device}' if torch.cuda.is_available() else 'cpu')
+                    
+                    if isinstance(best_state, dict) and 'epoch' in best_state:
+                        best_epoch = best_state['epoch']
+                        self.print_log(f"Best fold reached optimal performance at epoch {best_epoch}")
+                        num_epochs = best_epoch + 1
+                    else:
+                        num_epochs = self.arg.num_epoch
+                except Exception as e:
+                    self.print_log(f"Error loading best fold model: {str(e)}")
+                    num_epochs = self.arg.num_epoch
             else:
                 num_epochs = self.arg.num_epoch
         else:
@@ -1416,19 +1489,13 @@ class Trainer:
         
         self.print_log(f"Training final model for {num_epochs} epochs")
         
-        # Initialize model
         self.model = self.load_model(self.arg.model, self.arg.model_args)
         
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
-            self.model = nn.DataParallel(
-                self.model, 
-                device_ids=self.available_gpus
-            )
+            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
             
-        # Initialize optimizer
         self.load_optimizer()
         
-        # Reset tracking variables
         self.best_f1 = 0
         self.best_accuracy = 0
         self.best_loss = float('inf')
@@ -1439,61 +1506,59 @@ class Trainer:
         self.train_metrics_history = []
         self.val_metrics_history = []
         
-        # Load all data
         all_subjects = self.arg.subjects
         self.load_data(all_subjects, all_subjects)
         
-        # Train for specified number of epochs
         for epoch in range(num_epochs):
             val_loss = self.train(epoch)
             if self.patience_counter >= self.arg.patience:
                 self.print_log(f"Early stopping triggered at epoch {epoch}")
                 break
         
-        # Create visualizations
         self.loss_viz(self.train_loss_summary, self.val_loss_summary)
         self.metrics_viz(self.train_metrics_history, self.val_metrics_history)
-        
-        # Load best model for testing
-        if os.path.exists(self.model_path):
-            self.print_log(f"Loading best model with F1={self.best_f1:.4f} for testing")
-            checkpoint = torch.load(self.model_path)
-            if 'model_state_dict' in checkpoint:
-                if isinstance(self.model, nn.DataParallel):
-                    self.model.module.load_state_dict(checkpoint['model_state_dict'])
-                else:
-                    self.model.load_state_dict(checkpoint['model_state_dict'])
-            else:
-                if isinstance(self.model, nn.DataParallel):
-                    self.model.module.load_state_dict(checkpoint)
-                else:
-                    self.model.load_state_dict(checkpoint)
             
-        # Evaluate on test set
+        final_state = {
+            'epoch': num_epochs - 1,
+            'model_state_dict': self.model.state_dict() if not isinstance(self.model, nn.DataParallel) 
+                              else self.model.module.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'metrics': self.val_metrics
+        }
+        
+        final_path = os.path.join(self.arg.work_dir, "final_model.pt")
+        torch.save(final_state, final_path)
+        
         test_metrics = self.eval(num_epochs - 1, loader_name='test')
         
-        # Log final results
         self.print_log(f"\n{'='*20} Final Model Results {'='*20}")
         self.print_log(f"Test F1 Score: {test_metrics['f1']:.4f}")
         self.print_log(f"Test Accuracy: {test_metrics['accuracy']:.4f}")
         self.print_log(f"Test Precision: {test_metrics['precision']:.4f}")
         self.print_log(f"Test Recall: {test_metrics['recall']:.4f}")
         self.print_log(f"Balanced Accuracy: {test_metrics['balanced_accuracy']:.4f}")
-        
-        return test_metrics
 
     def start(self):
         if self.arg.phase == 'train':
             try:
-                # Configure parallel processing
                 configure_parallel_processing(self.arg)
                 self.print_log(f'Parameters:\n{str(vars(self.arg))}\n')
                 
+                # First compare different filters
+                if self.has_fusion:
+                    filter_results = self.compare_filters()
+                    best_filter = max(filter_results.keys(), key=lambda f: filter_results[f]['f1'])
+                    self.print_log(f"Best filter identified: {best_filter}")
+                    self.filter_type = best_filter
+                    
+                    # Update fusion options with best filter
+                    if 'fusion_options' in self.arg.dataset_args:
+                        self.arg.dataset_args['fusion_options']['filter_type'] = best_filter
+                
                 if self.use_kfold:
-                    # Perform cross-validation
                     cv_results = self.kfold_cross_validation()
                     
-                    # Train final model using best fold
                     valid_folds = [m for m in cv_results['fold_metrics'] if not m.get('error', False)]
                     if valid_folds:
                         best_fold = max(valid_folds, key=lambda x: x['f1'])
@@ -1505,7 +1570,6 @@ class Trainer:
                     else:
                         self.print_log("No valid folds completed, cannot train final model")
                 else:
-                    # Regular training without cross-validation
                     self.train_subjects = self.arg.subjects
                     self.val_subject = self.arg.subjects
                     
@@ -1521,32 +1585,13 @@ class Trainer:
                             self.print_log(f"Early stopping triggered at epoch {epoch}")
                             break
                     
-                    # Create visualizations
                     if len(self.train_loss_summary) > 0 and len(self.val_loss_summary) > 0:
                         self.loss_viz(self.train_loss_summary, self.val_loss_summary)
                     
                     if len(self.train_metrics_history) > 0 and len(self.val_metrics_history) > 0:
                         self.metrics_viz(self.train_metrics_history, self.val_metrics_history)
                     
-                    # Test with best model
                     self.print_log(f"\n{'='*20} Final Evaluation {'='*20}")
-                    
-                    # Load best model
-                    if os.path.exists(self.model_path):
-                        self.print_log(f"Loading best model with F1={self.best_f1:.4f} for testing")
-                        checkpoint = torch.load(self.model_path)
-                        if 'model_state_dict' in checkpoint:
-                            if isinstance(self.model, nn.DataParallel):
-                                self.model.module.load_state_dict(checkpoint['model_state_dict'])
-                            else:
-                                self.model.load_state_dict(checkpoint['model_state_dict'])
-                        else:
-                            if isinstance(self.model, nn.DataParallel):
-                                self.model.module.load_state_dict(checkpoint)
-                            else:
-                                self.model.load_state_dict(checkpoint)
-                    
-                    # Run final evaluation
                     self.eval(0, loader_name='test')
 
             except Exception as e:
@@ -1556,7 +1601,6 @@ class Trainer:
         
         else:
             try:
-                # Testing phase
                 if not self.load_data():
                     self.print_log("Error loading test data")
                     return
@@ -1571,30 +1615,24 @@ class Trainer:
             finally:
                 cleanup_resources()
 
-
 if __name__ == "__main__":
     parser = get_args()
     args = parser.parse_args()
 
-    # Load configuration file if provided
     if args.config is not None:
         with open(args.config, 'r', encoding='utf-8') as f:
             default_arg = yaml.safe_load(f)
 
-        # Check for unrecognized parameters
         key = vars(args).keys()
         for k in default_arg.keys():
             if k not in key:
                 print(f'WARNING: Unrecognized configuration parameter: {k}')
 
-        # Set defaults from config file
         parser.set_defaults(**default_arg)
         args = parser.parse_args()
 
-    # Initialize random seed for reproducibility
     init_seed(args.seed)
     
-    # Create and start trainer
     trainer = Trainer(args)
     try:
         trainer.start()
