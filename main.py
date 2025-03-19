@@ -23,7 +23,7 @@ from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.dataset import prepare_smartfallmm, split_by_subjects
 
-MAX_THREADS = 4
+MAX_THREADS = 40
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 
 def get_args():

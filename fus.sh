@@ -169,26 +169,18 @@ main() {
     
     # Create configurations for each filter type
     create_config "$CONFIG_DIR/madgwick.yaml" "madgwick"
-    create_config "$CONFIG_DIR/comp.yaml" "comp"
     create_config "$CONFIG_DIR/kalman.yaml" "kalman"
     create_config "$CONFIG_DIR/ekf.yaml" "ekf"
-    create_config "$CONFIG_DIR/ukf.yaml" "ukf"
     
     # Train models with different filter types
     log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
     train_model "$CONFIG_DIR/madgwick.yaml" "madgwick_model" "madgwick"
-    
-    log "INFO" "============= TRAINING WITH COMPLEMENTARY FILTER ============="
-    train_model "$CONFIG_DIR/comp.yaml" "comp_model" "comp"
     
     log "INFO" "============= TRAINING WITH STANDARD KALMAN FILTER ============="
     train_model "$CONFIG_DIR/kalman.yaml" "kalman_model" "kalman"
     
     log "INFO" "============= TRAINING WITH EXTENDED KALMAN FILTER ============="
     train_model "$CONFIG_DIR/ekf.yaml" "ekf_model" "ekf"
-    
-    log "INFO" "============= TRAINING WITH UNSCENTED KALMAN FILTER ============="
-    train_model "$CONFIG_DIR/ukf.yaml" "ukf_model" "ukf"
     
     # Generate comparison visualizations and report
     log "INFO" "Generating comparative analysis"
