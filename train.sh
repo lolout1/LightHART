@@ -123,7 +123,7 @@ train_model() {
         --device 0 1 \
         --multi-gpu True \
         --kfold True \
-        --parallel-threads 12 \
+        --parallel-threads 40 \
         --num-epoch $NUM_EPOCHS \
         --patience 15 2>&1 | tee "$RESULTS_DIR/logs/${model_name}_train.log"
     

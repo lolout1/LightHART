@@ -343,7 +343,7 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int, peak
     if fuse and not has_gyro:
         logger.warning("Fusion requested but gyroscope data not available")
         fuse = False
-    max_workers = min(8, len(peaks)) if len(peaks) > 0 else 1
+    max_workers = min(30, len(peaks)) if len(peaks) > 0 else 1
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for peak_idx, peak in enumerate(peaks):

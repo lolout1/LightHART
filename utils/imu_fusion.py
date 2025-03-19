@@ -50,11 +50,11 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 # Initialize parallel processing resources
-MAX_THREADS = 4
+MAX_THREADS = 40
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 
 # Semaphore for file operations
-file_semaphore = threading.Semaphore(4)
+file_semaphore = threading.Semaphore(40)
 
 # GPU Configuration
 def setup_gpu_environment():
