@@ -10,7 +10,6 @@ from utils.imu_fusion import (
     align_sensor_data, 
     extract_features_from_window,
     hybrid_interpolate,
-    ensure_3d_vector
 )
 import logging
 

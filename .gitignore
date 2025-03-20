@@ -28,4 +28,5 @@ work_dir/
 t.sh
 test_filters.py
 train_magdwick.sh
-
+*__pycache__
+__pycache__/
