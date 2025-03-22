@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-import os
-import json
-import argparse
-import numpy as np
-import glob
+import os, json, argparse, numpy as np, glob
 from typing import List, Dict, Any
 
 def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
@@ -13,8 +9,7 @@ def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
         results_file = os.path.join(fold_dir, "validation_results.json")
         if os.path.exists(results_file):
             try:
-                with open(results_file, 'r') as f:
-                    results = json.load(f)
+                with open(results_file, 'r') as f: results = json.load(f)
                 results["fold"] = i
                 fold_metrics.append(results)
                 print(f"Loaded results from {results_file}")

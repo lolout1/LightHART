@@ -3,7 +3,6 @@ set -e
 set -o pipefail
 set -u
 
-# Configuration variables
 DEVICE="0,1"
 BASE_LR=0.001
 WEIGHT_DECAY=0.001
@@ -18,14 +17,12 @@ REPORT_FILE="${RESULTS_DIR}/comparison_results.csv"
 CACHE_ENABLED="true"
 CACHE_DIR="processed_data"
 
-# Create necessary directories
 mkdir -p "${RESULTS_DIR}/logs"
 mkdir -p "${RESULTS_DIR}/visualizations"
 mkdir -p "${CONFIG_DIR}"
 mkdir -p "${UTILS_DIR}"
 [ "${CACHE_ENABLED}" = "true" ] && mkdir -p "${CACHE_DIR}"
 
-# Logging functions
 timestamp() { date +"%Y-%m-%d %H:%M:%S"; }
 
 log() {
@@ -43,15 +40,9 @@ check_status() {
     return 0
 }
 
-# Create filter comparison script
 cat > "${UTILS_DIR}/compare_filters.py" << 'EOF'
 #!/usr/bin/env python3
-import os
-import sys
-import json
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import os, sys, json, pandas as pd, numpy as np, matplotlib.pyplot as plt
 from typing import Dict, List, Any
 import argparse
 
@@ -64,8 +55,7 @@ def load_filter_results(results_dir, filter_types):
             print(f"Warning: No summary file found for {filter_type}")
             continue
         try:
-            with open(cv_summary_path, 'r') as f:
-                summary = json.load(f)
+            with open(cv_summary_path, 'r') as f: summary = json.load(f)
             avg_metrics = summary.get('average_metrics', {})
             row = {
                 'filter_type': filter_type,
@@ -120,7 +110,6 @@ def create_comparison_chart(df, output_dir):
     plt.close()
     print(f"Comparison chart saved to {output_path}")
     
-    # Create fold comparison chart
     plt.figure(figsize=(15, 10))
     num_folds = sum(1 for col in df.columns if col.startswith('fold') and col.endswith('_f1'))
     for filter_idx, filter_type in enumerate(filters):
@@ -227,15 +216,10 @@ if __name__ == '__main__':
     main()
 EOF
 
-# Create cross-validation recovery script
 create_cv_recovery_script() {
     cat > "${UTILS_DIR}/recover_cv_summary.py" << 'EOF'
 #!/usr/bin/env python3
-import os
-import json
-import argparse
-import numpy as np
-import glob
+import os, json, argparse, numpy as np, glob
 from typing import List, Dict, Any
 
 def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
@@ -245,8 +229,7 @@ def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
         results_file = os.path.join(fold_dir, "validation_results.json")
         if os.path.exists(results_file):
             try:
-                with open(results_file, 'r') as f:
-                    results = json.load(f)
+                with open(results_file, 'r') as f: results = json.load(f)
                 results["fold"] = i
                 fold_metrics.append(results)
                 print(f"Loaded results from {results_file}")
@@ -293,16 +276,12 @@ EOF
     chmod +x "${UTILS_DIR}/recover_cv_summary.py"
 }
 
-# Function to create filter configuration files - FIXED VERSION
 create_filter_config() {
     local filter_type="$1"
     local output_file="$2"
-    
-    # Create the folder for cache if needed
     local cache_dir="${CACHE_DIR}/${filter_type}"
     [ "${CACHE_ENABLED}" = "true" ] && mkdir -p "${cache_dir}"
     
-    # Write the base part of the config
     cat > "${output_file}" << EOF
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
@@ -332,37 +311,45 @@ dataset_args:
   fusion_options:
     enabled: true
     filter_type: '${filter_type}'
+    process_per_window: true
+    preserve_filter_state: true
 EOF
 
-    # Append filter-specific parameters
     case "${filter_type}" in
         madgwick)
             cat >> "${output_file}" << EOF
-    beta: 0.1
+    beta: 0.15
+    acc_threshold: 3.0
+    gyro_threshold: 1.0
 EOF
             ;;
         kalman)
             cat >> "${output_file}" << EOF
-    process_noise: 1e-4
+    process_noise: 5e-5
     measurement_noise: 0.1
+    acc_threshold: 3.0
+    gyro_threshold: 1.0
 EOF
             ;;
         ekf)
             cat >> "${output_file}" << EOF
     process_noise: 1e-5
     measurement_noise: 0.05
+    acc_threshold: 3.0
+    gyro_threshold: 1.0
 EOF
             ;;
         ukf)
             cat >> "${output_file}" << EOF
-    alpha: 0.1
+    alpha: 0.15
     beta: 2.0
-    kappa: 0.0
+    kappa: 1.0
+    acc_threshold: 3.0
+    gyro_threshold: 1.0
 EOF
             ;;
     esac
     
-    # Add cache parameters if enabled
     if [ "${CACHE_ENABLED}" = "true" ]; then
         cat >> "${output_file}" << EOF
     use_cache: true
@@ -370,10 +357,7 @@ EOF
 EOF
     fi
     
-    # Add remaining config - REMOVED test_batch_size parameter
     cat >> "${output_file}" << EOF
-    acc_threshold: 3.0
-    gyro_threshold: 1.0
     visualize: false
     save_aligned: true
 
@@ -406,31 +390,25 @@ kfold:
     - [30, 39]
 EOF
 
-    # Verify the file was created
     [ -f "${output_file}" ] && return 0 || return 1
 }
 
-# Function to train a model with a specific filter
 train_filter_model() {
     local filter_type="$1"
     local config_file="$2"
     local output_dir="${RESULTS_DIR}/${filter_type}_model"
     
-    # Log start of training
     log "INFO" "========================================================="
     log "INFO" "STARTING TRAINING FOR ${filter_type^^} FILTER"
     log "INFO" "========================================================="
     
-    # Create output directory
     mkdir -p "${output_dir}/logs"
     
-    # Check if config file exists
     if [ ! -f "${config_file}" ]; then
         log "ERROR" "Config file does not exist: ${config_file}"
         return 1
     fi
     
-    # Run training
     log "INFO" "Training model with ${filter_type} filter"
     CUDA_VISIBLE_DEVICES=${DEVICE} python main.py \
         --config "${config_file}" \
@@ -443,7 +421,6 @@ train_filter_model() {
         --num-epoch ${NUM_EPOCHS} \
         --run-comparison True 2>&1 | tee "${output_dir}/logs/training.log"
     
-    # Check training status
     train_status=$?
     if [ ${train_status} -ne 0 ]; then
         log "WARNING" "Training process exited with status ${train_status}"
@@ -455,7 +432,6 @@ train_filter_model() {
         fi
     fi
     
-    # Create empty summary if none exists
     if [ ! -f "${output_dir}/cv_summary.json" ]; then
         log "WARNING" "No cross-validation summary found for ${filter_type}"
         echo "{\"filter_type\":\"${filter_type}\",\"average_metrics\":{\"accuracy\":0,\"f1\":0,\"precision\":0,\"recall\":0,\"balanced_accuracy\":0},\"fold_metrics\":[]}" > "${output_dir}/cv_summary.json"
@@ -465,29 +441,22 @@ train_filter_model() {
     return 0
 }
 
-# Main function to run filter comparison
 run_filter_comparison() {
     log "INFO" "Starting IMU filter comparison"
     
-    # Create necessary directories
     mkdir -p "${RESULTS_DIR}"
     
-    # Initialize results file
     echo "filter_type,accuracy,f1,precision,recall,balanced_accuracy" > "${REPORT_FILE}"
     
-    # Make scripts executable
     chmod +x "${UTILS_DIR}/compare_filters.py"
     
-    # Create recovery script
     create_cv_recovery_script
     
-    # Create configuration files for each filter
     create_filter_config "madgwick" "${CONFIG_DIR}/madgwick.yaml"
     create_filter_config "kalman" "${CONFIG_DIR}/kalman.yaml"
     create_filter_config "ekf" "${CONFIG_DIR}/ekf.yaml"
     create_filter_config "ukf" "${CONFIG_DIR}/ukf.yaml"
     
-    # Train each filter model
     log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
     train_filter_model "madgwick" "${CONFIG_DIR}/madgwick.yaml"
     
@@ -500,19 +469,16 @@ run_filter_comparison() {
     log "INFO" "============= TRAINING WITH UNSCENTED KALMAN FILTER ============="
     train_filter_model "ukf" "${CONFIG_DIR}/ukf.yaml"
     
-    # Generate comparison report
     log "INFO" "============= GENERATING COMPARISON REPORT ============="
     python "${UTILS_DIR}/compare_filters.py" \
            --results-dir "${RESULTS_DIR}" \
            --output-csv "${REPORT_FILE}" \
            --filter-types madgwick kalman ekf ukf
     
-    # Log completion
     log "INFO" "Filter comparison complete. Results available in:"
     log "INFO" "- ${REPORT_FILE}"
     log "INFO" "- ${RESULTS_DIR}/visualizations/comparison_report.md"
     log "INFO" "- ${RESULTS_DIR}/visualizations/filter_comparison.png"
 }
 
-# Run the comparison
 run_filter_comparison

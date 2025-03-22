@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-import os
-import sys
-import json
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import os, sys, json, pandas as pd, numpy as np, matplotlib.pyplot as plt
 from typing import Dict, List, Any
 import argparse
 
@@ -17,8 +12,7 @@ def load_filter_results(results_dir, filter_types):
             print(f"Warning: No summary file found for {filter_type}")
             continue
         try:
-            with open(cv_summary_path, 'r') as f:
-                summary = json.load(f)
+            with open(cv_summary_path, 'r') as f: summary = json.load(f)
             avg_metrics = summary.get('average_metrics', {})
             row = {
                 'filter_type': filter_type,
@@ -73,7 +67,6 @@ def create_comparison_chart(df, output_dir):
     plt.close()
     print(f"Comparison chart saved to {output_path}")
     
-    # Create fold comparison chart
     plt.figure(figsize=(15, 10))
     num_folds = sum(1 for col in df.columns if col.startswith('fold') and col.endswith('_f1'))
     for filter_idx, filter_type in enumerate(filters):
