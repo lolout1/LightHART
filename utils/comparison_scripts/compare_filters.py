@@ -72,6 +72,8 @@ def create_comparison_chart(df, output_dir):
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"Comparison chart saved to {output_path}")
+    
+    # Create fold comparison chart
     plt.figure(figsize=(15, 10))
     num_folds = sum(1 for col in df.columns if col.startswith('fold') and col.endswith('_f1'))
     for filter_idx, filter_type in enumerate(filters):
@@ -143,13 +145,14 @@ def create_comparison_report(df, output_path):
         f.write("- **Madgwick**: A computationally efficient orientation filter using gradient descent.\n")
         f.write("- **Kalman**: Standard Kalman filter for optimal sensor fusion.\n")
         f.write("- **EKF**: Extended Kalman Filter for non-linear orientation estimation.\n")
+        f.write("- **UKF**: Unscented Kalman Filter for highly accurate non-linear state estimation with better uncertainty handling.\n")
     print(f"Comparison report saved to {output_path}")
 
 def main():
     parser = argparse.ArgumentParser(description='Compare IMU fusion filter performance')
     parser.add_argument('--results-dir', required=True, help='Results directory')
     parser.add_argument('--output-csv', required=True, help='Output CSV file')
-    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'kalman', 'ekf'], help='Filter types to compare')
+    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'kalman', 'ekf', 'ukf'], help='Filter types to compare')
     args = parser.parse_args()
     results_df = load_filter_results(args.results_dir, args.filter_types)
     results_df.to_csv(args.output_csv, index=False)

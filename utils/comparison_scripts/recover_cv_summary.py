@@ -25,8 +25,10 @@ def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
 def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> Dict[str, Any]:
     if not fold_metrics:
         return {"filter_type": filter_type, "average_metrics": {"accuracy": 0, "f1": 0, "precision": 0, "recall": 0, "balanced_accuracy": 0}, "fold_metrics": []}
+    
     metrics = ["accuracy", "f1", "precision", "recall", "balanced_accuracy"]
     avg_metrics = {}
+    
     for metric in metrics:
         values = [fold.get(metric, 0) for fold in fold_metrics]
         if values:
@@ -35,18 +37,22 @@ def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> D
         else:
             avg_metrics[metric] = 0
             avg_metrics[f"{metric}_std"] = 0
+            
     return {"filter_type": filter_type, "average_metrics": avg_metrics, "fold_metrics": fold_metrics}
 
 def main():
     parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
     parser.add_argument("--output-dir", required=True, help="Model output directory")
-    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf)")
+    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, ukf)")
     args = parser.parse_args()
+    
     fold_metrics = load_fold_results(args.output_dir)
     cv_summary = create_cv_summary(fold_metrics, args.filter_type)
+    
     summary_path = os.path.join(args.output_dir, "cv_summary.json")
     with open(summary_path, 'w') as f:
         json.dump(cv_summary, f, indent=2)
+        
     print(f"Recovered CV summary saved to {summary_path}")
 
 if __name__ == "__main__":

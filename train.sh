@@ -3,6 +3,7 @@ set -e
 set -o pipefail
 set -u
 
+# Configuration variables
 DEVICE="0,1"
 BASE_LR=0.001
 WEIGHT_DECAY=0.001
@@ -17,19 +18,23 @@ REPORT_FILE="${RESULTS_DIR}/comparison_results.csv"
 CACHE_ENABLED="true"
 CACHE_DIR="processed_data"
 
+# Create necessary directories
 mkdir -p "${RESULTS_DIR}/logs"
 mkdir -p "${RESULTS_DIR}/visualizations"
 mkdir -p "${CONFIG_DIR}"
 mkdir -p "${UTILS_DIR}"
 [ "${CACHE_ENABLED}" = "true" ] && mkdir -p "${CACHE_DIR}"
 
+# Logging functions
 timestamp() { date +"%Y-%m-%d %H:%M:%S"; }
+
 log() {
     local level="$1"
     local msg="$2"
     echo "[$(timestamp)] [${level}] ${msg}"
     echo "[$(timestamp)] [${level}] ${msg}" >> "${RESULTS_DIR}/logs/training.log"
 }
+
 check_status() {
     if [ $? -ne 0 ]; then
         log "ERROR" "$1"
@@ -38,6 +43,7 @@ check_status() {
     return 0
 }
 
+# Create filter comparison script
 cat > "${UTILS_DIR}/compare_filters.py" << 'EOF'
 #!/usr/bin/env python3
 import os
@@ -113,6 +119,8 @@ def create_comparison_chart(df, output_dir):
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"Comparison chart saved to {output_path}")
+    
+    # Create fold comparison chart
     plt.figure(figsize=(15, 10))
     num_folds = sum(1 for col in df.columns if col.startswith('fold') and col.endswith('_f1'))
     for filter_idx, filter_type in enumerate(filters):
@@ -184,13 +192,14 @@ def create_comparison_report(df, output_path):
         f.write("- **Madgwick**: A computationally efficient orientation filter using gradient descent.\n")
         f.write("- **Kalman**: Standard Kalman filter for optimal sensor fusion.\n")
         f.write("- **EKF**: Extended Kalman Filter for non-linear orientation estimation.\n")
+        f.write("- **UKF**: Unscented Kalman Filter for highly accurate non-linear state estimation with better uncertainty handling.\n")
     print(f"Comparison report saved to {output_path}")
 
 def main():
     parser = argparse.ArgumentParser(description='Compare IMU fusion filter performance')
     parser.add_argument('--results-dir', required=True, help='Results directory')
     parser.add_argument('--output-csv', required=True, help='Output CSV file')
-    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'kalman', 'ekf'], help='Filter types to compare')
+    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'kalman', 'ekf', 'ukf'], help='Filter types to compare')
     args = parser.parse_args()
     results_df = load_filter_results(args.results_dir, args.filter_types)
     results_df.to_csv(args.output_csv, index=False)
@@ -218,15 +227,82 @@ if __name__ == '__main__':
     main()
 EOF
 
+# Create cross-validation recovery script
+create_cv_recovery_script() {
+    cat > "${UTILS_DIR}/recover_cv_summary.py" << 'EOF'
+#!/usr/bin/env python3
+import os
+import json
+import argparse
+import numpy as np
+import glob
+from typing import List, Dict, Any
+
+def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
+    fold_metrics = []
+    fold_dirs = sorted(glob.glob(os.path.join(output_dir, "fold_*")))
+    for i, fold_dir in enumerate(fold_dirs, 1):
+        results_file = os.path.join(fold_dir, "validation_results.json")
+        if os.path.exists(results_file):
+            try:
+                with open(results_file, 'r') as f:
+                    results = json.load(f)
+                results["fold"] = i
+                fold_metrics.append(results)
+                print(f"Loaded results from {results_file}")
+            except Exception as e:
+                print(f"Error loading {results_file}: {e}")
+    return fold_metrics
+
+def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> Dict[str, Any]:
+    if not fold_metrics:
+        return {"filter_type": filter_type, "average_metrics": {"accuracy": 0, "f1": 0, "precision": 0, "recall": 0, "balanced_accuracy": 0}, "fold_metrics": []}
+    
+    metrics = ["accuracy", "f1", "precision", "recall", "balanced_accuracy"]
+    avg_metrics = {}
+    
+    for metric in metrics:
+        values = [fold.get(metric, 0) for fold in fold_metrics]
+        if values:
+            avg_metrics[metric] = float(np.mean(values))
+            avg_metrics[f"{metric}_std"] = float(np.std(values))
+        else:
+            avg_metrics[metric] = 0
+            avg_metrics[f"{metric}_std"] = 0
+            
+    return {"filter_type": filter_type, "average_metrics": avg_metrics, "fold_metrics": fold_metrics}
+
+def main():
+    parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
+    parser.add_argument("--output-dir", required=True, help="Model output directory")
+    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, ukf)")
+    args = parser.parse_args()
+    
+    fold_metrics = load_fold_results(args.output_dir)
+    cv_summary = create_cv_summary(fold_metrics, args.filter_type)
+    
+    summary_path = os.path.join(args.output_dir, "cv_summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump(cv_summary, f, indent=2)
+        
+    print(f"Recovered CV summary saved to {summary_path}")
+
+if __name__ == "__main__":
+    main()
+EOF
+    chmod +x "${UTILS_DIR}/recover_cv_summary.py"
+}
+
+# Function to create filter configuration files - FIXED VERSION
 create_filter_config() {
     local filter_type="$1"
     local output_file="$2"
-    local filter_params="$3"
+    
+    # Create the folder for cache if needed
     local cache_dir="${CACHE_DIR}/${filter_type}"
     [ "${CACHE_ENABLED}" = "true" ] && mkdir -p "${cache_dir}"
-    local cache_params=""
-    [ "${CACHE_ENABLED}" = "true" ] && cache_params="    use_cache: true\n    cache_dir: \"${cache_dir}\""
     
+    # Write the base part of the config
     cat > "${output_file}" << EOF
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
@@ -256,8 +332,46 @@ dataset_args:
   fusion_options:
     enabled: true
     filter_type: '${filter_type}'
-    ${filter_params}
-    ${cache_params}
+EOF
+
+    # Append filter-specific parameters
+    case "${filter_type}" in
+        madgwick)
+            cat >> "${output_file}" << EOF
+    beta: 0.1
+EOF
+            ;;
+        kalman)
+            cat >> "${output_file}" << EOF
+    process_noise: 1e-4
+    measurement_noise: 0.1
+EOF
+            ;;
+        ekf)
+            cat >> "${output_file}" << EOF
+    process_noise: 1e-5
+    measurement_noise: 0.05
+EOF
+            ;;
+        ukf)
+            cat >> "${output_file}" << EOF
+    alpha: 0.1
+    beta: 2.0
+    kappa: 0.0
+EOF
+            ;;
+    esac
+    
+    # Add cache parameters if enabled
+    if [ "${CACHE_ENABLED}" = "true" ]; then
+        cat >> "${output_file}" << EOF
+    use_cache: true
+    cache_dir: "${cache_dir}"
+EOF
+    fi
+    
+    # Add remaining config - REMOVED test_batch_size parameter
+    cat >> "${output_file}" << EOF
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: false
@@ -291,80 +405,32 @@ kfold:
     - [46, 29, 31]
     - [30, 39]
 EOF
+
+    # Verify the file was created
     [ -f "${output_file}" ] && return 0 || return 1
 }
 
-create_cv_recovery_script() {
-    cat > "${UTILS_DIR}/recover_cv_summary.py" << 'EOF'
-#!/usr/bin/env python3
-import os
-import json
-import argparse
-import numpy as np
-import glob
-from typing import List, Dict, Any
-
-def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
-    fold_metrics = []
-    fold_dirs = sorted(glob.glob(os.path.join(output_dir, "fold_*")))
-    for i, fold_dir in enumerate(fold_dirs, 1):
-        results_file = os.path.join(fold_dir, "validation_results.json")
-        if os.path.exists(results_file):
-            try:
-                with open(results_file, 'r') as f:
-                    results = json.load(f)
-                results["fold"] = i
-                fold_metrics.append(results)
-                print(f"Loaded results from {results_file}")
-            except Exception as e:
-                print(f"Error loading {results_file}: {e}")
-    return fold_metrics
-
-def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> Dict[str, Any]:
-    if not fold_metrics:
-        return {"filter_type": filter_type, "average_metrics": {"accuracy": 0, "f1": 0, "precision": 0, "recall": 0, "balanced_accuracy": 0}, "fold_metrics": []}
-    metrics = ["accuracy", "f1", "precision", "recall", "balanced_accuracy"]
-    avg_metrics = {}
-    for metric in metrics:
-        values = [fold.get(metric, 0) for fold in fold_metrics]
-        if values:
-            avg_metrics[metric] = float(np.mean(values))
-            avg_metrics[f"{metric}_std"] = float(np.std(values))
-        else:
-            avg_metrics[metric] = 0
-            avg_metrics[f"{metric}_std"] = 0
-    return {"filter_type": filter_type, "average_metrics": avg_metrics, "fold_metrics": fold_metrics}
-
-def main():
-    parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
-    parser.add_argument("--output-dir", required=True, help="Model output directory")
-    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf)")
-    args = parser.parse_args()
-    fold_metrics = load_fold_results(args.output_dir)
-    cv_summary = create_cv_summary(fold_metrics, args.filter_type)
-    summary_path = os.path.join(args.output_dir, "cv_summary.json")
-    with open(summary_path, 'w') as f:
-        json.dump(cv_summary, f, indent=2)
-    print(f"Recovered CV summary saved to {summary_path}")
-
-if __name__ == "__main__":
-    main()
-EOF
-    chmod +x "${UTILS_DIR}/recover_cv_summary.py"
-}
-
+# Function to train a model with a specific filter
 train_filter_model() {
     local filter_type="$1"
     local config_file="$2"
     local output_dir="${RESULTS_DIR}/${filter_type}_model"
+    
+    # Log start of training
     log "INFO" "========================================================="
     log "INFO" "STARTING TRAINING FOR ${filter_type^^} FILTER"
     log "INFO" "========================================================="
+    
+    # Create output directory
     mkdir -p "${output_dir}/logs"
+    
+    # Check if config file exists
     if [ ! -f "${config_file}" ]; then
         log "ERROR" "Config file does not exist: ${config_file}"
         return 1
     fi
+    
+    # Run training
     log "INFO" "Training model with ${filter_type} filter"
     CUDA_VISIBLE_DEVICES=${DEVICE} python main.py \
         --config "${config_file}" \
@@ -377,6 +443,7 @@ train_filter_model() {
         --num-epoch ${NUM_EPOCHS} \
         --run-comparison True 2>&1 | tee "${output_dir}/logs/training.log"
     
+    # Check training status
     train_status=$?
     if [ ${train_status} -ne 0 ]; then
         log "WARNING" "Training process exited with status ${train_status}"
@@ -387,38 +454,65 @@ train_filter_model() {
                    --filter-type "${filter_type}"
         fi
     fi
+    
+    # Create empty summary if none exists
     if [ ! -f "${output_dir}/cv_summary.json" ]; then
         log "WARNING" "No cross-validation summary found for ${filter_type}"
         echo "{\"filter_type\":\"${filter_type}\",\"average_metrics\":{\"accuracy\":0,\"f1\":0,\"precision\":0,\"recall\":0,\"balanced_accuracy\":0},\"fold_metrics\":[]}" > "${output_dir}/cv_summary.json"
     fi
+    
     log "INFO" "Training complete for ${filter_type} filter"
     return 0
 }
 
+# Main function to run filter comparison
 run_filter_comparison() {
     log "INFO" "Starting IMU filter comparison"
+    
+    # Create necessary directories
     mkdir -p "${RESULTS_DIR}"
+    
+    # Initialize results file
     echo "filter_type,accuracy,f1,precision,recall,balanced_accuracy" > "${REPORT_FILE}"
+    
+    # Make scripts executable
     chmod +x "${UTILS_DIR}/compare_filters.py"
+    
+    # Create recovery script
     create_cv_recovery_script
-    create_filter_config "madgwick" "${CONFIG_DIR}/madgwick.yaml" "beta: 0.1"
-    create_filter_config "kalman" "${CONFIG_DIR}/kalman.yaml" "process_noise: 1e-4\n    measurement_noise: 0.1"
-    create_filter_config "ekf" "${CONFIG_DIR}/ekf.yaml" "process_noise: 1e-5\n    measurement_noise: 0.05"
+    
+    # Create configuration files for each filter
+    create_filter_config "madgwick" "${CONFIG_DIR}/madgwick.yaml"
+    create_filter_config "kalman" "${CONFIG_DIR}/kalman.yaml"
+    create_filter_config "ekf" "${CONFIG_DIR}/ekf.yaml"
+    create_filter_config "ukf" "${CONFIG_DIR}/ukf.yaml"
+    
+    # Train each filter model
     log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
     train_filter_model "madgwick" "${CONFIG_DIR}/madgwick.yaml"
+    
     log "INFO" "============= TRAINING WITH KALMAN FILTER ============="
     train_filter_model "kalman" "${CONFIG_DIR}/kalman.yaml"
+    
     log "INFO" "============= TRAINING WITH EXTENDED KALMAN FILTER ============="
     train_filter_model "ekf" "${CONFIG_DIR}/ekf.yaml"
+    
+    log "INFO" "============= TRAINING WITH UNSCENTED KALMAN FILTER ============="
+    train_filter_model "ukf" "${CONFIG_DIR}/ukf.yaml"
+    
+    # Generate comparison report
     log "INFO" "============= GENERATING COMPARISON REPORT ============="
     python "${UTILS_DIR}/compare_filters.py" \
            --results-dir "${RESULTS_DIR}" \
            --output-csv "${REPORT_FILE}" \
-           --filter-types madgwick kalman ekf
+           --filter-types madgwick kalman ekf ukf
+    
+    # Log completion
     log "INFO" "Filter comparison complete. Results available in:"
     log "INFO" "- ${REPORT_FILE}"
     log "INFO" "- ${RESULTS_DIR}/visualizations/comparison_report.md"
     log "INFO" "- ${RESULTS_DIR}/visualizations/filter_comparison.png"
 }
 
+# Run the comparison
 run_filter_comparison
