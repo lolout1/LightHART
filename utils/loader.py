@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Union, Optional, Any
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("loader")
 
-MAX_THREADS = 30
+MAX_THREADS = 22
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 file_semaphore = threading.Semaphore(MAX_THREADS)
 filter_registry = {}

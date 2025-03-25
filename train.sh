@@ -417,7 +417,7 @@ train_filter_model() {
         --device 0 1 \
         --multi-gpu True \
         --patience ${PATIENCE} \
-        --parallel-threads 30 \
+        --parallel-threads 22 \
         --num-epoch ${NUM_EPOCHS} \
         --run-comparison True 2>&1 | tee "${output_dir}/logs/training.log"
     
