@@ -8,7 +8,7 @@ from utils.loader import DatasetBuilder
 from utils.imu_fusion import (
     process_imu_data, 
     align_sensor_data, 
-    extract_features_from_window,
+    extract_features as extract_features_from_window,
     hybrid_interpolate,
 )
 import logging

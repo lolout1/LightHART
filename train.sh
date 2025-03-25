@@ -295,7 +295,7 @@ model_args:
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 8
+  num_heads: 4
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true

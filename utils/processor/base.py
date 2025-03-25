@@ -1,12 +1,10 @@
 from typing import Any, List
 from abc import ABC, abstractmethod
-from scipy.io import loadmat
 import pandas as pd
 import numpy as np 
-import torch
-import torch.nn.functional as F
-from scipy.signal import find_peaks
 import logging
+from scipy.signal import find_peaks
+from utils.imu_fusion import process_imu_data, create_filter_id
 
 logger = logging.getLogger("processor")
 
@@ -46,6 +44,7 @@ def matloader(file_path: str, **kwargs):
     key = kwargs.get('key', None)
     if key not in ['d_iner', 'd_skel']:
         raise ValueError(f'Unsupported {key} for matlab file')
+    from scipy.io import loadmat
     data = loadmat(file_path)[key]
     return data
 
@@ -83,6 +82,9 @@ def ensure_3d_vector(v, default_value=0.0):
 
 def avg_pool(sequence: np.array, window_size: int = 5, stride: int = 1, 
              max_length: int = 512, shape: int = None) -> np.ndarray:
+    import torch
+    import torch.nn.functional as F
+    
     shape = sequence.shape if shape is None else shape
     sequence = sequence.reshape(shape[0], -1)
     sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
@@ -101,60 +103,133 @@ def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, input_sha
     new_sequence[:len(pooled_sequence)] = pooled_sequence
     return new_sequence
 
-def sliding_window(data: np.ndarray, clearing_time_index: int, max_time: int, 
-                   sub_window_size: int, stride_size: int) -> np.ndarray:
-    if clearing_time_index < sub_window_size - 1:
-        raise AssertionError("Clearing value needs to be greater or equal to (window size - 1)")
+def fixed_sliding_window(data: np.ndarray, window_size: int = 64, stride: int = 10,
+                      base_filter_id: str = None, filter_type: str = 'madgwick', 
+                      stateful: bool = True) -> np.array:
+    from utils.imu_fusion import process_windows_with_filter
     
-    start = clearing_time_index - sub_window_size + 1
-    if max_time >= data.shape[0] - sub_window_size:
-        max_time = max_time - sub_window_size + 1
+    if len(data.shape) == 1:
+        padded_data = np.zeros((len(data), 3))
+        padded_data[:, 0] = data
+        data = padded_data
+    elif data.shape[1] < 3:
+        padded_data = np.zeros((data.shape[0], 3))
+        padded_data[:, :data.shape[1]] = data
+        data = padded_data
     
-    sub_windows = (
-        start + 
-        np.expand_dims(np.arange(sub_window_size), 0) + 
-        np.expand_dims(np.arange(max_time, step=stride_size), 0).T
-    )
-    return data[sub_windows]
+    # Ensure data is long enough for at least one window
+    if len(data) < window_size:
+        window_data = np.zeros((1, window_size, data.shape[1]))
+        window_data[0, :len(data)] = data
+        return window_data
+    
+    # Calculate how many windows we'll create
+    num_windows = max(1, (len(data) - window_size) // stride + 1)
+    windows = []
+    
+    # Extract windows with fixed stride
+    for i in range(num_windows):
+        start = i * stride
+        end = min(start + window_size, len(data))
+        
+        # Skip small windows at the end
+        if end - start < window_size // 2:
+            continue
+            
+        window_data = np.zeros((window_size, data.shape[1]))
+        actual_length = end - start
+        window_data[:actual_length] = data[start:end]
+        windows.append(window_data)
+    
+    if not windows:
+        return np.zeros((0, window_size, data.shape[1]))
+    
+    windows_array = np.array(windows)
+    
+    if base_filter_id is not None:
+        gyro_windows = np.zeros_like(windows_array)
+        window_data = {
+            'accelerometer': windows_array,
+            'gyroscope': gyro_windows
+        }
+        processed = process_windows_with_filter(
+            window_data, 
+            filter_type=filter_type,
+            base_filter_id=base_filter_id,
+            reset_per_window=not stateful
+        )
+        if 'quaternion' in processed:
+            windows_array = np.concatenate([windows_array, processed['quaternion']], axis=2)
+    
+    return windows_array
 
-def selective_sliding_window(data: np.ndarray, length: int, window_size: int, stride_size: int, height: float, distance: int) -> np.array:
-    try:
-        # Ensure data is at least 2D with 3 columns
-        if len(data.shape) == 1:
-            padded_data = np.zeros((len(data), 3))
-            padded_data[:, 0] = data
-            data = padded_data
-        elif data.shape[1] < 3:
-            padded_data = np.zeros((data.shape[0], 3))
-            padded_data[:, :data.shape[1]] = data
-            data = padded_data
+def peak_based_window(data: np.ndarray, window_size: int = 64, 
+                    height: float = 1.3, distance: int = 75,
+                    base_filter_id: str = None, filter_type: str = 'madgwick', 
+                    stateful: bool = True) -> np.array:
+    from utils.imu_fusion import process_windows_with_filter
+    
+    if len(data.shape) == 1:
+        padded_data = np.zeros((len(data), 3))
+        padded_data[:, 0] = data
+        data = padded_data
+    elif data.shape[1] < 3:
+        padded_data = np.zeros((data.shape[0], 3))
+        padded_data[:, :data.shape[1]] = data
+        data = padded_data
+    
+    # Get acceleration magnitude
+    sqrt_sum = np.sqrt(np.sum(data**2, axis=1))
+    
+    # Find peaks with consistent parameters for both falls and ADLs
+    peaks, _ = find_peaks(sqrt_sum, height=height, distance=distance)
+    
+    # If no peaks found, use middle of data or highest acceleration point
+    if len(peaks) == 0:
+        if len(sqrt_sum) > window_size:
+            max_idx = np.argmax(sqrt_sum)
+            peaks = np.array([max_idx])
+        else:
+            peaks = np.array([len(sqrt_sum) // 2])
+    
+    windows = []
+    
+    for peak in peaks:
+        start = max(0, peak - window_size // 2)
+        end = min(len(data), start + window_size)
         
-        # Get the magnitude of acceleration
-        sqrt_sum = np.sqrt(np.sum(data**2, axis=1))
-        
-        # Find peaks
-        peaks, _ = find_peaks(sqrt_sum, height=height, distance=distance)
-        windows = []
-        
-        for peak in peaks:
-            start = max(0, peak - window_size // 2)
-            end = min(len(data), start + window_size)
+        if end - start < window_size // 2:
+            continue
             
-            if end - start < window_size // 2:
-                continue
-                
-            window_data = np.zeros((window_size, data.shape[1]))
-            actual_length = end - start
-            window_data[:actual_length] = data[start:end]
-            windows.append(window_data)
-            
-        return windows
-    except Exception as e:
-        logger.error(f"Error in selective_sliding_window: {str(e)}")
-        return []
+        window_data = np.zeros((window_size, data.shape[1]))
+        actual_length = end - start
+        window_data[:actual_length] = data[start:end]
+        windows.append(window_data)
+    
+    if not windows:
+        return np.zeros((0, window_size, data.shape[1]))
+    
+    windows_array = np.array(windows)
+    
+    if base_filter_id is not None:
+        gyro_windows = np.zeros_like(windows_array)
+        window_data = {
+            'accelerometer': windows_array,
+            'gyroscope': gyro_windows
+        }
+        processed = process_windows_with_filter(
+            window_data, 
+            filter_type=filter_type,
+            base_filter_id=base_filter_id,
+            reset_per_window=not stateful
+        )
+        if 'quaternion' in processed:
+            windows_array = np.concatenate([windows_array, processed['quaternion']], axis=2)
+    
+    return windows_array
 
 class Processor(ABC):
-    def __init__(self, file_path: str, mode: str, max_length: str, label: int, **kwargs):
+    def __init__(self, file_path: str, mode: str, max_length: int = 64, label: int = None, **kwargs):
         assert mode in ['sliding_window', 'avg_pool'], f'Processing mode: {mode} is undefined'
         self.label = label 
         self.mode = mode
@@ -163,6 +238,25 @@ class Processor(ABC):
         self.file_path = file_path
         self.input_shape = []
         self.kwargs = kwargs
+        self.stateful = kwargs.get('stateful', True)
+        self.filter_type = kwargs.get('filter_type', 'madgwick')
+        self.window_stride = kwargs.get('window_stride', 10)
+        self.use_fixed_windows = kwargs.get('use_fixed_windows', True)
+        
+        parts = file_path.split('/')[-1].split('.')[0].split('_')
+        if len(parts) >= 3:
+            parts = parts[0].split('A')
+            if len(parts) >= 2:
+                try:
+                    self.subject_id = int(parts[0][1:])
+                    self.action_id = int(parts[1])
+                    self.base_filter_id = create_filter_id(self.subject_id, self.action_id, filter_type=self.filter_type)
+                except:
+                    self.base_filter_id = None
+            else:
+                self.base_filter_id = None
+        else:
+            self.base_filter_id = None
 
     def set_input_shape(self, sequence: np.ndarray) -> List[int]:
         self.input_shape = sequence.shape
@@ -180,7 +274,6 @@ class Processor(ABC):
 
     def process(self, data):
         if self.mode == 'avg_pool':
-            # Ensure data has 3 columns for accelerometer/gyroscope
             if len(data.shape) == 1 or (len(data.shape) > 1 and data.shape[1] < 3):
                 valid_data = []
                 for i in range(len(data)):
@@ -197,22 +290,28 @@ class Processor(ABC):
                 input_shape=self.input_shape
             )
         else:  # sliding_window
-            if self.label == 1:  # Fall
-                data = selective_sliding_window(
-                    data, 
-                    length=self.input_shape[0],
-                    window_size=self.max_length, 
-                    stride_size=10, 
-                    height=1.4, 
-                    distance=50
+            if self.use_fixed_windows:
+                # Use consistent fixed stride windows for both training and real-time inference
+                data = fixed_sliding_window(
+                    data,
+                    window_size=self.max_length,
+                    stride=self.window_stride,
+                    base_filter_id=self.base_filter_id,
+                    filter_type=self.filter_type,
+                    stateful=self.stateful
                 )
-            else:  # ADL
-                data = selective_sliding_window(
-                    data, 
-                    length=self.input_shape[0],
-                    window_size=self.max_length, 
-                    stride_size=10, 
-                    height=1.2, 
-                    distance=100
+            else:
+                # Use peak-based windowing with consistent parameters
+                height = 1.3  # Compromise between 1.4 (fall) and 1.2 (ADL)
+                distance = 75  # Compromise between 50 (fall) and 100 (ADL)
+                
+                data = peak_based_window(
+                    data,
+                    window_size=self.max_length,
+                    height=height,
+                    distance=distance,
+                    base_filter_id=self.base_filter_id,
+                    filter_type=self.filter_type,
+                    stateful=self.stateful
                 )
         return data
