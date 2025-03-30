@@ -14,21 +14,26 @@ RESULTS_DIR="filter_comparison_results"
 CONFIG_DIR="config/smartfallmm"
 VISUALIZE="false"
 SAVE_ALIGNED="true"
-MAX_PARALLEL=2
+NUM_THREADS=30
 
 # Create required directories
 mkdir -p "${RESULTS_DIR}/logs"
 mkdir -p "${RESULTS_DIR}/visualizations"
 
+# Function to log messages
+log() {
+    echo "$(date +'%Y-%m-%d %H:%M:%S') - $1" | tee -a "${RESULTS_DIR}/logs/main.log"
+}
+
 # Print configuration
-echo "=== IMU Fusion Filter Training ==="
-echo "Filters: ${FILTER_TYPES[*]}"
-echo "Results directory: ${RESULTS_DIR}"
-echo "Epochs: ${NUM_EPOCHS}"
-echo "Batch size: ${BATCH_SIZE}"
-echo "Learning rate: ${BASE_LR}"
-echo "Device: ${DEVICE}"
-echo "============================="
+log "=== IMU Fusion Filter Training ==="
+log "Filters to evaluate: ${FILTER_TYPES[*]}"
+log "Results directory: ${RESULTS_DIR}"
+log "Epochs: ${NUM_EPOCHS}"
+log "Batch size: ${BATCH_SIZE}"
+log "Learning rate: ${BASE_LR}"
+log "Device: ${DEVICE}"
+log "============================="
 
 # Function to train a model with a specific filter
 train_filter_model() {
@@ -38,11 +43,11 @@ train_filter_model() {
     
     mkdir -p "${output_dir}/logs"
     
-    echo "$(date) - Starting training for ${filter_type} filter"
+    log "Starting training for ${filter_type} filter"
     
     # Ensure config exists
     if [ ! -f "${config_file}" ]; then
-        echo "ERROR: Config file not found: ${config_file}"
+        log "ERROR: Config file not found: ${config_file}"
         return 1
     fi
     
@@ -54,66 +59,127 @@ train_filter_model() {
         --device 0 1 \
         --multi-gpu True \
         --patience ${PATIENCE} \
-        --parallel-threads 30 \
-        --num-epoch ${NUM_EPOCHS} 2>&1 | tee "${output_dir}/logs/training.log"
+        --parallel-threads ${NUM_THREADS} \
+        --num-epoch ${NUM_EPOCHS} \
+        --seed ${SEED} 2>&1 | tee "${output_dir}/logs/training.log"
     
     # Check training status
     if [ $? -ne 0 ]; then
-        echo "WARNING: Training process exited with error for ${filter_type}"
-        if [ ! -f "${output_dir}/cv_summary.json" ]; then
-            echo "Creating empty summary for ${filter_type}"
-            echo "{\"filter_type\":\"${filter_type}\",\"average_metrics\":{\"accuracy\":0,\"f1\":0,\"precision\":0,\"recall\":0,\"balanced_accuracy\":0},\"fold_metrics\":[]}" > "${output_dir}/cv_summary.json"
-        fi
+        log "WARNING: Training process exited with error for ${filter_type}"
+        # Try to recover fold results if available
+        python -c "
+import os, json, glob
+try:
+    fold_dirs = sorted(glob.glob('${output_dir}/fold_*'))
+    if fold_dirs:
+        metrics = []
+        for fold_dir in fold_dirs:
+            results_file = os.path.join(fold_dir, 'validation_results.json')
+            if os.path.exists(results_file):
+                with open(results_file, 'r') as f:
+                    metrics.append(json.load(f))
+        
+        if metrics:
+            import numpy as np
+            avg_metrics = {}
+            for key in ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy']:
+                values = [m.get(key, 0) for m in metrics]
+                avg_metrics[key] = float(np.mean(values))
+                avg_metrics[key+'_std'] = float(np.std(values))
+            
+            summary = {
+                'filter_type': '${filter_type}',
+                'average_metrics': avg_metrics,
+                'fold_metrics': metrics
+            }
+            
+            with open('${output_dir}/cv_summary.json', 'w') as f:
+                json.dump(summary, f, indent=2)
+            print('Created summary from available fold results')
+        else:
+            raise ValueError('No fold results available')
+    else:
+        raise ValueError('No fold directories found')
+except Exception as e:
+    print(f'Error recovering results: {e}')
+    with open('${output_dir}/cv_summary.json', 'w') as f:
+        json.dump({
+            'filter_type': '${filter_type}',
+            'average_metrics': {
+                'accuracy': 0, 'f1': 0, 'precision': 0, 'recall': 0, 'balanced_accuracy': 0
+            },
+            'fold_metrics': []
+        }, f, indent=2)
+    print('Created empty summary')
+"
     fi
     
-    echo "$(date) - Completed training for ${filter_type} filter"
+    log "Completed training for ${filter_type} filter"
     return 0
 }
 
+# Function to generate comparison visualization
+generate_comparison_plot() {
+    log "Generating comparison visualization"
+    
+    python -c "
+import matplotlib.pyplot as plt
+import numpy as np
+import json
+import os
+
+filter_types = ['${FILTER_TYPES[0]}', '${FILTER_TYPES[1]}', '${FILTER_TYPES[2]}']
+metrics = ['accuracy', 'f1', 'precision', 'recall', 'balanced_accuracy']
+labels = ['Accuracy (%)', 'F1 Score', 'Precision (%)', 'Recall (%)', 'Balanced Acc (%)']
+colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6']
+
+# Collect metrics
+data = []
+for filter_type in filter_types:
+    summary_path = '${RESULTS_DIR}/' + filter_type + '_model/cv_summary.json'
+    try:
+        with open(summary_path, 'r') as f:
+            summary = json.load(f)
+            avg_metrics = summary.get('average_metrics', {})
+            values = []
+            errors = []
+            for metric in metrics:
+                values.append(avg_metrics.get(metric, 0))
+                errors.append(avg_metrics.get(metric + '_std', 0))
+            data.append((filter_type.capitalize(), values, errors))
+    except Exception as e:
+        print(f'Error loading {summary_path}: {e}')
+        data.append((filter_type.capitalize(), [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]))
+
+# Plot
+plt.figure(figsize=(12, 8))
+width = 0.2
+x = np.arange(len(metrics))
+
+for i, (filter_name, values, errors) in enumerate(data):
+    offset = (i - len(data)/2 + 0.5) * width
+    plt.bar(x + offset, values, width, label=filter_name, yerr=errors, capsize=5)
+
+plt.ylabel('Score', fontsize=12, fontweight='bold')
+plt.title('Performance Comparison of IMU Fusion Filters', fontsize=14, fontweight='bold')
+plt.xticks(x, labels, fontsize=10)
+plt.ylim(0, 100)
+plt.legend(loc='best')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+plt.tight_layout()
+plt.savefig('${RESULTS_DIR}/visualizations/filter_comparison.png', dpi=300)
+plt.close()
+
+print('Comparison plot saved to ${RESULTS_DIR}/visualizations/filter_comparison.png')
+"
+}
+
 # Function to generate comparison report
-generate_comparison() {
-    echo "$(date) - Generating comparison report"
+generate_comparison_report() {
+    log "Generating comparison report"
     
-    # Create summary CSV
-    echo "filter_type,accuracy,accuracy_std,f1,f1_std,precision,precision_std,recall,recall_std,balanced_accuracy,balanced_accuracy_std" > "${RESULTS_DIR}/metrics_summary.csv"
-    
-    # Extract metrics from each filter
-    for filter_type in "${FILTER_TYPES[@]}"; do
-        if [ -f "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" ]; then
-            # Extract metrics using jq if available, otherwise use grep/sed
-            if command -v jq &> /dev/null; then
-                avg_metrics=$(jq -r '.average_metrics' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                accuracy=$(jq -r '.average_metrics.accuracy' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                accuracy_std=$(jq -r '.average_metrics.accuracy_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                f1=$(jq -r '.average_metrics.f1' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                f1_std=$(jq -r '.average_metrics.f1_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                precision=$(jq -r '.average_metrics.precision' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                precision_std=$(jq -r '.average_metrics.precision_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                recall=$(jq -r '.average_metrics.recall' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                recall_std=$(jq -r '.average_metrics.recall_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                bal_acc=$(jq -r '.average_metrics.balanced_accuracy' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                bal_acc_std=$(jq -r '.average_metrics.balanced_accuracy_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-            else
-                # Fallback if jq is not available
-                accuracy=$(grep -o '"accuracy":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                accuracy_std=$(grep -o '"accuracy_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                f1=$(grep -o '"f1":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                f1_std=$(grep -o '"f1_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                precision=$(grep -o '"precision":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                precision_std=$(grep -o '"precision_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                recall=$(grep -o '"recall":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                recall_std=$(grep -o '"recall_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                bal_acc=$(grep -o '"balanced_accuracy":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                bal_acc_std=$(grep -o '"balanced_accuracy_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-            fi
-            
-            echo "${filter_type},${accuracy},${accuracy_std},${f1},${f1_std},${precision},${precision_std},${recall},${recall_std},${bal_acc},${bal_acc_std}" >> "${RESULTS_DIR}/metrics_summary.csv"
-        else
-            echo "${filter_type},0,0,0,0,0,0,0,0,0,0" >> "${RESULTS_DIR}/metrics_summary.csv"
-        fi
-    done
-    
-    # Generate comparison report
+    # Create comparison table
     echo "# IMU Fusion Filter Comparison Report" > "${RESULTS_DIR}/comparison_report.md"
     echo "" >> "${RESULTS_DIR}/comparison_report.md"
     echo "## Performance Summary" >> "${RESULTS_DIR}/comparison_report.md"
@@ -121,38 +187,48 @@ generate_comparison() {
     echo "| Filter | Accuracy | F1 Score | Precision | Recall | Balanced Accuracy |" >> "${RESULTS_DIR}/comparison_report.md"
     echo "|--------|----------|----------|-----------|--------|-------------------|" >> "${RESULTS_DIR}/comparison_report.md"
     
+    # Find best filter
+    best_f1=0
+    best_filter=""
+    
     for filter_type in "${FILTER_TYPES[@]}"; do
         if [ -f "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" ]; then
-            # Extract metrics using jq if available, otherwise use grep/sed
-            if command -v jq &> /dev/null; then
-                accuracy=$(jq -r '.average_metrics.accuracy' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                accuracy_std=$(jq -r '.average_metrics.accuracy_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                f1=$(jq -r '.average_metrics.f1' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                f1_std=$(jq -r '.average_metrics.f1_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                precision=$(jq -r '.average_metrics.precision' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                precision_std=$(jq -r '.average_metrics.precision_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                recall=$(jq -r '.average_metrics.recall' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                recall_std=$(jq -r '.average_metrics.recall_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                bal_acc=$(jq -r '.average_metrics.balanced_accuracy' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-                bal_acc_std=$(jq -r '.average_metrics.balanced_accuracy_std' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json")
-            else
-                # Fallback if jq is not available
-                accuracy=$(grep -o '"accuracy":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                accuracy_std=$(grep -o '"accuracy_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                f1=$(grep -o '"f1":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                f1_std=$(grep -o '"f1_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                precision=$(grep -o '"precision":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                precision_std=$(grep -o '"precision_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                recall=$(grep -o '"recall":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                recall_std=$(grep -o '"recall_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                bal_acc=$(grep -o '"balanced_accuracy":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
-                bal_acc_std=$(grep -o '"balanced_accuracy_std":[0-9.]*' "${RESULTS_DIR}/${filter_type}_model/cv_summary.json" | cut -d: -f2)
+            # Extract metrics using Python
+            metrics=$(python -c "
+import json
+try:
+    with open('${RESULTS_DIR}/${filter_type}_model/cv_summary.json', 'r') as f:
+        data = json.load(f)
+        avg = data.get('average_metrics', {})
+        acc = avg.get('accuracy', 0)
+        acc_std = avg.get('accuracy_std', 0)
+        f1 = avg.get('f1', 0)
+        f1_std = avg.get('f1_std', 0)
+        prec = avg.get('precision', 0)
+        prec_std = avg.get('precision_std', 0)
+        rec = avg.get('recall', 0)
+        rec_std = avg.get('recall_std', 0)
+        bal_acc = avg.get('balanced_accuracy', 0)
+        bal_acc_std = avg.get('balanced_accuracy_std', 0)
+        print(f'{acc:.2f},{acc_std:.2f},{f1:.2f},{f1_std:.2f},{prec:.2f},{prec_std:.2f},{rec:.2f},{rec_std:.2f},{bal_acc:.2f},{bal_acc_std:.2f}')
+except:
+    print('0,0,0,0,0,0,0,0,0,0')
+")
+            
+            IFS=',' read -r acc acc_std f1 f1_std prec prec_std rec rec_std bal_acc bal_acc_std <<< "$metrics"
+            
+            # Update best filter
+            if (( $(echo "$f1 > $best_f1" | bc -l) )); then
+                best_f1=$f1
+                best_filter=$filter_type
             fi
             
-            echo "| ${filter_type^} | ${accuracy}% ± ${accuracy_std}% | ${f1} ± ${f1_std} | ${precision}% ± ${precision_std}% | ${recall}% ± ${recall_std}% | ${bal_acc}% ± ${bal_acc_std}% |" >> "${RESULTS_DIR}/comparison_report.md"
+            # Add row to table
+            echo "| ${filter_type^} | ${acc}% ± ${acc_std}% | ${f1} ± ${f1_std} | ${prec}% ± ${prec_std}% | ${rec}% ± ${rec_std}% | ${bal_acc}% ± ${bal_acc_std}% |" >> "${RESULTS_DIR}/comparison_report.md"
         fi
     done
     
+    # Add filter characteristics
     echo "" >> "${RESULTS_DIR}/comparison_report.md"
     echo "## Filter Characteristics" >> "${RESULTS_DIR}/comparison_report.md"
     echo "" >> "${RESULTS_DIR}/comparison_report.md"
@@ -170,49 +246,38 @@ generate_comparison() {
     echo "- Non-linear extension of Kalman filter" >> "${RESULTS_DIR}/comparison_report.md"
     echo "- Better handles quaternion orientation state" >> "${RESULTS_DIR}/comparison_report.md"
     echo "- More accurate for orientation tracking with linear acceleration" >> "${RESULTS_DIR}/comparison_report.md"
+    echo "" >> "${RESULTS_DIR}/comparison_report.md"
     
-    echo "$(date) - Comparison report generated: ${RESULTS_DIR}/comparison_report.md"
+    # Add conclusion
+    echo "## Conclusion" >> "${RESULTS_DIR}/comparison_report.md"
+    echo "" >> "${RESULTS_DIR}/comparison_report.md"
+    echo "Based on the cross-validation results, the **${best_filter^}** filter provides the best performance for fall detection with an F1 score of ${best_f1}." >> "${RESULTS_DIR}/comparison_report.md"
+    echo "This filter should be preferred for real-time implementation on wearable devices." >> "${RESULTS_DIR}/comparison_report.md"
+    
+    log "Comparison report generated: ${RESULTS_DIR}/comparison_report.md"
 }
 
 # Main execution
-echo "$(date) - Starting IMU fusion filter training and comparison"
+log "Starting IMU fusion filter evaluation"
 
-# Train models in parallel or sequentially
-if [ "$MAX_PARALLEL" -gt 1 ]; then
-    echo "Running training in parallel (max: $MAX_PARALLEL jobs)"
-    parallel_jobs=()
+# Train models sequentially
+for filter_type in "${FILTER_TYPES[@]}"; do
+    train_filter_model "${filter_type}"
     
-    for filter_type in "${FILTER_TYPES[@]}"; do
-        # Check if we need to wait for a job to finish
-        while [ ${#parallel_jobs[@]} -ge "$MAX_PARALLEL" ]; do
-            for i in "${!parallel_jobs[@]}"; do
-                if ! kill -0 ${parallel_jobs[$i]} 2>/dev/null; then
-                    unset 'parallel_jobs[$i]'
-                fi
-            done
-            parallel_jobs=("${parallel_jobs[@]}")
-            sleep 1
-        done
-        
-        # Start new training job
-        echo "Starting training for ${filter_type} filter"
-        train_filter_model "${filter_type}" &
-        parallel_jobs+=($!)
-    done
+    # Clear GPU memory between runs
+    if command -v nvidia-smi &> /dev/null; then
+        log "Clearing GPU memory after ${filter_type} training"
+        nvidia-smi --gpu-reset 2>/dev/null || true
+    fi
     
-    # Wait for all jobs to finish
-    for job in "${parallel_jobs[@]}"; do
-        wait $job
-    done
-else
-    echo "Running training sequentially"
-    for filter_type in "${FILTER_TYPES[@]}"; do
-        train_filter_model "${filter_type}"
-    done
-fi
+    # Brief pause between training runs
+    sleep 5
+done
 
-# Generate comparison report
-generate_comparison
+# Generate comparison visualization and report
+generate_comparison_plot
+generate_comparison_report
 
-echo "$(date) - IMU fusion filter training and comparison complete"
-echo "Results available in: ${RESULTS_DIR}/comparison_report.md"
+log "IMU fusion filter evaluation complete"
+log "Results available in: ${RESULTS_DIR}/comparison_report.md"
+log "Visualization available in: ${RESULTS_DIR}/visualizations/filter_comparison.png"
