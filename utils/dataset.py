@@ -8,8 +8,7 @@ from utils.loader import DatasetBuilder
 from utils.imu_fusion import (
     process_imu_data, 
     align_sensor_data, 
-    extract_features_from_window,
-    hybrid_interpolate,
+    preprocess_all_subjects,
 )
 import logging
 
@@ -22,12 +21,6 @@ class ModalityFile:
         self.sequence_number = sequence_number
         self.file_path = file_path
 
-    def __repr__(self) -> str:
-        return (
-            f"ModalityFile(subject_id={self.subject_id}, action_id={self.action_id}, "
-            f"sequence_number={self.sequence_number}, file_path='{self.file_path}')"
-        )
-
 class Modality:
     def __init__(self, name: str) -> None:
         self.name = name 
@@ -36,9 +29,6 @@ class Modality:
     def add_file(self, subject_id: int, action_id: int, sequence_number: int, file_path: str) -> None: 
         modality_file = ModalityFile(subject_id, action_id, sequence_number, file_path)
         self.files.append(modality_file)
-    
-    def __repr__(self) -> str:
-        return f"Modality(name='{self.name}', files={self.files})"
 
 class MatchedTrial: 
     def __init__(self, subject_id: int, action_id: int, sequence_number: int) -> None:
@@ -49,55 +39,6 @@ class MatchedTrial:
     
     def add_file(self, modality_name: str, file_path: str) -> None:
         self.files[modality_name] = file_path
-    
-    def __repr__(self) -> str:
-        return (
-            f"MatchedTrial(subject_id={self.subject_id}, action_id={self.action_id}, "
-            f"sequence_number={self.sequence_number}, files={self.files})"
-        )
-
-class UTD_MHAD:
-    def __init__(self, root_dir: str) -> None:
-        self.root_dir = root_dir
-        self.modalities: Dict[str, Modality] = {}
-        self.matched_trials: List[MatchedTrial] = []
-    
-    def add_modality(self, modality_name: str) -> None:
-        self.modalities[modality_name] = Modality(modality_name)
-    
-    def load_files(self) -> None:
-        for modality_name, modality in self.modalities.items():
-            modality_dir = os.path.join(self.root_dir, modality_name)
-            for root, _, files in os.walk(modality_dir):
-                for file in files:
-                    if file.endswith(('.avi', '.mp4', '.txt', '.mat')):
-                        try:
-                            subject_id = int(file.split('_')[1][1:])
-                            action_id = int(file.split('_')[0][1:])
-                            sequence_number = int(file.split('_')[2][1:])
-                            file_path = os.path.join(root, file)
-                            modality.add_file(subject_id, action_id, sequence_number, file_path)
-                        except Exception as e:
-                            logger.error(f"Error processing file {file}: {e}")
-    
-    def match_trials(self) -> None:
-        for modality_name, modality in self.modalities.items():
-            for modality_file in modality.files:
-                matched_trial = self._find_or_create_matched_trial(
-                    modality_file.subject_id,
-                    modality_file.action_id,
-                    modality_file.sequence_number
-                )
-                matched_trial.add_file(modality_name, modality_file.file_path)
-
-    def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
-        for trial in self.matched_trials:
-            if (trial.subject_id == subject_id and trial.action_id == action_id
-                and trial.sequence_number == sequence_number):
-                return trial
-        new_trial = MatchedTrial(subject_id, action_id, sequence_number)
-        self.matched_trials.append(new_trial)
-        return new_trial
 
 class SmartFallMM:
     def __init__(self, root_dir: str, fusion_options: Optional[Dict] = None) -> None:
@@ -159,9 +100,7 @@ class SmartFallMM:
 
         required_modalities = list(self.age_groups['young'].keys())
         
-        # Validate each trial has the required accelerometer data
         for key, files_dict in trial_dict.items():
-            # Allow trials without gyroscope but not without accelerometer
             if 'accelerometer' in files_dict and (
                 'gyroscope' in files_dict or 'gyroscope' not in required_modalities):
                 subject_id, action_id, sequence_number = key
@@ -169,15 +108,6 @@ class SmartFallMM:
                 for modality_name, file_path in files_dict.items():
                     matched_trial.add_file(modality_name, file_path)
                 self.matched_trials.append(matched_trial)
-
-    def _find_or_create_matched_trial(self, subject_id: int, action_id: int, sequence_number: int) -> MatchedTrial:
-        for trial in self.matched_trials:
-            if (trial.subject_id == subject_id and trial.action_id == action_id
-                    and trial.sequence_number == sequence_number):
-                return trial
-        new_trial = MatchedTrial(subject_id, action_id, sequence_number)
-        self.matched_trials.append(new_trial)
-        return new_trial
 
     def pipe_line(self, age_group: List[str], modalities: List[str], sensors: List[str]):
         for age in age_group: 
@@ -193,12 +123,6 @@ class SmartFallMM:
         self.match_trials()
         
         logger.info(f"Loaded {len(self.matched_trials)} matched trials")
-        logger.info(f"Modalities: {modalities}")
-        logger.info(f"Sensors: {sensors}")
-        logger.info(f"Age groups: {age_group}")
-        
-        if self.fusion_options and self.fusion_options.get('filter_type'):
-            logger.info(f"Using fusion with filter type: {self.fusion_options['filter_type']}")
 
 def prepare_smartfallmm(arg) -> DatasetBuilder:
     fusion_options = arg.dataset_args.get('fusion_options', {})
@@ -226,25 +150,25 @@ def prepare_smartfallmm(arg) -> DatasetBuilder:
 
 def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
     fusion_options = getattr(builder, 'fusion_options', {})
+    cache_dir = fusion_options.get('cache_dir', 'processed_data')
     
     if fusion_options and fusion_options.get('enabled', False):
         filter_type = fusion_options.get('filter_type', 'madgwick')
-        visualize = fusion_options.get('visualize', False)
         
-        logger.info(f"Applying IMU fusion with filter type: {filter_type}")
-        builder.make_dataset(subjects, True, filter_type=filter_type, visualize=visualize)
+        # Check if we need to preprocess all subjects first
+        if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
+            all_subjects = []
+            for trial in builder.dataset.matched_trials:
+                if trial.subject_id not in all_subjects:
+                    all_subjects.append(trial.subject_id)
+            
+            # Preprocess all subjects once
+            preprocess_all_subjects(all_subjects, filter_type, cache_dir, builder.max_length)
+        
+        # Now make dataset will use the cached data
+        builder.make_dataset(subjects, True, filter_type=filter_type)
     else:
         builder.make_dataset(subjects, fuse)
     
     norm_data = builder.normalization()
     return norm_data
-
-def distribution_viz(labels: np.array, work_dir: str, mode: str) -> None:
-    values, count = np.unique(labels, return_counts=True)
-    plt.figure(figsize=(10, 6))
-    plt.bar(values, count)
-    plt.xlabel('Classes')
-    plt.ylabel('Count')
-    plt.title(f'{mode.capitalize()} Label Distribution')
-    plt.savefig(os.path.join(work_dir, f'{mode}_label_distribution.png'))
-    plt.close()

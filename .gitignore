@@ -14,7 +14,7 @@ data/
 work_dir/
 # Ignore specific file
 config/smartfallmm/fusion_comparison.yaml
-
+*__pycache__/
 # Ignore directories
 data/
 dataset_visualizations/
