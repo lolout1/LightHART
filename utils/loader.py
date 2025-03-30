@@ -405,10 +405,12 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int, peak
     
     return windowed_data
 
+
 def preprocess_all_subjects(subjects, filter_type, output_dir, max_length=64):
     logger.info(f"Preprocessing all subjects with {filter_type} filter")
     
     from utils.dataset import SmartFallMM
+    from tqdm.auto import tqdm  # Correct import
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -485,7 +487,6 @@ def preprocess_all_subjects(subjects, filter_type, output_dir, max_length=64):
                 continue
     
     logger.info(f"Preprocessing complete for all subjects with {filter_type} filter")
-
 class DatasetBuilder:
     def __init__(self, dataset, mode, max_length, task='fd', fusion_options=None, **kwargs):
         if mode not in ['avg_pool', 'sliding_window']:

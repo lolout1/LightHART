@@ -331,18 +331,23 @@ class ExtendedKalmanFilter(OrientationEstimator):
     def __init__(self, freq: float = 30.0):
         super().__init__(freq)
         
+        # State vector: [quaternion, gyro_bias]
         self.state_dim = 7
         self.x = np.zeros(self.state_dim)
-        self.x[0] = 1.0
+        self.x[0] = 1.0  # Initialize quaternion to identity rotation
         
+        # Process noise covariance
         self.Q = np.eye(self.state_dim) * 1e-5
-        self.Q[:4, :4] *= 1e-6
-        self.Q[4:, 4:] *= 1e-4
+        self.Q[:4, :4] *= 1e-6  # Lower noise for quaternion components
+        self.Q[4:, 4:] *= 1e-4  # Higher noise for bias components
         
+        # Measurement noise covariance
         self.R = np.eye(3) * 0.1
         
+        # Error covariance matrix
         self.P = np.eye(self.state_dim) * 1e-2
         
+        # Reference gravity vector
         self.g_ref = np.array([0, 0, 1])
     
     def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
@@ -350,52 +355,66 @@ class ExtendedKalmanFilter(OrientationEstimator):
             q = self.x[:4]
             bias = self.x[4:]
             
+            # Normalize quaternion
             q_norm = np.linalg.norm(q)
             if q_norm > 0:
                 q = q / q_norm
             
+            # Correct gyro measurement with estimated bias
             gyro_corrected = gyro - bias
             
+            # Quaternion derivative calculation
             q_dot = 0.5 * self._quaternion_product_matrix(q) @ np.array([0, gyro_corrected[0], gyro_corrected[1], gyro_corrected[2]])
+            
+            # Predict next state (quaternion integration)
             q_pred = q + q_dot * dt
             q_pred = q_pred / np.linalg.norm(q_pred)
             
+            # Update full state vector
             x_pred = np.zeros_like(self.x)
             x_pred[:4] = q_pred
-            x_pred[4:] = bias
+            x_pred[4:] = bias  # Bias is assumed constant (random walk model)
             
+            # Compute state transition matrix
             F = np.eye(self.state_dim)
             F[:4, :4] = self._quaternion_update_jacobian(q, gyro_corrected, dt)
             F[:4, 4:] = -0.5 * dt * self._quaternion_product_matrix(q)[:, 1:]
             
+            # Propagate error covariance
             P_pred = F @ self.P @ F.T + self.Q
             
+            # Update step using accelerometer (only if magnitude is close to gravity)
             acc_norm = np.linalg.norm(acc)
-            if acc_norm > 1e-10:
+            if 0.8 < acc_norm < 1.2:  # Only update when acceleration is ~1g
                 acc_norm = acc / acc_norm
                 
+                # Predict gravity direction from current orientation
                 R_q = self._quaternion_to_rotation_matrix(x_pred[:4])
                 g_pred = R_q @ self.g_ref
                 
+                # Measurement residual
                 z = acc_norm
                 h = g_pred
-                
-                H = self._measurement_jacobian(x_pred[:4])
-                
                 y = z - h
                 
-                S = H @ P_pred @ H.T + self.R
+                # Measurement Jacobian
+                H = self._measurement_jacobian(x_pred[:4])
                 
+                # Kalman gain calculation
+                S = H @ P_pred @ H.T + self.R
                 K = P_pred @ H.T @ np.linalg.inv(S)
                 
+                # State update
                 self.x = x_pred + K @ y
                 
+                # Covariance update (Joseph form for numerical stability)
                 I_KH = np.eye(self.state_dim) - K @ H
                 self.P = I_KH @ P_pred @ I_KH.T + K @ self.R @ K.T
             else:
                 self.x = x_pred
                 self.P = P_pred
             
+            # Normalize quaternion
             self.x[:4] = self.x[:4] / np.linalg.norm(self.x[:4])
             
             return self.x[:4]
@@ -439,7 +458,7 @@ class ExtendedKalmanFilter(OrientationEstimator):
         H_acc[:3, :4] = np.array([
             [2*y, 2*z, 2*w, 2*x],
             [-2*z, 2*y, 2*x, -2*w],
-            [0, -2*y, -2*z, 0]
+            [0, -2*x, -2*y, 0]
         ])
         
         return H_acc

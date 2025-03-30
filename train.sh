@@ -4,7 +4,7 @@ set -o pipefail
 set -u
 
 DEVICE="0,1"
-BASE_LR=0.001
+BASE_LR=0.0005
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=100
 PATIENCE=15
@@ -271,7 +271,7 @@ train_filter_model() {
         --device 0 1 \
         --multi-gpu True \
         --patience ${PATIENCE} \
-        --parallel-threads 30 \
+        --parallel-threads 42 \
         --num-epoch ${NUM_EPOCHS} 2>&1 | tee "${output_dir}/logs/training.log"
     
     log "INFO" "Training complete for ${filter_type} filter"
