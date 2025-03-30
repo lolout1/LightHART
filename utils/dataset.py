@@ -7,7 +7,7 @@ from collections import defaultdict
 from utils.loader import DatasetBuilder
 from utils.imu_fusion import (
     process_window_with_filter, 
-    align_sensor_data, 
+    align_sequence, 
     process_sequential_windows,
     create_filter_id
 )
@@ -156,6 +156,7 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
     
     norm_data = builder.normalization()
     return norm_data
+
 def distribution_viz(labels: np.array, work_dir: str, mode: str) -> None:
     values, count = np.unique(labels, return_counts=True)
     plt.figure(figsize=(10, 6))
