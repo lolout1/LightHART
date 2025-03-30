@@ -1,5 +1,3 @@
-# Models/fusion_transformer.py
-
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -65,6 +63,9 @@ class FusionTransModel(nn.Module):
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
         )
+        
+        self.pos_encoding = nn.Parameter(torch.zeros(1, acc_frames, embed_dim))
+        nn.init.normal_(self.pos_encoding, 0, 0.02)
 
         if feature_dim is None:
             if fusion_type == 'concat':
@@ -72,7 +73,6 @@ class FusionTransModel(nn.Module):
             elif fusion_type in ['attention', 'weighted']:
                 self.feature_dim = embed_dim
             else:
-                logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'concat'")
                 self.fusion_type = 'concat'
                 self.feature_dim = embed_dim * 3
         else:
@@ -92,8 +92,6 @@ class FusionTransModel(nn.Module):
         
         if self.feature_dim % num_heads != 0:
             adjusted_heads = max(1, self.feature_dim // (self.feature_dim // num_heads))
-            if adjusted_heads != num_heads:
-                logger.info(f"Adjusting number of heads from {num_heads} to {adjusted_heads} to match feature dimension")
             num_heads = adjusted_heads
             
         encoder_layers = nn.TransformerEncoderLayer(
@@ -112,9 +110,10 @@ class FusionTransModel(nn.Module):
             norm=nn.LayerNorm(self.feature_dim)
         )
 
-        self.attn_pool = fusion_type == 'attention'
-        if self.attn_pool:
-            self.attn_pool = nn.Linear(self.feature_dim, 1)
+        self.attn_pool = nn.Sequential(
+            nn.Linear(self.feature_dim, 1),
+            nn.Softmax(dim=1)
+        )
         
         self.classifier = nn.Sequential(
             nn.Linear(self.feature_dim, 128),
@@ -130,9 +129,6 @@ class FusionTransModel(nn.Module):
         
         self._init_weights()
         
-        logger.info(f"Initialized FusionTransModel with feature_dim={self.feature_dim}, num_heads={num_heads}")
-        logger.info(f"Fusion type: {self.fusion_type}")
-    
     def _init_weights(self):
         for name, p in self.named_parameters():
             if 'weight' in name and p.dim() > 1:
@@ -168,8 +164,7 @@ class FusionTransModel(nn.Module):
                 quat_features = rearrange(quat_features, 'b c l -> b l c')
             else:
                 batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
-                quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, 
-                                         device=acc_data.device)
+                quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
@@ -182,9 +177,16 @@ class FusionTransModel(nn.Module):
                 v = self.attention_proj_v(torch.cat([gyro_features, quat_features], dim=-1))
                 
                 attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(q.size(-1))
-                attn_weights = F.softmax(attn_scores, dim=-1)
-                fused_features = torch.matmul(attn_weights, v)
                 
+                if quat_data is not None and not torch.all(quat_data == 0):
+                    quat_boost = 0.2
+                    bias = torch.zeros_like(attn_scores)
+                    bias[:, :, attn_scores.size(-1)//2:] = quat_boost
+                    attn_weights = F.softmax(attn_scores + bias, dim=-1)
+                else:
+                    attn_weights = F.softmax(attn_scores, dim=-1)
+                    
+                fused_features = torch.matmul(attn_weights, v)
                 fused_features = self.feature_adapter(fused_features)
             elif self.fusion_type == 'weighted':
                 acc_weight = torch.sigmoid(self.acc_weight)
@@ -204,13 +206,12 @@ class FusionTransModel(nn.Module):
                 
                 fused_features = self.feature_adapter(fused_features)
             
-            transformer_output = self.transformer(fused_features)
+            seq_len = fused_features.shape[1]
+            fused_features = fused_features + self.pos_encoding[:, :seq_len, :]
             
-            if hasattr(self, 'attn_pool') and self.attn_pool:
-                attn_weights = F.softmax(self.attn_pool(transformer_output), dim=1)
-                pooled = torch.sum(transformer_output * attn_weights, dim=1)
-            else:
-                pooled = torch.mean(transformer_output, dim=1)
+            transformer_output = self.transformer(fused_features)
+            attn_weights = self.attn_pool(transformer_output)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
             logits = self.classifier(pooled)
             
@@ -232,8 +233,7 @@ class FusionTransModel(nn.Module):
             gyro_features = rearrange(gyro_features, 'b c l -> b l c')
             
             batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
-            quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, 
-                                     device=acc_data.device)
+            quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
@@ -245,9 +245,12 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[1] * gyro_features
                 fused_features = self.feature_adapter(fused_features)
             
-            transformer_output = self.transformer(fused_features)
+            seq_len = fused_features.shape[1]
+            fused_features = fused_features + self.pos_encoding[:, :seq_len, :]
             
-            pooled = torch.mean(transformer_output, dim=1)
+            transformer_output = self.transformer(fused_features)
+            attn_weights = self.attn_pool(transformer_output)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
             logits = self.classifier(pooled)
             
@@ -278,9 +281,12 @@ class FusionTransModel(nn.Module):
             else:
                 fused_features = self.feature_adapter(acc_features)
             
-            transformer_output = self.transformer(fused_features)
+            seq_len = fused_features.shape[1]
+            fused_features = fused_features + self.pos_encoding[:, :seq_len, :]
             
-            pooled = torch.mean(transformer_output, dim=1)
+            transformer_output = self.transformer(fused_features)
+            attn_weights = self.attn_pool(transformer_output)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
             logits = self.classifier(pooled)
             
@@ -326,8 +332,13 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[2] * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
+            seq_len = fused_features.shape[1]
+            fused_features = fused_features + self.pos_encoding[:, :seq_len, :]
+            
             transformer_output = self.transformer(fused_features)
-            pooled = torch.mean(transformer_output, dim=1)
+            attn_weights = self.attn_pool(transformer_output)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
+            
             logits = self.classifier(pooled)
             
             return logits
@@ -355,17 +366,15 @@ class FusionTransModel(nn.Module):
                 has_gyro = 'gyroscope' in data and data['gyroscope'] is not None
                 has_quaternion = 'quaternion' in data and data['quaternion'] is not None
                 
+                if not has_acc:
+                    raise ValueError("Input must contain accelerometer data")
+                
                 if not has_quaternion and has_acc and has_gyro:
                     batch_size, seq_len = data['accelerometer'].shape[:2]
                     device = data['accelerometer'].device
                     data['quaternion'] = torch.zeros(batch_size, seq_len, 4, device=device)
+                    data['quaternion'][:, :, 0] = 1.0
                     has_quaternion = True
-                
-                if has_acc and torch.all(torch.abs(data['accelerometer']) < 1e-6):
-                    logger.warning("Accelerometer data contains only zeros or very small values")
-                
-                if has_gyro and torch.all(torch.abs(data['gyroscope']) < 1e-6):
-                    logger.warning("Gyroscope data contains only zeros or very small values")
                 
                 if has_acc and has_gyro and has_quaternion:
                     return self.forward_all_modalities(

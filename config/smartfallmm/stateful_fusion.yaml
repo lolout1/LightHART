@@ -1,22 +1,25 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
+
 subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
+
 model_args:
   num_layers: 3
   embed_dim: 48
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
-  acc_frames: 64
-  mocap_frames: 64
+  acc_frames: 64   # Fixed window size (64 samples)
+  mocap_frames: 64 # Keep consistent with acc_frames
   num_heads: 8
   fusion_type: 'concat'
-  dropout: 0.3
+  dropout: 0.25
   use_batch_norm: true
-  feature_dim: 144
-dataset_args:
+  feature_dim: 96
+
+dataset_args: 
   mode: 'sliding_window'
-  max_length: 64
+  max_length: 64  # Must match window size
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
@@ -24,33 +27,36 @@ dataset_args:
   fusion_options:
     enabled: true
     filter_type: 'madgwick'
-    beta: 0.15
-    process_per_window: false
-    preserve_filter_state: true
-    acc_threshold: 3.0
-    gyro_threshold: 1.0
+    use_fixed_windows: true  # Use fixed stride windows instead of peak-based
+    window_stride: 10        # Fixed stride between windows
+    stateful: true           # Maintain filter state between windows
     visualize: false
     save_aligned: true
-    window_stride: 32
-    is_linear_acc: true
+
 batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
 num_epoch: 60
+
+# dataloader
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 16
   drop_last: true
+
 val_feeder_args:
   batch_size: 16
   drop_last: true
-test_feeder_args:
+
+test_feeder_args: 
   batch_size: 16
   drop_last: false
+
 seed: 42
 optimizer: adamw
 base_lr: 0.0005
 weight_decay: 0.001
+
 kfold:
   enabled: true
   num_folds: 5

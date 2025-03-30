@@ -4,10 +4,8 @@ import pandas as pd
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from scipy.signal import find_peaks
 from collections import defaultdict
 import traceback
-from typing import Dict, List, Tuple, Union, Optional, Any
 import time
 from tqdm import tqdm
 
@@ -16,30 +14,40 @@ from utils.imu_fusion import (
     process_sequential_windows, create_filter_id, clear_filters, get_filter
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("loader")
 
 MAX_THREADS = 30
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 file_semaphore = threading.Semaphore(MAX_THREADS)
+dataset_locks = defaultdict(threading.Lock)
 
 def csvloader(file_path, **kwargs):
     try:
-        try: file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
-        except: file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
+        try:
+            file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
+        except:
+            file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
         
-        if 'skeleton' in file_path: cols = 96
+        if 'skeleton' in file_path:
+            cols = 96
         else:
             if file_data.shape[1] > 4:
                 cols = file_data.shape[1] - 3
                 file_data = file_data.iloc[:, 3:]
-            else: cols = 3
+            else:
+                cols = 3
         
         if file_data.shape[1] < cols:
             missing_cols = cols - file_data.shape[1]
-            for i in range(missing_cols): file_data[f'missing_{i}'] = 0
+            for i in range(missing_cols):
+                file_data[f'missing_{i}'] = 0
         
-        activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32) if file_data.shape[0] > 2 else file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
+        if file_data.shape[0] > 2:
+            activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
+        else:
+            activity_data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
+        
         return activity_data
     except Exception as e:
         logger.error(f"Error loading CSV {file_path}: {str(e)}")
@@ -47,46 +55,67 @@ def csvloader(file_path, **kwargs):
 
 def matloader(file_path, **kwargs):
     key = kwargs.get('key', None)
-    if key not in ['d_iner', 'd_skel']: raise ValueError(f'Unsupported {key} for matlab file')
+    if key not in ['d_iner', 'd_skel']:
+        raise ValueError(f'Unsupported {key} for matlab file')
     from scipy.io import loadmat
     data = loadmat(file_path)[key]
     return data
 
 LOADER_MAP = {'csv': csvloader, 'mat': matloader}
 
-def avg_pool(sequence, window_size=5, stride=1, max_length=512, shape=None):
-    import torch.nn.functional as F
-    import torch
-    
-    shape = sequence.shape if shape is None else shape
-    sequence = sequence.reshape(shape[0], -1)
-    sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
-    sequence_tensor = torch.tensor(sequence, dtype=torch.float32)
-    
-    stride = ((sequence_tensor.shape[2] // max_length) + 1) if max_length < sequence_tensor.shape[2] else 1
-    pooled = F.avg_pool1d(sequence_tensor, kernel_size=window_size, stride=stride)
-    pooled_np = pooled.squeeze(0).numpy().transpose(1, 0)
-    result = pooled_np.reshape(-1, *shape[1:])
-    
-    return result
-
 def pad_sequence_numpy(sequence, max_sequence_length, input_shape):
+    import torch
+    import torch.nn.functional as F
+    
     shape = list(input_shape)
     shape[0] = max_sequence_length
-    pooled_sequence = avg_pool(sequence=sequence, max_length=max_sequence_length, shape=input_shape)
-    new_sequence = np.zeros(shape, sequence.dtype)
-    actual_length = min(len(pooled_sequence), max_sequence_length)
-    new_sequence[:actual_length] = pooled_sequence[:actual_length]
-    return new_sequence
+    
+    if len(sequence) > max_sequence_length:
+        sequence_tensor = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0).permute(0, 2, 1)
+        pooled = F.avg_pool1d(sequence_tensor, kernel_size=len(sequence)//max_sequence_length, stride=len(sequence)//max_sequence_length)
+        sequence = pooled.permute(0, 2, 1).squeeze(0).numpy()
+    
+    result = np.zeros(shape, sequence.dtype)
+    result[:len(sequence)] = sequence[:max_sequence_length]
+    
+    return result
 
 def align_sequence(data):
     acc_data = data.get('accelerometer')
     gyro_data = data.get('gyroscope')
-    if acc_data is None or gyro_data is None: return data
+    
+    if acc_data is None or gyro_data is None or len(acc_data) == 0 or len(gyro_data) == 0:
+        return data
     
     aligned_acc, aligned_gyro, common_times = align_sensor_data(acc_data, gyro_data)
+    
     if len(aligned_acc) == 0 or len(aligned_gyro) == 0:
-        logger.warning("Sensor alignment failed, using original data")
+        if len(acc_data) > 5 and len(gyro_data) > 5:
+            logger.warning("Sensor alignment failed, attempting to find partial overlapping windows")
+            
+            min_window_size = 32
+            best_window_size = 0
+            best_start_acc = 0
+            best_start_gyro = 0
+            
+            for acc_start in range(0, len(acc_data) - min_window_size, min_window_size // 2):
+                for gyro_start in range(0, len(gyro_data) - min_window_size, min_window_size // 2):
+                    window_size = min(len(acc_data) - acc_start, len(gyro_data) - gyro_start)
+                    
+                    if window_size > best_window_size:
+                        best_window_size = window_size
+                        best_start_acc = acc_start
+                        best_start_gyro = gyro_start
+            
+            if best_window_size >= min_window_size:
+                aligned_data = {
+                    'accelerometer': acc_data[best_start_acc:best_start_acc + best_window_size],
+                    'gyroscope': gyro_data[best_start_gyro:best_start_gyro + best_window_size],
+                    'aligned_timestamps': np.linspace(0, best_window_size / 30.0, best_window_size)
+                }
+                return aligned_data
+            
+            logger.warning("Could not find suitable overlapping windows, skipping file")
         return data
     
     aligned_data = {
@@ -99,144 +128,20 @@ def align_sequence(data):
     if skeleton_data is not None:
         skeleton_times = np.linspace(0, len(skeleton_data)/30.0, len(skeleton_data))
         aligned_skeleton = np.zeros((len(common_times), skeleton_data.shape[1], skeleton_data.shape[2]))
+        
         for joint in range(skeleton_data.shape[1]):
             for coord in range(skeleton_data.shape[2]):
                 aligned_skeleton[:, joint, coord] = np.interp(common_times, skeleton_times, skeleton_data[:, joint, coord])
+        
         aligned_data['skeleton'] = aligned_skeleton
     
     return aligned_data
 
-def estimate_orientation_from_linear_acc_gyro(acc_data, gyro_data, window_size=64):
-    quaternions = np.zeros((window_size, 4))
-    quaternions[:, 0] = 1.0
-    
-    current_q = np.array([1.0, 0.0, 0.0, 0.0])
-    alpha = 0.02
-    dt = 1.0/30.0
-    
-    for i in range(min(len(acc_data), window_size)):
-        gyro = gyro_data[i]
-        linear_acc = acc_data[i]
-        
-        if i > 0:
-            w, x, y, z = quaternions[i-1]
-            prev_rot = Rotation.from_quat([x, y, z, w])
-            gravity_sensor_frame = prev_rot.inv().apply([0, 0, 9.81])
-            acc_with_gravity = linear_acc + gravity_sensor_frame
-        else:
-            acc_with_gravity = linear_acc + np.array([0, 0, 9.81])
-        
-        acc_norm = np.linalg.norm(acc_with_gravity)
-        if acc_norm > 1e-6: acc_normalized = acc_with_gravity / acc_norm
-        else: acc_normalized = np.array([0, 0, 1])
-        
-        gravity_ref = np.array([0, 0, 1])
-        rotation_axis = np.cross(gravity_ref, acc_normalized)
-        axis_norm = np.linalg.norm(rotation_axis)
-        
-        if axis_norm > 1e-6:
-            rotation_axis /= axis_norm
-            angle = np.arccos(np.clip(np.dot(gravity_ref, acc_normalized), -1.0, 1.0))
-            acc_q = np.zeros(4)
-            acc_q[0] = np.cos(angle/2)
-            acc_q[1:4] = rotation_axis * np.sin(angle/2)
-        else:
-            acc_q = np.array([1, 0, 0, 0]) if acc_normalized[2] >= 0 else np.array([0, 1, 0, 0])
-        
-        if i > 0:
-            w, x, y, z = quaternions[i-1]
-            gyro_q_dot = 0.5 * np.array([
-                -x*gyro[0] - y*gyro[1] - z*gyro[2],
-                w*gyro[0] + y*gyro[2] - z*gyro[1],
-                w*gyro[1] - x*gyro[2] + z*gyro[0],
-                w*gyro[2] + x*gyro[1] - y*gyro[0]
-            ])
-            gyro_q = quaternions[i-1] + gyro_q_dot * dt
-            gyro_q_norm = np.linalg.norm(gyro_q)
-            if gyro_q_norm > 1e-10: gyro_q /= gyro_q_norm
-        else: gyro_q = acc_q.copy()
-        
-        q = np.zeros(4)
-        dot = np.sum(gyro_q * acc_q)
-        if dot < 0: acc_q, dot = -acc_q, -dot
-        
-        dot = np.clip(dot, -1.0, 1.0)
-        if dot > 0.9995: q = gyro_q + alpha * (acc_q - gyro_q)
-        else:
-            theta_0 = np.arccos(dot)
-            theta = theta_0 * alpha
-            sin_theta = np.sin(theta)
-            sin_theta_0 = np.sin(theta_0)
-            
-            s_gyro = np.cos(theta) - dot * sin_theta / sin_theta_0
-            s_acc = sin_theta / sin_theta_0
-            
-            q = s_gyro * gyro_q + s_acc * acc_q
-        
-        q_norm = np.linalg.norm(q)
-        quaternions[i] = q / q_norm if q_norm > 1e-10 else np.array([1, 0, 0, 0])
-    
-    return quaternions
-
-def process_sequential_windows(data, window_size=64, stride=32, label=None, filter_type='madgwick', 
-                             filter_params=None, base_filter_id=None, stateful=True, is_linear_acc=True):
-    if 'accelerometer' not in data or data['accelerometer'] is None or 'gyroscope' not in data or data['gyroscope'] is None:
-        return {'labels': np.array([label])} if label is not None else {'labels': np.array([])}
-    
-    acc_data = data['accelerometer']
-    gyro_data = data['gyroscope']
-    timestamps = data.get('aligned_timestamps', None)
-    
-    if len(acc_data) < window_size // 2:
-        return {'labels': np.array([label])} if label is not None else {'labels': np.array([])}
-    
-    num_windows = max(1, (len(acc_data) - window_size) // stride + 1)
-    windows = defaultdict(list)
-    
-    if label is not None: windows['labels'] = [label] * num_windows
-    
-    filter_id = base_filter_id if base_filter_id is not None else f"sequential_{filter_type}"
-    
-    for i in range(num_windows):
-        start = i * stride
-        end = min(start + window_size, len(acc_data))
-        
-        if end - start < window_size // 2: continue
-        
-        acc_window = np.zeros((window_size, acc_data.shape[1]))
-        actual_length = end - start
-        acc_window[:actual_length] = acc_data[start:end]
-        
-        gyro_window = np.zeros((window_size, gyro_data.shape[1]))
-        actual_gyro_length = min(actual_length, len(gyro_data) - start)
-        if actual_gyro_length > 0: gyro_window[:actual_gyro_length] = gyro_data[start:start + actual_gyro_length]
-        
-        ts_window = None
-        if timestamps is not None:
-            ts_window = np.zeros(window_size)
-            actual_ts_length = min(actual_length, len(timestamps) - start)
-            if actual_ts_length > 0: ts_window[:actual_ts_length] = timestamps[start:start + actual_ts_length]
-        
-        reset = not stateful or i == 0
-        result = process_window_with_filter(
-            acc_window, gyro_window, ts_window, 
-            filter_type=filter_type, filter_id=filter_id, 
-            reset_filter=reset, is_linear_acc=is_linear_acc
-        )
-        
-        windows['accelerometer'].append(acc_window)
-        windows['gyroscope'].append(gyro_window)
-        windows['quaternion'].append(result['quaternion'])
-    
-    for key in windows:
-        if key != 'labels' and len(windows[key]) > 0: windows[key] = np.array(windows[key])
-    if 'labels' in windows and isinstance(windows['labels'], list): windows['labels'] = np.array(windows['labels'])
-    
-    return windows
-
 class DatasetBuilder:
     def __init__(self, dataset, mode, max_length, task='fd', fusion_options=None, **kwargs):
-        if mode not in ['avg_pool', 'sliding_window']: raise ValueError(f"Unsupported processing method {mode}")
+        if mode not in ['avg_pool', 'sliding_window']:
+            raise ValueError(f"Unsupported processing method {mode}")
+        
         self.dataset = dataset
         self.data = {}
         self.kwargs = kwargs
@@ -253,10 +158,11 @@ class DatasetBuilder:
         if fusion_options:
             self.fusion_enabled = fusion_options.get('enabled', False)
             self.filter_type = fusion_options.get('filter_type', 'madgwick')
-            self.stateful = not fusion_options.get('reset_per_window', False)
+            self.stateful = not fusion_options.get('process_per_window', False)
             self.window_stride = fusion_options.get('window_stride', 32)
             self.filter_params = fusion_options
-            self.is_linear_acc = True
+            self.is_linear_acc = True  # CSV files contain linear acceleration
+            
             logger.info(f"Fusion options: enabled={self.fusion_enabled}, filter_type={self.filter_type}, stateful={self.stateful}")
         else:
             self.fusion_enabled = False
@@ -269,7 +175,9 @@ class DatasetBuilder:
     def load_file(self, file_path):
         try:
             file_type = file_path.split('.')[-1]
-            if file_type not in ['csv', 'mat']: raise ValueError(f"Unsupported file type {file_type}")
+            if file_type not in ['csv', 'mat']:
+                raise ValueError(f"Unsupported file type {file_type}")
+            
             loader = LOADER_MAP[file_type]
             data = loader(file_path, **self.kwargs)
             return data
@@ -280,6 +188,7 @@ class DatasetBuilder:
     def process(self, data, label, fuse=False, filter_type='madgwick', filter_params=None, trial_id=None):
         if self.mode == 'avg_pool':
             processed_data = {}
+            
             for modality, modality_data in data.items():
                 if modality != 'labels':
                     processed_data[modality] = pad_sequence_numpy(
@@ -287,6 +196,7 @@ class DatasetBuilder:
                         max_sequence_length=self.max_length,
                         input_shape=modality_data.shape
                     )
+            
             processed_data['labels'] = np.array([label])
             
             if fuse and 'accelerometer' in processed_data and 'gyroscope' in processed_data:
@@ -306,19 +216,19 @@ class DatasetBuilder:
                         filter_type=filter_type,
                         filter_id=filter_id,
                         reset_filter=not self.stateful,
-                        is_linear_acc=self.is_linear_acc
+                        is_linear_acc=self.is_linear_acc,
+                        filter_params=filter_params
                     )
                     
                     processed_data['quaternion'] = result['quaternion']
                 except Exception as e:
                     logger.error(f"Fusion processing failed: {str(e)}")
                     processed_data['quaternion'] = np.zeros((self.max_length, 4))
+                    processed_data['quaternion'][:, 0] = 1.0
             
             if 'quaternion' not in processed_data:
                 processed_data['quaternion'] = np.zeros((self.max_length, 4))
                 processed_data['quaternion'][:, 0] = 1.0
-            
-            return processed_data
         else:
             filter_id = create_filter_id(
                 subject_id=trial_id[0] if trial_id else 0,
@@ -338,15 +248,17 @@ class DatasetBuilder:
                 stateful=self.stateful,
                 is_linear_acc=self.is_linear_acc
             )
-            
-            return processed_data
+        
+        return processed_data
 
     def make_dataset(self, subjects, fuse=False, filter_type=None, visualize=False, save_aligned=False):
         self.data = {}
         self.fuse = fuse
         
-        if filter_type is None and hasattr(self, 'filter_type'): filter_type = self.filter_type
-        else: filter_type = 'madgwick'
+        if filter_type is None and hasattr(self, 'filter_type'):
+            filter_type = self.filter_type
+        else:
+            filter_type = 'madgwick'
             
         if hasattr(self, 'fusion_options'): 
             save_aligned = save_aligned or self.fusion_options.get('save_aligned', False)
@@ -356,9 +268,13 @@ class DatasetBuilder:
         
         subject_action_groups = {}
         for trial in self.dataset.matched_trials:
-            if trial.subject_id not in subjects: continue
+            if trial.subject_id not in subjects:
+                continue
+            
             key = (trial.subject_id, trial.action_id)
-            if key not in subject_action_groups: subject_action_groups[key] = []
+            if key not in subject_action_groups:
+                subject_action_groups[key] = []
+            
             subject_action_groups[key].append(trial)
         
         logger.info(f"Processing {len(self.dataset.matched_trials)} trials with filter_type={filter_type}, fuse={fuse}")
@@ -367,9 +283,12 @@ class DatasetBuilder:
             base_filter_id = create_filter_id(subject_id, action_id, filter_type=filter_type)
             
             for trial in trials:
-                if self.task == 'fd': label = int(trial.action_id > 9)
-                elif self.task == 'age': label = int(trial.subject_id < 29 or trial.subject_id > 46)
-                else: label = trial.action_id - 1
+                if self.task == 'fd':
+                    label = int(trial.action_id > 9)
+                elif self.task == 'age':
+                    label = int(trial.subject_id < 29 or trial.subject_id > 46)
+                else:
+                    label = trial.action_id - 1
                 
                 trial_id = (trial.subject_id, trial.action_id, trial.sequence_number)
                 trial_data = {}
@@ -378,20 +297,33 @@ class DatasetBuilder:
                     try:
                         unimodal_data = self.load_file(file_path)
                         trial_data[modality_name] = unimodal_data
-                    except: continue
+                    except:
+                        continue
                 
-                if fuse and ('accelerometer' not in trial_data or 'gyroscope' not in trial_data): 
+                if 'accelerometer' not in trial_data or 'gyroscope' not in trial_data:
                     logger.warning(f"Skipping trial S{trial.subject_id}A{trial.action_id}T{trial.sequence_number} - missing required sensors")
                     continue
                 
+                if len(trial_data['accelerometer']) < 5 or len(trial_data['gyroscope']) < 5:
+                    logger.warning(f"Skipping trial S{trial.subject_id}A{trial.action_id}T{trial.sequence_number} - sensor data too short")
+                    continue
+                
                 trial_data = align_sequence(trial_data)
+                
+                if 'accelerometer' not in trial_data or 'gyroscope' not in trial_data:
+                    logger.warning(f"Skipping trial S{trial.subject_id}A{trial.action_id}T{trial.sequence_number} - could not align sensors")
+                    continue
+                
+                if len(trial_data['accelerometer']) < 5 or len(trial_data['gyroscope']) < 5:
+                    logger.warning(f"Skipping trial S{trial.subject_id}A{trial.action_id}T{trial.sequence_number} - aligned sensor data too short")
+                    continue
                 
                 if save_aligned:
                     aligned_acc = trial_data.get('accelerometer')
                     aligned_gyro = trial_data.get('gyroscope')
                     aligned_timestamps = trial_data.get('aligned_timestamps')
                     
-                    if aligned_acc is not None and aligned_gyro is not None:
+                    if aligned_acc is not None and aligned_gyro is not None and len(aligned_acc) > 0 and len(aligned_gyro) > 0:
                         save_aligned_data(
                             trial.subject_id,
                             trial.action_id,
@@ -419,7 +351,8 @@ class DatasetBuilder:
         
         for key in self.data:
             if len(self.data[key]) > 0:
-                try: self.data[key] = np.concatenate(self.data[key], axis=0)
+                try:
+                    self.data[key] = np.concatenate(self.data[key], axis=0)
                 except Exception as e:
                     logger.error(f"Error concatenating {key}: {str(e)}")
                     del self.data[key]
@@ -434,7 +367,9 @@ class DatasetBuilder:
 
     def _add_trial_data(self, trial_data):
         for modality, modality_data in trial_data.items():
-            if modality not in self.data: self.data[modality] = []
+            if modality not in self.data:
+                self.data[modality] = []
+            
             if isinstance(modality_data, np.ndarray) and modality_data.size > 0:
                 self.data[modality].append(modality_data)
 

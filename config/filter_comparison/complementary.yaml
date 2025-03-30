@@ -1,6 +1,8 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
+
 subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
+
 model_args:
   num_layers: 3
   embed_dim: 48
@@ -13,7 +15,8 @@ model_args:
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
-  feature_dim: 144
+  feature_dim: 144  # 48 * 3 for concat fusion
+
 dataset_args:
   mode: 'sliding_window'
   max_length: 64
@@ -23,40 +26,40 @@ dataset_args:
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'madgwick'
-    beta: 0.15
-    process_per_window: false
-    preserve_filter_state: true
+    filter_type: 'comp'
     acc_threshold: 3.0
     gyro_threshold: 1.0
     visualize: false
     save_aligned: true
-    window_stride: 32
-    is_linear_acc: true
+
 batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
 num_epoch: 60
+
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 16
   drop_last: true
+
 val_feeder_args:
   batch_size: 16
   drop_last: true
+
 test_feeder_args:
   batch_size: 16
   drop_last: false
+
 seed: 42
 optimizer: adamw
 base_lr: 0.0005
 weight_decay: 0.001
+
+# Using a smaller subset for faster training while troubleshooting
 kfold:
   enabled: true
-  num_folds: 5
+  num_folds: 3
   fold_assignments:
     - [43, 35, 36]
     - [44, 34, 32]
     - [45, 37, 38]
-    - [46, 29, 31]
-    - [30, 39]
