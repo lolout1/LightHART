@@ -38,6 +38,7 @@ def get_args():
     parser.add_argument('--dataset', type=str, default='smartfallmm', help='Dataset name')
     parser.add_argument('--batch-size', type=int, default=16, metavar='N', help='Training batch size')
     parser.add_argument('--val-batch-size', type=int, default=16, metavar='N', help='Validation batch size')
+    parser.add_argument('--test-batch-size', type=int, default=16, metavar='N', help='Test batch size')
     parser.add_argument('--num-epoch', type=int, default=60, metavar='N', help='Training epochs')
     parser.add_argument('--start-epoch', type=int, default=0, help='Start epoch number')
     parser.add_argument('--weights-only', type=str2bool, default=False, help='Load only weights')
@@ -105,13 +106,18 @@ def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None)
     from utils.imu_fusion import MadgwickFilter, KalmanFilter, ExtendedKalmanFilter
     key = f"{subject_id}_{action_id}_{filter_type}"
     if key not in FILTER_INSTANCES:
+        print(f"Creating new filter instance for {key}")
         if filter_type == 'madgwick':
             beta = filter_params.get('beta', 0.1) if filter_params else 0.1
             FILTER_INSTANCES[key] = MadgwickFilter(beta=beta)
         elif filter_type == 'kalman':
-            FILTER_INSTANCES[key] = KalmanFilter()
+            process_noise = filter_params.get('process_noise', 5e-5) if filter_params else 5e-5
+            measurement_noise = filter_params.get('measurement_noise', 0.1) if filter_params else 0.1
+            FILTER_INSTANCES[key] = KalmanFilter(process_noise=process_noise, measurement_noise=measurement_noise)
         elif filter_type == 'ekf':
-            FILTER_INSTANCES[key] = ExtendedKalmanFilter()
+            process_noise = filter_params.get('process_noise', 1e-5) if filter_params else 1e-5
+            measurement_noise = filter_params.get('measurement_noise', 0.05) if filter_params else 0.05
+            FILTER_INSTANCES[key] = ExtendedKalmanFilter(process_noise=process_noise, measurement_noise=measurement_noise)
         else:
             FILTER_INSTANCES[key] = MadgwickFilter()
     return FILTER_INSTANCES[key]
@@ -119,24 +125,29 @@ def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None)
 def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_id=0, action_id=0, 
                               filter_type='madgwick', filter_params=None, use_cache=True, 
                               cache_dir="processed_data", window_id=0):
-    if use_cache:
-        cache_key = f"S{subject_id:02d}A{action_id:02d}W{window_id:04d}_{filter_type}"
-        cache_path = os.path.join(cache_dir, f"{cache_key}.npz")
-        if os.path.exists(cache_path):
-            try:
-                cached_data = np.load(cache_path)
-                return cached_data['quaternion']
-            except Exception:
-                pass
+    if filter_type == 'none':
+        return np.zeros((len(acc_data), 4))
+        
+    cache_key = f"S{subject_id:02d}A{action_id:02d}W{window_id:04d}_{filter_type}"
+    cache_path = os.path.join(cache_dir, f"{cache_key}.npz")
+    
+    if use_cache and os.path.exists(cache_path):
+        try:
+            cached_data = np.load(cache_path)
+            return cached_data['quaternion']
+        except Exception as e:
+            print(f"Warning: Failed to load cached data: {str(e)}")
     
     orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
     quaternions = np.zeros((len(acc_data), 4))
     
+    # Process each sample in the window
     for i in range(len(acc_data)):
         acc = acc_data[i]
         gyro = gyro_data[i]
         timestamp = timestamps[i] if timestamps is not None else None
         
+        # Use the previous orientation to estimate gravity
         gravity_direction = np.array([0, 0, 9.81])
         if i > 0:
             r = Rotation.from_quat([quaternions[i-1, 1], quaternions[i-1, 2], quaternions[i-1, 3], quaternions[i-1, 0]])
@@ -147,15 +158,23 @@ def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_i
         if norm > 1e-6:
             acc_with_gravity = acc_with_gravity / norm
             
+        # Update filter with current data (this maintains filter state)
         q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
         quaternions[i] = q
     
+    # Cache results for this window
     if use_cache:
-        os.makedirs(os.path.dirname(os.path.join(cache_dir, f"{cache_key}.npz")), exist_ok=True)
+        cache_dir_path = os.path.dirname(cache_path)
+        if not os.path.exists(cache_dir_path):
+            os.makedirs(cache_dir_path, exist_ok=True)
         try:
-            np.savez_compressed(os.path.join(cache_dir, f"{cache_key}.npz"), quaternion=quaternions, window_id=window_id)
-        except:
-            pass
+            np.savez_compressed(cache_path, 
+                               quaternion=quaternions, 
+                               window_id=window_id,
+                               subject_id=subject_id,
+                               action_id=action_id)
+        except Exception as e:
+            print(f"Warning: Failed to cache results: {str(e)}")
     
     return quaternions
 
@@ -168,6 +187,7 @@ def extract_window_data(inputs, window_idx, subject_id, action_id, filter_type, 
     if gyro_data is None or len(gyro_data) == 0:
         return {'quaternion': np.zeros((len(acc_data), 4))}
     
+    # Process this specific window with filter
     window_quat = process_sequence_with_filter(
         acc_data, gyro_data, timestamps, 
         subject_id, action_id, 
@@ -206,38 +226,40 @@ class Trainer:
         self.weights_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}_weights_only.pt'
         self.max_threads = min(getattr(arg, 'parallel_threads', 4), MAX_THREADS)
         
-        dataset_args = getattr(arg, 'dataset_args', {}) or {}
-        if isinstance(dataset_args, str):
+        # Ensure dataset_args is properly initialized
+        if not hasattr(arg, 'dataset_args') or arg.dataset_args is None:
+            arg.dataset_args = {
+                'modalities': ['accelerometer', 'gyroscope'],
+                'mode': 'sliding_window',
+                'max_length': 64,
+                'task': 'fd',
+                'age_group': ['young'],
+                'sensors': ['watch'],
+                'fusion_options': {
+                    'enabled': True,
+                    'filter_type': getattr(arg, 'filter_type', 'madgwick'),
+                    'process_per_window': True,
+                    'preserve_filter_state': True,
+                    'acc_threshold': 3.0,
+                    'gyro_threshold': 1.0,
+                    'visualize': False,
+                    'save_aligned': True
+                }
+            }
+        elif isinstance(arg.dataset_args, str):
             try:
-                dataset_args = eval(dataset_args)
+                arg.dataset_args = eval(arg.dataset_args)
             except:
                 try:
-                    dataset_args = yaml.safe_load(dataset_args)
+                    arg.dataset_args = yaml.safe_load(arg.dataset_args)
                 except:
-                    dataset_args = {}
-                    
-        if not dataset_args:
-            dataset_args = {'modalities': ['accelerometer', 'gyroscope'], 
-                           'mode': 'sliding_window',
-                           'max_length': 64,
-                           'task': 'fd',
-                           'age_group': ['young'],
-                           'sensors': ['watch'],
-                           'fusion_options': {
-                               'enabled': True,
-                               'filter_type': 'madgwick',
-                               'acc_threshold': 3.0,
-                               'gyro_threshold': 1.0,
-                               'visualize': False,
-                               'save_aligned': True
-                           }}
-            self.arg.dataset_args = dataset_args
+                    pass
             
-        self.inertial_modality = [modality for modality in dataset_args.get('modalities', ['accelerometer', 'gyroscope']) 
+        self.inertial_modality = [modality for modality in arg.dataset_args.get('modalities', ['accelerometer', 'gyroscope']) 
                                  if modality != 'skeleton']
         self.has_gyro = 'gyroscope' in self.inertial_modality
         
-        fusion_options = dataset_args.get('fusion_options', {})
+        fusion_options = arg.dataset_args.get('fusion_options', {})
         self.has_fusion = len(self.inertial_modality) > 1 or (fusion_options and fusion_options.get('enabled', False))
         self.fuse = self.has_fusion
         
@@ -254,46 +276,81 @@ class Trainer:
         else:
             self.kfold_config = {"enabled": False}
         
+        # Create cache directory structure
         if self.use_cache:
-            os.makedirs(os.path.join(self.cache_dir, self.filter_type), exist_ok=True)
+            filter_cache_dir = os.path.join(self.cache_dir, self.filter_type)
+            os.makedirs(filter_cache_dir, exist_ok=True)
             
+        # Set up work directory
         os.makedirs(self.arg.work_dir, exist_ok=True)
         if hasattr(arg, 'config') and arg.config:
             self.save_config(arg.config, arg.work_dir)
         
+        # Setup GPU environment
         self.available_gpus = setup_gpu_environment(arg)
         arg.device = self.available_gpus if self.available_gpus else getattr(arg, 'device', [0])
         self.output_device = arg.device[0] if isinstance(arg.device, list) and len(arg.device) > 0 else arg.device
         
-        if hasattr(arg, 'model') and arg.model:
-            self.model = self.load_model(arg.model, arg.model_args) if self.arg.phase == 'train' else torch.load(getattr(arg, 'weights', self.model_path))
-            if len(self.available_gpus) > 1 and getattr(arg, 'multi_gpu', False): 
-                self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
-                
-            self.load_loss()
-            
-            if self.fuse and self.filter_type != 'none':
-                all_subjects = arg.subjects
-                cache_dir = os.path.join(self.cache_dir, self.filter_type)
-                
-                if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
-                    self.print_log(f"Preprocessing all {len(all_subjects)} subjects with {self.filter_type} filter")
-                    from utils.imu_fusion import preprocess_all_subjects
-                    preprocess_all_subjects(all_subjects, self.filter_type, cache_dir, 
-                                          dataset_args.get('max_length', 64))
-                    self.print_log(f"Preprocessing complete")
-                    
-            self.print_log(f'# Parameters: {self.count_parameters(self.model)}')
-            self.print_log(f'Sensor modalities: {self.inertial_modality}')
-            self.print_log(f'Using fusion: {self.fuse} with filter type: {self.filter_type}')
-            
-            if self.available_gpus: 
-                self.print_log(f'Using GPUs: {self.available_gpus}')
-            else:
-                self.print_log('Using CPU for computation')
-        else:
-            self.print_log("WARNING: No model specified")
+        # Initialize model
+        if not hasattr(arg, 'model') or not arg.model:
+            arg.model = 'Models.fusion_transformer.FusionTransModel'
+            self.print_log(f"Using default model: {arg.model}")
         
+        # Fix model_args if needed
+        if not hasattr(arg, 'model_args') or not arg.model_args:
+            arg.model_args = {
+                'num_layers': 3,
+                'embed_dim': 48,
+                'acc_coords': 3,
+                'quat_coords': 4,
+                'num_classes': 2,
+                'acc_frames': 64,
+                'mocap_frames': 64,
+                'num_heads': 8,
+                'fusion_type': 'concat',
+                'dropout': 0.3,
+                'use_batch_norm': True,
+                'feature_dim': 144
+            }
+        elif isinstance(arg.model_args, str):
+            try:
+                arg.model_args = eval(arg.model_args)
+            except:
+                try:
+                    arg.model_args = yaml.safe_load(arg.model_args)
+                except:
+                    pass
+        
+        # Create model
+        self.model = self.load_model(arg.model, arg.model_args) if self.arg.phase == 'train' else torch.load(getattr(arg, 'weights', self.model_path))
+        if len(self.available_gpus) > 1 and getattr(arg, 'multi_gpu', False): 
+            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
+            
+        # Load loss function
+        self.load_loss()
+        
+        # Preprocess data if needed
+        if self.fuse and self.filter_type != 'none':
+            all_subjects = arg.subjects
+            cache_dir = os.path.join(self.cache_dir, self.filter_type)
+            
+            if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
+                self.print_log(f"Preprocessing all {len(all_subjects)} subjects with {self.filter_type} filter")
+                from utils.imu_fusion import preprocess_all_subjects
+                preprocess_all_subjects(all_subjects, self.filter_type, cache_dir, 
+                                      arg.dataset_args.get('max_length', 64))
+                self.print_log(f"Preprocessing complete")
+                
+        self.print_log(f'# Parameters: {self.count_parameters(self.model)}')
+        self.print_log(f'Sensor modalities: {self.inertial_modality}')
+        self.print_log(f'Using fusion: {self.fuse} with filter type: {self.filter_type}')
+        
+        if self.available_gpus: 
+            self.print_log(f'Using GPUs: {self.available_gpus}')
+        else:
+            self.print_log('Using CPU for computation')
+        
+        # Setup test combinations if needed
         if getattr(arg, 'rotate_tests', False) or getattr(arg, 'test_combinations', False):
             self.test_train_combinations = generate_test_combinations(
                 arg.subjects, 
@@ -323,30 +380,22 @@ class Trainer:
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
         Model = import_class(model)
         
-        if isinstance(model_args, str):
-            try:
-                model_args = eval(model_args)
-            except:
-                try:
-                    model_args = yaml.safe_load(model_args)
-                except:
-                    model_args = {}
-        
-        if not model_args:
+        # Ensure model_args is a proper dictionary
+        if not model_args or not isinstance(model_args, dict):
             model_args = {
                 'num_layers': 3,
-                'embed_dim': 32,
+                'embed_dim': 48,
                 'acc_coords': 3,
                 'quat_coords': 4,
                 'num_classes': 2,
                 'acc_frames': 64,
                 'mocap_frames': 64,
-                'num_heads': 4,
+                'num_heads': 8,
                 'fusion_type': 'concat',
                 'dropout': 0.3,
-                'use_batch_norm': True
+                'use_batch_norm': True,
+                'feature_dim': 144
             }
-            self.arg.model_args = model_args
             
         model = Model(**model_args).to(device)
         return model
@@ -396,6 +445,7 @@ class Trainer:
 
     def load_data(self, train_subjects, test_subjects=None):
         try:
+            # Set default values for feeder and arguments
             if not hasattr(self.arg, 'feeder') or not self.arg.feeder:
                 self.arg.feeder = 'Feeder.Make_Dataset.UTD_mm'
                 self.print_log(f"Using default feeder: {self.arg.feeder}")
@@ -404,14 +454,17 @@ class Trainer:
                 self.arg.train_feeder_args = {'batch_size': self.arg.batch_size, 'drop_last': True}
                 
             if not hasattr(self.arg, 'val_feeder_args') or not self.arg.val_feeder_args:
-                self.arg.val_feeder_args = {'batch_size': self.arg.val_batch_size or self.arg.batch_size, 'drop_last': True}
+                self.arg.val_feeder_args = {'batch_size': self.arg.val_batch_size, 'drop_last': True}
                 
             if not hasattr(self.arg, 'test_feeder_args') or not self.arg.test_feeder_args:
-                self.arg.test_feeder_args = {'batch_size': self.arg.val_batch_size or self.arg.val_batch_size or self.arg.batch_size, 'drop_last': False}
+                test_batch_size = getattr(self.arg, 'test_batch_size', getattr(self.arg, 'val_batch_size', self.arg.batch_size))
+                self.arg.test_feeder_args = {'batch_size': test_batch_size, 'drop_last': False}
                 
+            # Prepare dataset
             Feeder = import_class(self.arg.feeder)
             builder = prepare_smartfallmm(self.arg)
             
+            # Load training data
             self.print_log(f"Loading training data for subjects: {train_subjects}")
             self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
             
@@ -423,6 +476,7 @@ class Trainer:
                 return False
             
             try:
+                # Create training dataloader
                 self.data_loader['train'] = torch.utils.data.DataLoader(
                     dataset=Feeder(**self.arg.train_feeder_args, dataset=self.norm_train),
                     batch_size=self.arg.batch_size,
@@ -435,6 +489,7 @@ class Trainer:
                 self.print_log(traceback.format_exc())
                 return False
             
+            # Load validation data
             self.print_log(f"Loading validation data for subjects: {self.val_subjects}")
             self.norm_val = split_by_subjects(builder, self.val_subjects, self.fuse)
             
@@ -444,6 +499,7 @@ class Trainer:
                 self.print_log("WARNING: No labels found in validation set")
             else:
                 try:
+                    # Create validation dataloader
                     self.data_loader['val'] = torch.utils.data.DataLoader(
                         dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_val),
                         batch_size=self.arg.val_batch_size,
@@ -455,6 +511,7 @@ class Trainer:
                     self.print_log(f"ERROR creating validation dataloader: {str(e)}")
                     self.print_log(traceback.format_exc())
             
+            # Load test data if subjects are provided
             if test_subjects:
                 self.print_log(f"Loading test data for subjects: {test_subjects}")
                 self.norm_test = split_by_subjects(builder, test_subjects, self.fuse)
@@ -465,9 +522,11 @@ class Trainer:
                     self.print_log("WARNING: No labels found in test set")
                 else:
                     try:
+                        # Create test dataloader
+                        test_batch_size = getattr(self.arg, 'test_batch_size', getattr(self.arg, 'val_batch_size', self.arg.batch_size))
                         self.data_loader['test'] = torch.utils.data.DataLoader(
                             dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
-                            batch_size=self.arg.test_batch_size or self.arg.val_batch_size or self.arg.batch_size,
+                            batch_size=test_batch_size,
                             shuffle=False,
                             num_workers=self.arg.num_worker,
                             collate_fn=getattr(Feeder, 'custom_collate_fn', None))
@@ -544,18 +603,25 @@ class Trainer:
         y_true, y_pred = [], []
         process = tqdm(loader, desc=f"Epoch {epoch+1}/{self.arg.num_epoch} (Train)")
         
+        # Reset filter cache at each epoch if not preserving state
+        if not self.filter_params.get('preserve_filter_state', True):
+            global FILTER_INSTANCES
+            FILTER_INSTANCES = {}
+        
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             with torch.no_grad():
+                # Handle input format conversion
                 if not isinstance(inputs, dict):
                     if torch.is_tensor(inputs) and len(inputs.shape) == 2:
                         inputs = inputs.unsqueeze(1)
                     inputs = {'accelerometer': inputs}
                 
+                # Ensure correct tensor dimensions and move to device
                 for key in inputs:
                     if torch.is_tensor(inputs[key]) and len(inputs[key].shape) == 2:
-                        seq_length = 1
                         inputs[key] = inputs[key].unsqueeze(1)
-                    inputs[key] = inputs[key].to(device).float() if torch.is_tensor(inputs[key]) else inputs[key]
+                    if torch.is_tensor(inputs[key]):
+                        inputs[key] = inputs[key].to(device).float()
                 
                 targets = targets.to(device)
                 gyro_data = inputs.get('gyroscope', None)
@@ -565,21 +631,35 @@ class Trainer:
                     self.print_log(f"ERROR: Missing accelerometer data in batch {batch_idx}")
                     continue
                     
+                # Generate quaternions if needed
                 quaternion = inputs.get('quaternion', None)
                 if quaternion is None and gyro_data is not None and self.filter_type != 'none':
                     batch_quaternions = []
+                    process_per_window = self.filter_params.get('process_per_window', True)
+                    
                     for i in range(len(idx)):
-                        subject_id = int(idx[i])
-                        action_id = int(targets[i].item())
-                        sample_acc = acc_data[i].cpu().numpy()
-                        sample_gyro = gyro_data[i].cpu().numpy()
-                        
-                        sample_quat = process_sequence_with_filter(
-                            sample_acc, sample_gyro, None, subject_id, action_id, 
-                            self.filter_type, self.filter_params, 
-                            self.use_cache, self.cache_dir, batch_idx * len(idx) + i
-                        )
-                        batch_quaternions.append(torch.from_numpy(sample_quat).float())
+                        try:
+                            subject_id = int(idx[i])
+                            action_id = int(targets[i].item())
+                            sample_acc = acc_data[i].cpu().numpy()
+                            sample_gyro = gyro_data[i].cpu().numpy()
+                            
+                            # Process each window with filter
+                            sample_quat = process_sequence_with_filter(
+                                sample_acc, sample_gyro, None, subject_id, action_id, 
+                                self.filter_type, self.filter_params, 
+                                self.use_cache, 
+                                os.path.join(self.cache_dir, self.filter_type), 
+                                batch_idx * len(idx) + i
+                            )
+                            batch_quaternions.append(torch.from_numpy(sample_quat).float())
+                        except Exception as e:
+                            self.print_log(f"Error processing window {i}: {str(e)}")
+                            # Create empty quaternion
+                            empty_quat = np.zeros((len(sample_acc), 4))
+                            empty_quat[:, 0] = 1.0  # w component = 1 for identity
+                            batch_quaternions.append(torch.from_numpy(empty_quat).float())
+                    
                     quaternion = torch.stack(batch_quaternions).to(device)
                     inputs['quaternion'] = quaternion
             
@@ -587,6 +667,7 @@ class Trainer:
             self.optimizer.zero_grad()
             
             try:
+                # Forward pass
                 if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
                     logits = self.model.forward_quaternion(acc_data, quaternion)
                 elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'): 
@@ -684,15 +765,18 @@ class Trainer:
         
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
+                # Handle input format conversion
                 if not isinstance(inputs, dict):
                     if torch.is_tensor(inputs) and len(inputs.shape) == 2:
                         inputs = inputs.unsqueeze(1)
                     inputs = {'accelerometer': inputs}
                 
+                # Ensure correct tensor dimensions and move to device
                 for key in inputs:
                     if torch.is_tensor(inputs[key]) and len(inputs[key].shape) == 2:
                         inputs[key] = inputs[key].unsqueeze(1)
-                    inputs[key] = inputs[key].to(device).float() if torch.is_tensor(inputs[key]) else inputs[key]
+                    if torch.is_tensor(inputs[key]):
+                        inputs[key] = inputs[key].to(device).float()
                 
                 targets = targets.to(device)
                 acc_data = inputs.get('accelerometer', None)
@@ -702,25 +786,40 @@ class Trainer:
                     self.print_log(f"ERROR: Missing accelerometer data in batch {batch_idx}")
                     continue
                     
+                # Generate quaternions if needed
                 quaternion = inputs.get('quaternion', None)
                 if quaternion is None and gyro_data is not None and self.filter_type != 'none':
                     batch_quaternions = []
+                    process_per_window = self.filter_params.get('process_per_window', True)
+                    
                     for i in range(len(idx)):
-                        subject_id = int(idx[i])
-                        action_id = int(targets[i].item())
-                        sample_acc = acc_data[i].cpu().numpy()
-                        sample_gyro = gyro_data[i].cpu().numpy()
-                        
-                        sample_quat = process_sequence_with_filter(
-                            sample_acc, sample_gyro, None, subject_id, action_id, 
-                            self.filter_type, self.filter_params,
-                            self.use_cache, self.cache_dir, batch_idx * len(idx) + i
-                        )
-                        batch_quaternions.append(torch.from_numpy(sample_quat).float())
+                        try:
+                            subject_id = int(idx[i])
+                            action_id = int(targets[i].item())
+                            sample_acc = acc_data[i].cpu().numpy()
+                            sample_gyro = gyro_data[i].cpu().numpy()
+                            
+                            # Process each window with filter
+                            sample_quat = process_sequence_with_filter(
+                                sample_acc, sample_gyro, None, subject_id, action_id, 
+                                self.filter_type, self.filter_params, 
+                                self.use_cache, 
+                                os.path.join(self.cache_dir, self.filter_type), 
+                                batch_idx * len(idx) + i
+                            )
+                            batch_quaternions.append(torch.from_numpy(sample_quat).float())
+                        except Exception as e:
+                            self.print_log(f"Error processing window {i}: {str(e)}")
+                            # Create empty quaternion
+                            empty_quat = np.zeros((len(sample_acc), 4))
+                            empty_quat[:, 0] = 1.0  # w component = 1 for identity
+                            batch_quaternions.append(torch.from_numpy(empty_quat).float())
+                    
                     quaternion = torch.stack(batch_quaternions).to(device)
                     inputs['quaternion'] = quaternion
                 
                 try:
+                    # Forward pass
                     if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
                         logits = self.model.forward_quaternion(acc_data, quaternion)
                     elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'):
@@ -799,11 +898,14 @@ class Trainer:
         self.train_loss_summary, self.val_loss_summary, self.train_metrics, self.val_metrics = [], [], [], []
         self.best_accuracy, self.best_f1, self.best_loss, self.patience_counter = 0, 0, float('inf'), 0
         
+        self.print_log(f"Creating new model instance for fold")
+        model_args = self.arg.model_args
+        
         if not self.load_data(train_subjects, test_subjects):
             self.print_log("ERROR: Failed to load data for fold")
             return None
         
-        self.model = self.load_model(self.arg.model, self.arg.model_args)
+        self.model = self.load_model(self.arg.model, model_args)
         if len(self.available_gpus) > 1 and self.arg.multi_gpu:
             self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
             
@@ -849,6 +951,10 @@ class Trainer:
             self.best_accuracy, self.best_f1, self.best_loss, self.patience_counter = 0, 0, float('inf'), 0
             self.print_log(f'Parameters:\n{str(vars(self.arg))}\n')
             
+            # Clear global filter instances to start fresh
+            global FILTER_INSTANCES
+            FILTER_INSTANCES = {}
+            
             if self.arg.rotate_tests or self.arg.test_combinations:
                 test_results_df = self.create_df()
                 
@@ -859,6 +965,9 @@ class Trainer:
                     
                     config_dir = os.path.join(self.arg.work_dir, f"test_config_{config_idx+1}")
                     os.makedirs(config_dir, exist_ok=True)
+                    
+                    # Clear filter instances between configurations
+                    FILTER_INSTANCES = {}
                     
                     test_metrics = self.run_fold(train_subjects, test_subjects, config_dir)
                     
@@ -908,6 +1017,9 @@ class Trainer:
                 results = []
                 for fold_idx, test_subjects in enumerate(fold_assignments):
                     self.print_log(f"\n{'='*20} Fold {fold_idx+1}/{len(fold_assignments)} {'='*20}")
+                    
+                    # Clear filter instances between folds
+                    FILTER_INSTANCES = {}
                     
                     train_subjects = self.permanent_train.copy()
                     for s in self.arg.subjects:
@@ -1018,34 +1130,10 @@ def main():
             if k not in key: 
                 arg.__dict__[k] = default_arg[k]
     
-    if isinstance(arg.model_args, str):
-        try:
-            arg.model_args = eval(arg.model_args)
-        except:
-            try:
-                arg.model_args = yaml.safe_load(arg.model_args)
-            except:
-                arg.model_args = {}
-    
-    if isinstance(arg.dataset_args, str):
-        try:
-            arg.dataset_args = eval(arg.dataset_args)
-        except:
-            try:
-                arg.dataset_args = yaml.safe_load(arg.dataset_args)
-            except:
-                arg.dataset_args = {}
-    
-    if not hasattr(arg, 'subjects') or not arg.subjects:
-        arg.subjects = [32, 39, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 29]
-    
-    if not hasattr(arg, 'val_subjects') or not arg.val_subjects:
-        arg.val_subjects = [38, 46]
-    
-    if not hasattr(arg, 'permanent_train') or not arg.permanent_train:
-        arg.permanent_train = [45, 36, 29]
-    
+    # Initialize seed
     init_seed(arg.seed)
+    
+    # Create and start trainer
     trainer = Trainer(arg)
     trainer.start()
 

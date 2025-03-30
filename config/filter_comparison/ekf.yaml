@@ -1,23 +1,23 @@
 model: Models.fusion_transformer.FusionTransModel
 dataset: smartfallmm
-
-subjects: [29, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 32, 39]
+subjects: [32, 39, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 29]
 val_subjects: [38, 46]
 permanent_train: [45, 36, 29]
+test_batch_size: 16
 
 model_args:
   num_layers: 3
-  embed_dim: 32
+  embed_dim: 48
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 4
+  num_heads: 8
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
-  feature_dim: 96
+  feature_dim: 144
 
 dataset_args:
   mode: 'sliding_window'
@@ -28,18 +28,21 @@ dataset_args:
   sensors: ['watch']
   fusion_options:
     enabled: true
-    filter_type: 'madgwick'  # Will be overriden in each experiment
+    filter_type: 'ekf'
+    process_per_window: true
+    preserve_filter_state: true
+    process_noise: 1e-5
+    measurement_noise: 0.05
     acc_threshold: 3.0
     gyro_threshold: 1.0
+    use_cache: true
+    cache_dir: "processed_data/ekf"
     visualize: false
     save_aligned: true
-    use_cache: true
-    cache_dir: "processed_data"
 
 batch_size: 16
-test_batch_size: 16
 val_batch_size: 16
-num_epoch: 60
+num_epoch: 100
 
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
@@ -56,16 +59,17 @@ test_feeder_args:
 
 seed: 42
 optimizer: adamw
-base_lr: 0.0005
+base_lr: 0.0001
 weight_decay: 0.001
-run_comparison: true
+rotate_tests: true
+test_combinations: true
 
 kfold:
   enabled: true
   num_folds: 5
   fold_assignments:
-    - [43, 35, 36]  # Fold 1: ~38.3% falls
-    - [44, 34, 32]  # Fold 2: ~39.7% falls
-    - [45, 37, 38]  # Fold 3: ~44.8% falls
-    - [46, 29, 31]  # Fold 4: ~41.4% falls
-    - [30, 39]      # Fold 5: ~43.3% falls
+    - [43, 35, 36]
+    - [44, 34, 32]
+    - [45, 37, 38]
+    - [46, 29, 31]
+    - [30, 39]

@@ -4,7 +4,7 @@ set -o pipefail
 set -u
 
 DEVICE="0,1"
-BASE_LR=0.0005
+BASE_LR=0.0001
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=100
 PATIENCE=15
@@ -52,6 +52,7 @@ dataset: smartfallmm
 subjects: [32, 39, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 29]
 val_subjects: [38, 46]
 permanent_train: [45, 36, 29]
+test_batch_size: ${BATCH_SIZE}
 
 model_args:
   num_layers: 3
@@ -77,7 +78,7 @@ dataset_args:
   fusion_options:
     enabled: true
     filter_type: '${filter_type}'
-    process_per_window: false
+    process_per_window: true
     preserve_filter_state: true
 EOF
 
@@ -115,7 +116,7 @@ EOF
     
     if [ "${CACHE_ENABLED}" = "true" ]; then
         cat >> "${output_file}" << EOF
-    use_cache: false
+    use_cache: true
     cache_dir: "${cache_dir}"
 EOF
     fi
@@ -268,6 +269,66 @@ EOF
     chmod +x "${UTILS_DIR}/compare_filters.py"
 }
 
+create_recovery_script() {
+    cat > "${UTILS_DIR}/recover_cv_summary.py" << 'EOF'
+#!/usr/bin/env python3
+import os, json, argparse, numpy as np, glob
+from typing import List, Dict, Any
+
+def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
+    fold_metrics = []
+    fold_dirs = sorted(glob.glob(os.path.join(output_dir, "fold_*")))
+    for i, fold_dir in enumerate(fold_dirs, 1):
+        results_file = os.path.join(fold_dir, "validation_results.json")
+        if os.path.exists(results_file):
+            try:
+                with open(results_file, 'r') as f: results = json.load(f)
+                results["fold"] = i
+                fold_metrics.append(results)
+                print(f"Loaded results from {results_file}")
+            except Exception as e:
+                print(f"Error loading {results_file}: {e}")
+    return fold_metrics
+
+def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> Dict[str, Any]:
+    if not fold_metrics:
+        return {"filter_type": filter_type, "average_metrics": {"accuracy": 0, "f1": 0, "precision": 0, "recall": 0, "balanced_accuracy": 0}, "fold_metrics": []}
+    
+    metrics = ["accuracy", "f1", "precision", "recall", "balanced_accuracy"]
+    avg_metrics = {}
+    
+    for metric in metrics:
+        values = [fold.get(metric, 0) for fold in fold_metrics]
+        if values:
+            avg_metrics[metric] = float(np.mean(values))
+            avg_metrics[f"{metric}_std"] = float(np.std(values))
+        else:
+            avg_metrics[metric] = 0
+            avg_metrics[f"{metric}_std"] = 0
+            
+    return {"filter_type": filter_type, "average_metrics": avg_metrics, "fold_metrics": fold_metrics}
+
+def main():
+    parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
+    parser.add_argument("--output-dir", required=True, help="Model output directory")
+    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, none)")
+    args = parser.parse_args()
+    
+    fold_metrics = load_fold_results(args.output_dir)
+    cv_summary = create_cv_summary(fold_metrics, args.filter_type)
+    
+    summary_path = os.path.join(args.output_dir, "test_summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump(cv_summary, f, indent=2)
+        
+    print(f"Recovered CV summary saved to {summary_path}")
+
+if __name__ == "__main__":
+    main()
+EOF
+    chmod +x "${UTILS_DIR}/recover_cv_summary.py"
+}
+
 train_filter_model() {
     local filter_type="$1"
     local config_file="$2"
@@ -292,8 +353,17 @@ train_filter_model() {
         --device 0 1 \
         --multi-gpu True \
         --patience ${PATIENCE} \
-        --parallel-threads 42 \
+        --filter-type "${filter_type}" \
+        --parallel-threads 32 \
         --num-epoch ${NUM_EPOCHS} 2>&1 | tee "${output_dir}/logs/training.log"
+    
+    # Attempt to recover CV summary if needed
+    if [ ! -f "${output_dir}/test_summary.json" ]; then
+        log "INFO" "Attempting to recover CV summary from fold results"
+        python "${UTILS_DIR}/recover_cv_summary.py" \
+               --output-dir "${output_dir}" \
+               --filter-type "${filter_type}"
+    fi
     
     log "INFO" "Training complete for ${filter_type} filter"
     return 0
@@ -306,6 +376,7 @@ run_filter_comparison() {
     echo "filter_type,accuracy,f1,precision,recall,balanced_accuracy" > "${REPORT_FILE}"
     
     create_comparison_script
+    create_recovery_script
     
     create_filter_config "madgwick" "${CONFIG_DIR}/madgwick.yaml"
     create_filter_config "kalman" "${CONFIG_DIR}/kalman.yaml"

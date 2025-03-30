@@ -1,0 +1,10 @@
+# Config for FusionTransformer with Kalman filter (Stateful, Linear Acc Input)
+model: Models.fusion_transformer.FusionTransModel
+dataset: smartfallmm
+subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32] # Same subjects
+model_args: {num_layers: 3, embed_dim: 48, acc_coords: 3, gyro_coords: 3, quat_coords: 4, num_classes: 2, acc_frames: 64, num_heads: 8, fusion_type: 'concat', dropout: 0.3, use_batch_norm: true, use_gyro: true}
+dataset_args: {mode: 'sliding_window', max_length: 64, task: 'fd', modalities: ['accelerometer', 'gyroscope'], age_group: ['young'], sensors: ['watch'], fusion_options: {enabled: true, filter_type: 'kalman', process_per_window: false, freq: 30.0}}
+batch_size: 16; num_epoch: 60; patience: 15
+feeder: Feeder.Make_Dataset.UTD_mm; train_feeder_args: {batch_size: 16, drop_last: true}; val_feeder_args: {batch_size: 16, drop_last: true}; test_feeder_args: {batch_size: 16, drop_last: false}
+seed: 42; optimizer: adamw; base_lr: 0.0005; weight_decay: 0.001
+kfold: {enabled: true, num_folds: 5, fold_assignments: [[43, 35, 36], [44, 34, 32], [45, 37, 38], [46, 29, 31], [30, 39]]}

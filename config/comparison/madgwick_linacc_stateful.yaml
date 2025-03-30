@@ -1,0 +1,64 @@
+# Config for FusionTransformer with Madgwick filter (Stateful, Linear Acc Input)
+model: Models.fusion_transformer.FusionTransModel
+dataset: smartfallmm
+
+# Use all fall detection subjects for robust CV
+subjects: [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 32]
+
+model_args:
+  num_layers: 3
+  embed_dim: 48       # Base embedding dim per modality
+  acc_coords: 3
+  gyro_coords: 3
+  quat_coords: 4
+  num_classes: 2
+  acc_frames: 64      # Input sequence length
+  num_heads: 8        # Heads for transformer
+  fusion_type: 'concat' # Fusion strategy
+  dropout: 0.3
+  use_batch_norm: true
+  use_gyro: true      # Use gyroscope data
+  # feature_dim: 144  # Calculated: embed_dim * 3 (acc+gyro+quat) for concat
+
+dataset_args:
+  mode: 'sliding_window'
+  max_length: 64     # Corresponds to acc_frames
+  task: 'fd'         # Fall detection task
+  modalities: ['accelerometer', 'gyroscope'] # Input modalities needed for fusion
+  age_group: ['young']
+  sensors: ['watch']
+  fusion_options:
+    enabled: true              # Enable fusion pipeline
+    filter_type: 'madgwick'    # Specify Madgwick filter
+    process_per_window: false  # IMPORTANT: Enables STATEFUL filtering
+    # filter_params (optional, example for madgwick):
+    beta: 0.1                  # Madgwick filter parameter
+    freq: 30.0                 # Approximate sensor frequency for filter dt
+
+# Training Params
+batch_size: 16
+num_epoch: 60
+patience: 15 # For early stopping
+
+# Dataloader
+feeder: Feeder.Make_Dataset.UTD_mm
+train_feeder_args: { batch_size: 16, drop_last: true }
+val_feeder_args:   { batch_size: 16, drop_last: true }
+test_feeder_args:  { batch_size: 16, drop_last: false }
+
+# Optimizer
+seed: 42
+optimizer: adamw
+base_lr: 0.0005
+weight_decay: 0.001
+
+# Cross-validation
+kfold:
+  enabled: true
+  num_folds: 5
+  fold_assignments: # Same folds for fair comparison
+    - [43, 35, 36]
+    - [44, 34, 32]
+    - [45, 37, 38]
+    - [46, 29, 31]
+    - [30, 39]
