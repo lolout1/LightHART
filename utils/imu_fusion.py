@@ -24,7 +24,25 @@ MAX_THREADS = 40
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 file_semaphore = threading.Semaphore(40)
 filter_cache = {}
-
+def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None):
+    from utils.imu_fusion import MadgwickFilter, KalmanFilter, ExtendedKalmanFilter
+    key = f"{subject_id}_{action_id}_{filter_type}"
+    if key not in FILTER_INSTANCES:
+        print(f"Creating new filter instance for {key}")
+        if filter_type == 'madgwick':
+            beta = filter_params.get('beta', 0.1) if filter_params else 0.1
+            FILTER_INSTANCES[key] = MadgwickFilter(beta=beta)
+        elif filter_type == 'kalman':
+            process_noise = filter_params.get('process_noise', 5e-5) if filter_params else 5e-5
+            measurement_noise = filter_params.get('measurement_noise', 0.1) if filter_params else 0.1
+            FILTER_INSTANCES[key] = KalmanFilter(process_noise=process_noise, measurement_noise=measurement_noise)
+        elif filter_type == 'ekf':
+            process_noise = filter_params.get('process_noise', 1e-5) if filter_params else 1e-5
+            measurement_noise = filter_params.get('measurement_noise', 0.05) if filter_params else 0.05
+            FILTER_INSTANCES[key] = ExtendedKalmanFilter(process_noise=process_noise, measurement_noise=measurement_noise)
+        else:
+            FILTER_INSTANCES[key] = MadgwickFilter()
+    return FILTER_INSTANCES[key]
 def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray, time_tolerance: float = 0.05) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     try:
         logger.info(f"Starting sensor alignment: acc shape={acc_data.shape}, gyro shape={gyro_data.shape}")
@@ -76,6 +94,34 @@ def align_sensor_data(acc_data: np.ndarray, gyro_data: np.ndarray, time_toleranc
         acc_times_np = np.array([t.astype('int64') if hasattr(t, 'astype') else t for t in acc_times])
         gyro_times_np = np.array([t.astype('int64') if hasattr(t, 'astype') else t for t in gyro_times])
         
+        # Try interpolation approach for better alignment
+        try:
+            # Create timestamps for aligned data - use the higher frequency dataset
+            if len(acc_times) >= len(gyro_times):
+                aligned_times = acc_times
+                # Interpolate gyro data to match acc timestamps
+                gyro_interp = interp1d(gyro_times_np, gyro_values, axis=0, bounds_error=False, fill_value="extrapolate")
+                aligned_gyro = gyro_interp(acc_times_np)
+                aligned_acc = acc_values
+            else:
+                aligned_times = gyro_times
+                # Interpolate acc data to match gyro timestamps
+                acc_interp = interp1d(acc_times_np, acc_values, axis=0, bounds_error=False, fill_value="extrapolate")
+                aligned_acc = acc_interp(gyro_times_np)
+                aligned_gyro = gyro_values
+                
+            # Filter out any NaN values that might have been created
+            valid_indices = ~(np.isnan(aligned_acc).any(axis=1) | np.isnan(aligned_gyro).any(axis=1))
+            aligned_acc = aligned_acc[valid_indices]
+            aligned_gyro = aligned_gyro[valid_indices]
+            aligned_times = np.array(aligned_times)[valid_indices]
+            
+            if len(aligned_acc) > 0:
+                return aligned_acc, aligned_gyro, aligned_times
+        except Exception as e:
+            logger.warning(f"Interpolation failed, falling back to nearest match: {str(e)}")
+            
+        # Fallback to nearest match approach
         for i, acc_time in enumerate(acc_times):
             time_diffs = np.abs(gyro_times - acc_time)
             closest_idx = np.argmin(time_diffs)
@@ -144,6 +190,9 @@ class OrientationEstimator:
             elif timestamp is not None:
                 self.last_time = timestamp
             
+            if dt <= 0 or dt > 1.0:  # Sanity check for time delta
+                dt = 1.0 / self.freq
+                
             new_orientation = self._update_impl(acc, gyro, dt)
             
             norm = np.linalg.norm(new_orientation)
@@ -170,18 +219,31 @@ class MadgwickFilter(OrientationEstimator):
     def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
         q = self.orientation_q
         
+        # Normalize accelerometer data
         acc_norm = np.linalg.norm(acc)
         if acc_norm < 1e-10:
-            return q
+            # Create quaternion derivative from gyroscope only
+            qDot = 0.5 * np.array([
+                -q[1] * gyro[0] - q[2] * gyro[1] - q[3] * gyro[2],
+                q[0] * gyro[0] + q[2] * gyro[2] - q[3] * gyro[1],
+                q[0] * gyro[1] - q[1] * gyro[2] + q[3] * gyro[0],
+                q[0] * gyro[2] + q[1] * gyro[1] - q[2] * gyro[0]
+            ])
+            
+            # Integrate to yield quaternion
+            q = q + qDot * dt
+            return q / np.linalg.norm(q)
         
         acc_norm = acc / acc_norm
         
         q0, q1, q2, q3 = q
         
+        # Estimate direction of gravity from current orientation
         f1 = 2.0 * (q1 * q3 - q0 * q2) - acc_norm[0]
         f2 = 2.0 * (q0 * q1 + q2 * q3) - acc_norm[1]
         f3 = 2.0 * (0.5 - q1 * q1 - q2 * q2) - acc_norm[2]
         
+        # Compute and normalize gradient
         J_t = np.array([
             [-2.0*q2, 2.0*q3, -2.0*q0, 2.0*q1],
             [2.0*q1, 2.0*q0, 2.0*q3, 2.0*q2],
@@ -192,6 +254,7 @@ class MadgwickFilter(OrientationEstimator):
         grad_norm = np.linalg.norm(grad)
         grad = grad / grad_norm if grad_norm > 0 else grad
         
+        # Compute quaternion derivative from gyroscope
         qDot = 0.5 * np.array([
             -q1 * gyro[0] - q2 * gyro[1] - q3 * gyro[2],
             q0 * gyro[0] + q2 * gyro[2] - q3 * gyro[1],
@@ -199,77 +262,102 @@ class MadgwickFilter(OrientationEstimator):
             q0 * gyro[2] + q1 * gyro[1] - q2 * gyro[0]
         ])
         
+        # Subtract gradient component
         qDot = qDot - self.beta * grad
         
+        # Integrate to yield quaternion
         q = q + qDot * dt
         q = q / np.linalg.norm(q)
         
         return q
 
 class KalmanFilter(OrientationEstimator):
-    def __init__(self, freq: float = 30.0):
+    def __init__(self, freq: float = 30.0, process_noise: float = 1e-4, measurement_noise: float = 0.1):
         super().__init__(freq)
         
-        self.state_dim = 7
+        self.state_dim = 7  # quaternion (4) + gyro bias (3)
         self.x = np.zeros(self.state_dim)
-        self.x[0] = 1.0
+        self.x[0] = 1.0  # Initialize quaternion to identity rotation
         
-        self.Q = np.eye(self.state_dim) * 1e-4
-        self.Q[:4, :4] *= 1e-6
-        self.Q[4:, 4:] *= 1e-3
+        # Process noise covariance matrix
+        self.Q = np.eye(self.state_dim) * process_noise
+        self.Q[:4, :4] *= 0.01  # Lower noise for quaternion components
+        self.Q[4:, 4:] *= 10.0  # Higher noise for bias components
         
-        self.R = np.eye(3) * 0.1
+        # Measurement noise covariance matrix
+        self.R = np.eye(3) * measurement_noise
         
+        # Initial error covariance matrix
         self.P = np.eye(self.state_dim) * 1e-2
     
     def _update_impl(self, acc: np.ndarray, gyro: np.ndarray, dt: float) -> np.ndarray:
         q = self.x[:4]
         bias = self.x[4:]
         
+        # Normalize quaternion
         q_norm = np.linalg.norm(q)
         if q_norm > 0:
             q = q / q_norm
         
+        # Correct gyro measurement with estimated bias
         gyro_corrected = gyro - bias
         
+        # Create quaternion derivative from corrected gyro
         omega = np.array([0, gyro_corrected[0], gyro_corrected[1], gyro_corrected[2]])
         q_dot = 0.5 * self._quaternion_multiply(q, omega)
         
+        # State transition matrix
         F = np.eye(self.state_dim)
         F[:4, :4] += 0.5 * dt * self._omega_matrix(gyro_corrected)
         
+        # Predict state
         x_pred = self.x.copy()
         x_pred[:4] = q + q_dot * dt
-        x_pred[4:] = bias
+        x_pred[4:] = bias  # Bias random walk model
         
+        # Normalize predicted quaternion
         q_norm = np.linalg.norm(x_pred[:4])
         if q_norm > 0:
             x_pred[:4] = x_pred[:4] / q_norm
         
+        # Predict error covariance
         P_pred = F @ self.P @ F.T + self.Q
         
+        # Update step - only if we have valid accelerometer data
         acc_norm = np.linalg.norm(acc)
         if acc_norm > 1e-10:
-            acc_norm = acc / acc_norm
+            acc_normalized = acc / acc_norm
             
+            # Convert quaternion to rotation matrix
             R_q = self._quaternion_to_rotation_matrix(x_pred[:4])
+            
+            # Predicted gravity direction
             g_pred = R_q @ np.array([0, 0, 1])
             
-            y = acc_norm - g_pred
+            # Measurement residual
+            y = acc_normalized - g_pred
             
+            # Measurement Jacobian
             H = self._compute_H_matrix(x_pred[:4])
             
+            # Innovation covariance
             S = H @ P_pred @ H.T + self.R
             
+            # Kalman gain
             K = P_pred @ H.T @ np.linalg.inv(S)
             
+            # Update state
             self.x = x_pred + K @ y
             
-            self.P = (np.eye(self.state_dim) - K @ H) @ P_pred
+            # Update error covariance (Joseph form for numerical stability)
+            I_KH = np.eye(self.state_dim) - K @ H
+            self.P = I_KH @ P_pred @ I_KH.T + K @ self.R @ K.T
         else:
+            # No measurement update
             self.x = x_pred
             self.P = P_pred
         
+        # Ensure quaternion is normalized
         q_norm = np.linalg.norm(self.x[:4])
         if q_norm > 0:
             self.x[:4] = self.x[:4] / q_norm
@@ -328,7 +416,7 @@ class KalmanFilter(OrientationEstimator):
         return H
 
 class ExtendedKalmanFilter(OrientationEstimator):
-    def __init__(self, freq: float = 30.0):
+    def __init__(self, freq: float = 30.0, process_noise: float = 1e-5, measurement_noise: float = 0.05):
         super().__init__(freq)
         
         # State vector: [quaternion, gyro_bias]
@@ -337,12 +425,12 @@ class ExtendedKalmanFilter(OrientationEstimator):
         self.x[0] = 1.0  # Initialize quaternion to identity rotation
         
         # Process noise covariance
-        self.Q = np.eye(self.state_dim) * 1e-5
-        self.Q[:4, :4] *= 1e-6  # Lower noise for quaternion components
-        self.Q[4:, 4:] *= 1e-4  # Higher noise for bias components
+        self.Q = np.eye(self.state_dim) * process_noise
+        self.Q[:4, :4] *= 0.1  # Lower noise for quaternion components
+        self.Q[4:, 4:] *= 10.0  # Higher noise for bias components
         
         # Measurement noise covariance
-        self.R = np.eye(3) * 0.1
+        self.R = np.eye(3) * measurement_noise
         
         # Error covariance matrix
         self.P = np.eye(self.state_dim) * 1e-2
@@ -385,15 +473,15 @@ class ExtendedKalmanFilter(OrientationEstimator):
             
             # Update step using accelerometer (only if magnitude is close to gravity)
             acc_norm = np.linalg.norm(acc)
-            if 0.8 < acc_norm < 1.2:  # Only update when acceleration is ~1g
-                acc_norm = acc / acc_norm
+            if 0.5 < acc_norm < 1.5:  # More lenient check for acceleration near gravity
+                acc_normalized = acc / acc_norm
                 
                 # Predict gravity direction from current orientation
                 R_q = self._quaternion_to_rotation_matrix(x_pred[:4])
                 g_pred = R_q @ self.g_ref
                 
                 # Measurement residual
-                z = acc_norm
+                z = acc_normalized
                 h = g_pred
                 y = z - h
                 
@@ -590,14 +678,20 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray, timestamps=Non
             gyro = gyro_data[i]
             timestamp = timestamps[i] if timestamps is not None else None
             
-            gravity_direction = np.array([0, 0, 9.81])
-            if i > 0 and len(quaternions) > 0:
+            # For the first sample or if using a new filter
+            if i == 0 or reset_filter:
+                gravity_direction = np.array([0, 0, 9.81])
+            else:
+                # Use previous orientation to estimate gravity direction
                 last_q = quaternions[-1]
                 r = Rotation.from_quat([last_q[1], last_q[2], last_q[3], last_q[0]])
                 gravity_direction = r.inv().apply([0, 0, 9.81])
                 
+            # Create normalized acceleration with gravity for orientation estimation
             acc_with_gravity = acc + gravity_direction
-            acc_with_gravity = acc_with_gravity / np.linalg.norm(acc_with_gravity)
+            norm = np.linalg.norm(acc_with_gravity)
+            if norm > 1e-6:
+                acc_with_gravity = acc_with_gravity / norm
             
             q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
             quaternions.append(q)
@@ -608,99 +702,275 @@ def process_imu_data(acc_data: np.ndarray, gyro_data: np.ndarray, timestamps=Non
         logger.error(f"Error in IMU processing: {str(e)}")
         return {'quaternion': np.zeros((len(acc_data), 4))}
 
+def extract_features_from_window(window_data):
+    """Extract features from sensor data window for fusion"""
+    acc = window_data.get('accelerometer')
+    gyro = window_data.get('gyroscope')
+    quat = window_data.get('quaternion')
+    
+    features = []
+    
+    if acc is not None and len(acc) > 0:
+        # Time domain features from accelerometer
+        acc_mean = np.mean(acc, axis=0)
+        acc_std = np.std(acc, axis=0)
+        acc_min = np.min(acc, axis=0)
+        acc_max = np.max(acc, axis=0)
+        acc_energy = np.sum(acc**2, axis=0) / len(acc)
+        
+        features.extend(acc_mean)
+        features.extend(acc_std)
+        features.extend(acc_max - acc_min)
+        features.extend(acc_energy)
+    
+    if gyro is not None and len(gyro) > 0:
+        # Time domain features from gyroscope
+        gyro_mean = np.mean(gyro, axis=0)
+        gyro_std = np.std(gyro, axis=0)
+        gyro_min = np.min(gyro, axis=0)
+        gyro_max = np.max(gyro, axis=0)
+        gyro_energy = np.sum(gyro**2, axis=0) / len(gyro)
+        
+        features.extend(gyro_mean)
+        features.extend(gyro_std)
+        features.extend(gyro_max - gyro_min)
+        features.extend(gyro_energy)
+    
+    if quat is not None and len(quat) > 0:
+        # Quaternion features
+        quat_mean = np.mean(quat, axis=0)
+        quat_std = np.std(quat, axis=0)
+        quat_min = np.min(quat, axis=0)
+        quat_max = np.max(quat, axis=0)
+        
+        features.extend(quat_mean)
+        features.extend(quat_std)
+        features.extend(quat_max - quat_min)
+        
+        # Angular velocity from quaternions
+        if len(quat) > 1:
+            angular_vel = []
+            for i in range(1, len(quat)):
+                # Compute quaternion difference
+                q1 = quat[i-1]
+                q2 = quat[i]
+                # Convert to rotation objects
+                r1 = Rotation.from_quat([q1[1], q1[2], q1[3], q1[0]])
+                r2 = Rotation.from_quat([q2[1], q2[2], q2[3], q2[0]])
+                # Get relative rotation
+                r_diff = r2 * r1.inv()
+                # Convert to axis-angle
+                angle = 2 * np.arccos(np.clip(np.abs(r_diff.as_quat()[-1]), 0, 1))
+                angular_vel.append(angle)
+            
+            # Angular velocity statistics
+            if angular_vel:
+                features.append(np.mean(angular_vel))
+                features.append(np.std(angular_vel))
+                features.append(np.max(angular_vel))
+    
+    return np.array(features)
+
+def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_id=0, action_id=0, 
+                              filter_type='madgwick', filter_params=None, use_cache=True, 
+                              cache_dir="processed_data", window_id=0):
+    cache_key = f"S{subject_id:02d}A{action_id:02d}W{window_id:04d}_{filter_type}"
+    if use_cache:
+        cache_path = os.path.join(cache_dir, f"{cache_key}.npz")
+        if os.path.exists(cache_path):
+            try:
+                cached_data = np.load(cache_path)
+                return cached_data['quaternion']
+            except Exception:
+                pass
+    
+    # Get or create a persistent filter instance for this subject-action pair
+    # This ensures state is preserved across windows from the same sequence
+    orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
+    quaternions = np.zeros((len(acc_data), 4))
+    
+    # Process each sample in the window, maintaining state between samples
+    for i in range(len(acc_data)):
+        acc = acc_data[i]
+        gyro = gyro_data[i]
+        timestamp = timestamps[i] if timestamps is not None else None
+        
+        # Use estimated gravity from previous orientation
+        gravity_direction = np.array([0, 0, 9.81])
+        if i > 0:
+            r = Rotation.from_quat([quaternions[i-1, 1], quaternions[i-1, 2], quaternions[i-1, 3], quaternions[i-1, 0]])
+            gravity_direction = r.inv().apply([0, 0, 9.81])
+            
+        acc_with_gravity = acc + gravity_direction
+        norm = np.linalg.norm(acc_with_gravity)
+        if norm > 1e-6:
+            acc_with_gravity = acc_with_gravity / norm
+            
+        # Update filter with current sensor data, preserving state
+        q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
+        quaternions[i] = q
+    
+    # Cache the results for this window
+    if use_cache:
+        os.makedirs(os.path.dirname(os.path.join(cache_dir, f"{cache_key}.npz")), exist_ok=True)
+        try:
+            np.savez_compressed(os.path.join(cache_dir, f"{cache_key}.npz"), 
+                               quaternion=quaternions, 
+                               window_id=window_id,
+                               subject_id=subject_id,
+                               action_id=action_id)
+        except Exception as e:
+            print(f"Warning: Failed to cache window {window_id}: {str(e)}")
+    
+    return quaternions
 def preprocess_all_subjects(subjects, filter_type, output_dir, max_length=64):
     logger.info(f"Preprocessing all subjects with {filter_type} filter")
     
-    from utils.dataset import prepare_smartfallmm
-    import argparse
+    from utils.dataset import SmartFallMM
     
-    args = argparse.Namespace()
-    args.dataset = 'smartfallmm'
-    args.dataset_args = {
-        'mode': 'sliding_window',
-        'max_length': max_length,
-        'task': 'fd',
-        'modalities': ['accelerometer', 'gyroscope'],
-        'age_group': ['young'],
-        'sensors': ['watch'],
-        'fusion_options': {
-            'enabled': True,
-            'filter_type': filter_type,
-            'acc_threshold': 3.0,
-            'gyro_threshold': 1.0,
-            'visualize': False,
-            'save_aligned': True,
-            'use_cache': True,
-            'cache_dir': output_dir,
-        }
-    }
+    os.makedirs(output_dir, exist_ok=True)
     
-    builder = prepare_smartfallmm(args)
+    dataset = SmartFallMM(
+        root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'),
+        fusion_options={'filter_type': filter_type}
+    )
     
-    for subject_id in tqdm(subjects, desc=f"Preprocessing subjects ({filter_type})"):
-        subject_dir = os.path.join(output_dir, f"S{subject_id:02d}")
-        os.makedirs(subject_dir, exist_ok=True)
-        
-        subject_trials = [trial for trial in builder.dataset.matched_trials if trial.subject_id == subject_id]
-        
-        for trial in tqdm(subject_trials, desc=f"Subject {subject_id} trials", leave=False):
-            action_id = trial.action_id
-            trial_id = f"S{subject_id:02d}A{action_id:02d}"
+    dataset.pipe_line(
+        age_group=['young'],
+        modalities=['accelerometer', 'gyroscope'],
+        sensors=['watch']
+    )
+    
+    # Count total trials for progress reporting
+    total_trials = sum(1 for subject_id in subjects for trial in dataset.matched_trials if trial.subject_id == subject_id)
+    
+    # Global filter cache to maintain state across processing
+    global FILTER_INSTANCES
+    FILTER_INSTANCES = {}
+    
+    processed_count = 0
+    with tqdm(total=total_trials, desc=f"Preprocessing all subjects ({filter_type})") as pbar:
+        for subject_id in subjects:
+            subject_dir = os.path.join(output_dir, f"S{subject_id:02d}")
+            os.makedirs(subject_dir, exist_ok=True)
             
-            trial_data = {}
-            try:
-                for modality_name, file_path in trial.files.items():
-                    file_type = file_path.split('.')[-1]
-                    if file_type == 'csv':
-                        try:
-                            file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
-                        except:
-                            file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
-                        
-                        if 'skeleton' in file_path:
-                            cols = 96
-                        else:
-                            if file_data.shape[1] > 4:
-                                cols = file_data.shape[1] - 3
-                                file_data = file_data.iloc[:, 3:]
-                            else:
-                                cols = 3
-                        
-                        if file_data.shape[0] > 2:
-                            data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
-                        else:
-                            data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
-                        
-                        trial_data[modality_name] = data
+            # Get all trials for this subject
+            subject_trials = [trial for trial in dataset.matched_trials if trial.subject_id == subject_id]
+            
+            for trial in subject_trials:
+                processed_count += 1
+                pbar.update(1)
                 
-                if 'accelerometer' in trial_data and 'gyroscope' in trial_data:
-                    acc_data = trial_data['accelerometer']
-                    gyro_data = trial_data['gyroscope']
-                    
-                    # Align sensor data
-                    aligned_acc, aligned_gyro, timestamps = align_sensor_data(acc_data, gyro_data)
-                    
-                    if len(aligned_acc) > 0 and len(aligned_gyro) > 0:
-                        # Process with orientation filter
-                        result = process_imu_data(
-                            aligned_acc, aligned_gyro, timestamps,
-                            filter_type=filter_type, 
-                            trial_id=trial_id, 
-                            reset_filter=True
-                        )
+                action_id = trial.action_id
+                trial_id = f"S{subject_id:02d}A{action_id:02d}"
+                
+                trial_data = {}
+                try:
+                    if not ('accelerometer' in trial.files and 'gyroscope' in trial.files):
+                        continue
                         
-                        # Save processed data
-                        output_file = os.path.join(subject_dir, f"{trial_id}.npz")
-                        np.savez_compressed(
-                            output_file,
-                            accelerometer=aligned_acc,
-                            gyroscope=aligned_gyro,
-                            quaternion=result['quaternion'],
-                            timestamps=timestamps,
-                            filter_type=filter_type
-                        )
-            except Exception as e:
-                logger.error(f"Error processing trial {trial_id}: {str(e)}")
-                continue
+                    for modality_name, file_path in trial.files.items():
+                        if modality_name in ['accelerometer', 'gyroscope']:
+                            try:
+                                file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
+                                if file_data.shape[1] > 4:
+                                    cols = file_data.shape[1] - 3
+                                    file_data = file_data.iloc[:, 3:]
+                                else:
+                                    cols = 3
+                                
+                                if file_data.shape[0] > 2:
+                                    data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
+                                else:
+                                    data = file_data.iloc[:, -cols:].to_numpy(dtype=np.float32)
+                                
+                                trial_data[modality_name] = data
+                            except Exception as e:
+                                logger.error(f"Error loading {modality_name} data: {str(e)}")
+                                continue
+                    
+                    if 'accelerometer' in trial_data and 'gyroscope' in trial_data:
+                        acc_data = trial_data['accelerometer']
+                        gyro_data = trial_data['gyroscope']
+                        
+                        # Align sensor data
+                        aligned_acc, aligned_gyro, timestamps = align_sensor_data(acc_data, gyro_data)
+                        
+                        if len(aligned_acc) > 0 and len(aligned_gyro) > 0:
+                            # Create or get filter for this trial
+                            filter_key = f"{subject_id}_{action_id}_{filter_type}"
+                            if filter_key not in FILTER_INSTANCES:
+                                if filter_type == 'madgwick':
+                                    FILTER_INSTANCES[filter_key] = MadgwickFilter()
+                                elif filter_type == 'kalman':
+                                    FILTER_INSTANCES[filter_key] = KalmanFilter()
+                                elif filter_type == 'ekf':
+                                    FILTER_INSTANCES[filter_key] = ExtendedKalmanFilter()
+                                else:
+                                    FILTER_INSTANCES[filter_key] = MadgwickFilter()
+                            
+                            orientation_filter = FILTER_INSTANCES[filter_key]
+                            
+                            # Process data in windows
+                            window_size = max_length
+                            num_windows = (len(aligned_acc) + window_size - 1) // window_size
+                            
+                            all_quaternions = []
+                            for i in range(num_windows):
+                                start_idx = i * window_size
+                                end_idx = min(start_idx + window_size, len(aligned_acc))
+                                
+                                window_acc = aligned_acc[start_idx:end_idx]
+                                window_gyro = aligned_gyro[start_idx:end_idx]
+                                window_time = timestamps[start_idx:end_idx] if timestamps is not None else None
+                                
+                                # Process window
+                                quaternions = []
+                                for j in range(len(window_acc)):
+                                    acc = window_acc[j]
+                                    gyro = window_gyro[j]
+                                    t = window_time[j] if window_time is not None else None
+                                    
+                                    gravity_direction = np.array([0, 0, 9.81])
+                                    if all_quaternions and len(all_quaternions) > 0:
+                                        last_q = all_quaternions[-1]
+                                        r = Rotation.from_quat([last_q[1], last_q[2], last_q[3], last_q[0]])
+                                        gravity_direction = r.inv().apply([0, 0, 9.81])
+                                    
+                                    acc_with_gravity = acc + gravity_direction
+                                    norm = np.linalg.norm(acc_with_gravity)
+                                    if norm > 1e-6:
+                                        acc_with_gravity = acc_with_gravity / norm
+                                    
+                                    # Use the same filter instance to maintain state
+                                    q = orientation_filter.update(acc_with_gravity, gyro, t)
+                                    quaternions.append(q)
+                                    all_quaternions.append(q)
+                                
+                                # Save window data
+                                window_output_file = os.path.join(subject_dir, f"{trial_id}_W{i:04d}.npz")
+                                np.savez_compressed(
+                                    window_output_file,
+                                    accelerometer=window_acc,
+                                    gyroscope=window_gyro,
+                                    quaternion=np.array(quaternions),
+                                    timestamps=window_time,
+                                    window_id=i,
+                                    filter_type=filter_type
+                                )
+                            
+                            # Also save the complete sequence data
+                            output_file = os.path.join(subject_dir, f"{trial_id}.npz")
+                            np.savez_compressed(
+                                output_file,
+                                accelerometer=aligned_acc,
+                                gyroscope=aligned_gyro,
+                                quaternion=np.array(all_quaternions),
+                                timestamps=timestamps,
+                                filter_type=filter_type
+                            )
+                except Exception as e:
+                    logger.error(f"Error processing trial {trial_id}: {str(e)}")
+                    continue
     
-    logger.info(f"Preprocessing complete for all subjects with {filter_type} filter")
+    logger.info(f"Preprocessing complete: processed {processed_count}/{total_trials} trials")

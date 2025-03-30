@@ -9,6 +9,7 @@ from utils.imu_fusion import (
     process_imu_data, 
     align_sensor_data, 
     preprocess_all_subjects,
+    extract_features_from_window
 )
 import logging
 
@@ -163,7 +164,8 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
                     all_subjects.append(trial.subject_id)
             
             # Preprocess all subjects once
-            preprocess_all_subjects(all_subjects, filter_type, cache_dir, builder.max_length)
+            full_cache_dir = os.path.join(cache_dir, filter_type)
+            preprocess_all_subjects(all_subjects, filter_type, full_cache_dir, builder.max_length)
         
         # Now make dataset will use the cached data
         builder.make_dataset(subjects, True, filter_type=filter_type)
@@ -171,4 +173,15 @@ def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
         builder.make_dataset(subjects, fuse)
     
     norm_data = builder.normalization()
+    
+    # Add validation to ensure data is properly shaped
+    for key in norm_data:
+        if key != 'labels' and len(norm_data[key]) > 0:
+            # Ensure data is 3D for sequences
+            if len(norm_data[key].shape) == 2:
+                # Add sequence dimension if missing
+                logger.warning(f"Adding missing sequence dimension to {key} data")
+                samples, features = norm_data[key].shape
+                norm_data[key] = norm_data[key].reshape(samples, 1, features)
+    
     return norm_data

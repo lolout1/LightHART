@@ -1,7 +1,3 @@
-# Models/fusion_transformer.py - Transformer-based sensor fusion architecture for IMU data
-# Strengths: Handles variable-length sequences, cross-modality attention, flexible fusion types
-# Limitations: Memory usage scales with sequence length, requires quality orientation estimation
-
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -26,6 +22,7 @@ class FusionTransModel(nn.Module):
         self.num_classes = num_classes
         self.seq_len = self.acc_frames
         
+        # Encoder for accelerometer data
         self.acc_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -34,7 +31,8 @@ class FusionTransModel(nn.Module):
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
         )
-
+        
+        # Encoder for gyroscope data
         self.gyro_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -43,7 +41,8 @@ class FusionTransModel(nn.Module):
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
         )
-
+        
+        # Encoder for quaternion data
         self.quat_encoder = nn.Sequential(
             nn.Conv1d(quat_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -52,10 +51,12 @@ class FusionTransModel(nn.Module):
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
             nn.GELU()
         )
-
+        
+        # Determine feature dimensions based on fusion type
         if feature_dim is None:
             if fusion_type == 'concat': self.feature_dim = embed_dim * 3
             elif fusion_type in ['attention', 'weighted']: self.feature_dim = embed_dim
+            elif fusion_type == 'acc_only': self.feature_dim = embed_dim
             else:
                 logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'concat'")
                 self.fusion_type = 'concat'
@@ -64,22 +65,26 @@ class FusionTransModel(nn.Module):
             
         self.feature_adapter = nn.Linear(self.feature_dim, self.feature_dim)
         
+        # Attention mechanism for fusion
         if fusion_type == 'attention':
             self.attention_proj_q = nn.Linear(embed_dim, embed_dim)
             self.attention_proj_k = nn.Linear(embed_dim * 2, embed_dim)
             self.attention_proj_v = nn.Linear(embed_dim * 2, embed_dim)
         
+        # Weighted fusion parameters
         if fusion_type == 'weighted':
             self.acc_weight = nn.Parameter(torch.ones(1))
             self.gyro_weight = nn.Parameter(torch.ones(1))
             self.quat_weight = nn.Parameter(torch.ones(1))
         
+        # Adjust number of heads if needed
         if self.feature_dim % num_heads != 0:
             adjusted_heads = max(1, self.feature_dim // (self.feature_dim // num_heads))
             if adjusted_heads != num_heads:
                 logger.info(f"Adjusting heads from {num_heads} to {adjusted_heads} to match feature dimension")
             num_heads = adjusted_heads
             
+        # Transformer encoder
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=self.feature_dim, nhead=num_heads, dim_feedforward=self.feature_dim * 4,
             dropout=dropout, activation='gelu', batch_first=True, norm_first=True
@@ -89,10 +94,12 @@ class FusionTransModel(nn.Module):
             encoder_layer=encoder_layers, num_layers=num_layers, 
             norm=nn.LayerNorm(self.feature_dim)
         )
-
+        
+        # Optional attention pooling
         self.attn_pool = fusion_type == 'attention'
         if self.attn_pool: self.attn_pool = nn.Linear(self.feature_dim, 1)
         
+        # Classification head
         self.classifier = nn.Sequential(
             nn.Linear(self.feature_dim, 128),
             nn.LayerNorm(128) if use_batch_norm else nn.Identity(),
@@ -115,19 +122,33 @@ class FusionTransModel(nn.Module):
 
     def forward_all_modalities(self, acc_data, gyro_data, quat_data=None):
         try:
+            # Handle accelerometer data
+            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
+            # Handle gyroscope data
+            if len(gyro_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                gyro_data = gyro_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+                
             gyro_data = rearrange(gyro_data, 'b l c -> b c l')
             gyro_features = self.gyro_encoder(gyro_data)
             gyro_features = rearrange(gyro_features, 'b c l -> b l c')
             
+            # Handle quaternion data
             if quat_data is not None and not torch.all(quat_data == 0):
+                if len(quat_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                    quat_data = quat_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+                
+                # Normalize quaternions
                 quat_norm = torch.norm(quat_data, dim=2, keepdim=True)
                 quat_norm = torch.where(quat_norm > 1e-8, quat_norm, torch.ones_like(quat_norm))
                 quat_data = quat_data / quat_norm
                 
+                # Ensure consistent quaternion sign
                 for b in range(quat_data.shape[0]):
                     for i in range(1, quat_data.shape[1]):
                         dot_product = torch.sum(quat_data[b, i-1] * quat_data[b, i])
@@ -137,9 +158,11 @@ class FusionTransModel(nn.Module):
                 quat_features = self.quat_encoder(quat_data)
                 quat_features = rearrange(quat_features, 'b c l -> b l c')
             else:
-                batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
+                batch_size = acc_features.shape[0]
+                seq_len = acc_features.shape[1] if len(acc_features.shape) > 1 else 1
                 quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
+            # Fusion based on strategy
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
                 if fused_features.shape[2] != self.feature_dim:
@@ -164,12 +187,15 @@ class FusionTransModel(nn.Module):
                 fused_features = acc_weight * acc_features + gyro_weight * gyro_features + quat_weight * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
+            # Process through transformer
             transformer_output = self.transformer(fused_features)
             
+            # Pooling strategy
             if hasattr(self, 'attn_pool') and self.attn_pool:
                 attn_weights = F.softmax(self.attn_pool(transformer_output), dim=1)
                 pooled = torch.sum(transformer_output * attn_weights, dim=1)
-            else: pooled = torch.mean(transformer_output, dim=1)
+            else: 
+                pooled = torch.mean(transformer_output, dim=1)
             
             return self.classifier(pooled)
         except Exception as e:
@@ -179,17 +205,28 @@ class FusionTransModel(nn.Module):
 
     def forward_acc_gyro_only(self, acc_data, gyro_data):
         try:
+            # Handle accelerometer data
+            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
+            # Handle gyroscope data
+            if len(gyro_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                gyro_data = gyro_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+                
             gyro_data = rearrange(gyro_data, 'b l c -> b c l')
             gyro_features = self.gyro_encoder(gyro_data)
             gyro_features = rearrange(gyro_features, 'b c l -> b l c')
             
-            batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
+            # Create empty quaternion features
+            batch_size = acc_features.shape[0]
+            seq_len = acc_features.shape[1]
             quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
+            # Fusion based on strategy
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
                 if fused_features.shape[2] != self.feature_dim:
@@ -199,6 +236,7 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[1] * gyro_features
                 fused_features = self.feature_adapter(fused_features)
             
+            # Process through transformer
             transformer_output = self.transformer(fused_features)
             pooled = torch.mean(transformer_output, dim=1)
             return self.classifier(pooled)
@@ -209,17 +247,25 @@ class FusionTransModel(nn.Module):
 
     def forward_accelerometer_only(self, acc_data):
         try:
+            # Handle accelerometer data
+            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
-            batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
+            # Create dummy features for other modalities
+            batch_size = acc_features.shape[0]
+            seq_len = acc_features.shape[1]
             
             if self.fusion_type == 'concat':
                 dummy_features = torch.zeros(batch_size, seq_len, self.feature_dim - self.embed_dim, device=acc_data.device)
                 fused_features = torch.cat([acc_features, dummy_features], dim=2)
-            else: fused_features = self.feature_adapter(acc_features)
+            else: 
+                fused_features = self.feature_adapter(acc_features)
             
+            # Process through transformer
             transformer_output = self.transformer(fused_features)
             pooled = torch.mean(transformer_output, dim=1)
             return self.classifier(pooled)
@@ -232,15 +278,25 @@ class FusionTransModel(nn.Module):
         try:
             if quat_data is None or torch.all(torch.abs(quat_data) < 1e-6):
                 return self.forward_accelerometer_only(acc_data)
+            
+            # Handle accelerometer data
+            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
                 
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
+            # Handle quaternion data
+            if len(quat_data.shape) == 2:  # If missing sequence dimension [batch, channels]
+                quat_data = quat_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            
+            # Normalize quaternions
             quat_norm = torch.norm(quat_data, dim=2, keepdim=True)
             quat_norm = torch.where(quat_norm > 1e-8, quat_norm, torch.ones_like(quat_norm))
             quat_data = quat_data / quat_norm
             
+            # Ensure consistent quaternion sign
             for b in range(quat_data.shape[0]):
                 for i in range(1, quat_data.shape[1]):
                     dot_product = torch.sum(quat_data[b, i-1] * quat_data[b, i])
@@ -250,9 +306,12 @@ class FusionTransModel(nn.Module):
             quat_features = self.quat_encoder(quat_data)
             quat_features = rearrange(quat_features, 'b c l -> b l c')
             
-            batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
+            # Create empty gyroscope features
+            batch_size = acc_features.shape[0]
+            seq_len = acc_features.shape[1]
             gyro_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
+            # Fusion based on strategy
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
                 if fused_features.shape[2] != self.feature_dim:
@@ -262,6 +321,7 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[2] * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
+            # Process through transformer
             transformer_output = self.transformer(fused_features)
             pooled = torch.mean(transformer_output, dim=1)
             return self.classifier(pooled)
@@ -276,8 +336,10 @@ class FusionTransModel(nn.Module):
         except Exception as e:
             logger.error(f"Error in forward_multi_sensor: {e}")
             logger.error(traceback.format_exc())
-            try: return self.forward_accelerometer_only(acc_data)
-            except: raise
+            try: 
+                return self.forward_accelerometer_only(acc_data)
+            except: 
+                raise
 
     def forward(self, data):
         try:
@@ -287,7 +349,8 @@ class FusionTransModel(nn.Module):
                 has_quaternion = 'quaternion' in data and data['quaternion'] is not None
                 
                 if not has_quaternion and has_acc and has_gyro:
-                    batch_size, seq_len = data['accelerometer'].shape[:2]
+                    batch_size = data['accelerometer'].shape[0]
+                    seq_len = data['accelerometer'].shape[1] if len(data['accelerometer'].shape) > 1 else 1
                     device = data['accelerometer'].device
                     data['quaternion'] = torch.zeros(batch_size, seq_len, 4, device=device)
                     has_quaternion = True
@@ -304,12 +367,16 @@ class FusionTransModel(nn.Module):
                     return self.forward_acc_gyro_only(data['accelerometer'], data['gyroscope'])
                 elif has_acc:
                     return self.forward_accelerometer_only(data['accelerometer'])
-                else: raise ValueError("Input must contain at least accelerometer data")
-            else: return self.forward_accelerometer_only(data)
+                else: 
+                    raise ValueError("Input must contain at least accelerometer data")
+            else: 
+                return self.forward_accelerometer_only(data)
         except Exception as e:
             logger.error(f"Error in forward pass: {str(e)}")
             logger.error(traceback.format_exc())
             if isinstance(data, dict) and 'accelerometer' in data:
-                try: return self.forward_accelerometer_only(data['accelerometer'])
-                except: pass
+                try: 
+                    return self.forward_accelerometer_only(data['accelerometer'])
+                except: 
+                    pass
             raise

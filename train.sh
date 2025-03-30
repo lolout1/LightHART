@@ -115,7 +115,7 @@ EOF
     
     if [ "${CACHE_ENABLED}" = "true" ]; then
         cat >> "${output_file}" << EOF
-    use_cache: true
+    use_cache: false
     cache_dir: "${cache_dir}"
 EOF
     fi
@@ -137,12 +137,26 @@ val_feeder_args:
   batch_size: ${BATCH_SIZE}
   drop_last: true
 
+test_feeder_args:
+  batch_size: ${BATCH_SIZE}
+  drop_last: false
+
 seed: ${SEED}
 optimizer: adamw
 base_lr: ${BASE_LR}
 weight_decay: ${WEIGHT_DECAY}
 rotate_tests: true
 test_combinations: true
+
+kfold:
+  enabled: true
+  num_folds: 5
+  fold_assignments:
+    - [43, 35, 36]
+    - [44, 34, 32]
+    - [45, 37, 38]
+    - [46, 29, 31]
+    - [30, 39]
 EOF
 
     [ -f "${output_file}" ] && return 0 || return 1
@@ -193,19 +207,26 @@ def create_comparison_chart(df, output_dir):
     filters = df['filter_type'].tolist()
     x = np.arange(len(filters))
     width = 0.15
+    
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    
     for i, metric in enumerate(metrics):
         values = df[metric].values
         std_values = df[f'{metric}_std'].values if f'{metric}_std' in df.columns else np.zeros_like(values)
-        plt.bar(x + width * (i - len(metrics)/2 + 0.5), values, width, label=metric.capitalize(), yerr=std_values, capsize=3)
+        plt.bar(x + width * (i - len(metrics)/2 + 0.5), values, width, label=metric.capitalize(), 
+               color=colors[i], yerr=std_values, capsize=3)
+    
     plt.xlabel('Filter Type', fontweight='bold', fontsize=12)
     plt.ylabel('Score (%)', fontweight='bold', fontsize=12)
     plt.title('IMU Fusion Filter Comparison', fontweight='bold', fontsize=16)
     plt.xticks(x, filters, fontsize=12)
     plt.legend(loc='lower right', fontsize=10)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
     for i, metric in enumerate(metrics):
         for j, value in enumerate(df[metric].values):
             plt.text(j + width * (i - len(metrics)/2 + 0.5), value + 1, f"{value:.1f}", ha='center', va='bottom', fontsize=8)
+    
     plt.tight_layout()
     output_path = os.path.join(output_dir, 'filter_comparison.png')
     plt.savefig(output_path, dpi=300)

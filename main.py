@@ -27,6 +27,11 @@ MAX_THREADS = 40
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 FILTER_INSTANCES = {}
 
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'): return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
+    else: raise argparse.ArgumentTypeError('Boolean value expected')
+
 def get_args():
     parser = argparse.ArgumentParser(description='Fall Detection and Human Activity Recognition')
     parser.add_argument('--config', default='./config/smartfallmm/fusion_madgwick.yaml', help='Config file path')
@@ -57,7 +62,7 @@ def get_args():
     parser.add_argument('--train-feeder-args', default=None, help='Train loader arguments')
     parser.add_argument('--val-feeder-args', default=None, help='Validation loader arguments')
     parser.add_argument('--test-feeder-args', default=None, help='Test loader arguments')
-    parser.add_argument('--seed', type=int, default=2, help='Random seed')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--work-dir', type=str, default='work_dir', help='Working directory')
     parser.add_argument('--print-log', type=str2bool, default=True, help='Print and save logs')
     parser.add_argument('--phase', type=str, default='train', help='Train or evaluation')
@@ -69,11 +74,6 @@ def get_args():
     parser.add_argument('--rotate-tests', type=str2bool, default=False, help='Rotate through test combinations')
     parser.add_argument('--test-combinations', type=str2bool, default=False, help='Test all combinations')
     return parser
-
-def str2bool(v):
-    if v.lower() in ('yes', 'true', 't', 'y', '1'): return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
-    else: raise argparse.ArgumentTypeError('Boolean value expected')
 
 def init_seed(seed):
     torch.cuda.manual_seed_all(seed)
@@ -126,7 +126,7 @@ def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_i
             try:
                 cached_data = np.load(cache_path)
                 return cached_data['quaternion']
-            except Exception as e:
+            except Exception:
                 pass
     
     orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
@@ -186,10 +186,9 @@ def generate_test_combinations(full_subjects, permanent_train=None, val_subjects
     available_subjects = [s for s in full_subjects if s not in permanent_train and s not in val_subjects]
     all_combos = []
     
-    for i in range(1, min(max_test_subjects + 1, len(available_subjects) + 1)):
-        for test_set in combinations(available_subjects, i):
-            train_set = permanent_train + [s for s in available_subjects if s not in test_set]
-            all_combos.append((list(train_set), list(test_set)))
+    for test_set in combinations(available_subjects, max_test_subjects):
+        train_set = permanent_train + [s for s in available_subjects if s not in test_set]
+        all_combos.append((list(train_set), list(test_set)))
     
     return all_combos
 
@@ -198,62 +197,106 @@ class Trainer:
         self.arg = arg
         self.train_loss_summary, self.val_loss_summary, self.train_metrics, self.val_metrics = [], [], [], []
         self.best_f1, self.best_accuracy, self.patience_counter = 0, 0, 0
-        self.val_subjects = arg.val_subjects
-        self.permanent_train = arg.permanent_train
+        self.val_subjects = arg.val_subjects if hasattr(arg, 'val_subjects') else [38, 46]
+        self.permanent_train = arg.permanent_train if hasattr(arg, 'permanent_train') else [45, 36, 29]
         self.available_subjects = [s for s in arg.subjects if s not in self.val_subjects and s not in self.permanent_train]
         self.optimizer, self.norm_train, self.norm_val, self.norm_test = None, None, None, None
         self.data_loader, self.best_loss = dict(), float('inf')
         self.model_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}.pt'
         self.weights_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}_weights_only.pt'
-        self.max_threads = min(arg.parallel_threads, MAX_THREADS)
-        self.inertial_modality = [modality for modality in arg.dataset_args['modalities'] if modality != 'skeleton']
+        self.max_threads = min(getattr(arg, 'parallel_threads', 4), MAX_THREADS)
+        
+        dataset_args = getattr(arg, 'dataset_args', {}) or {}
+        if isinstance(dataset_args, str):
+            try:
+                dataset_args = eval(dataset_args)
+            except:
+                try:
+                    dataset_args = yaml.safe_load(dataset_args)
+                except:
+                    dataset_args = {}
+                    
+        if not dataset_args:
+            dataset_args = {'modalities': ['accelerometer', 'gyroscope'], 
+                           'mode': 'sliding_window',
+                           'max_length': 64,
+                           'task': 'fd',
+                           'age_group': ['young'],
+                           'sensors': ['watch'],
+                           'fusion_options': {
+                               'enabled': True,
+                               'filter_type': 'madgwick',
+                               'acc_threshold': 3.0,
+                               'gyro_threshold': 1.0,
+                               'visualize': False,
+                               'save_aligned': True
+                           }}
+            self.arg.dataset_args = dataset_args
+            
+        self.inertial_modality = [modality for modality in dataset_args.get('modalities', ['accelerometer', 'gyroscope']) 
+                                 if modality != 'skeleton']
         self.has_gyro = 'gyroscope' in self.inertial_modality
-        self.has_fusion = len(self.inertial_modality) > 1 or ('fusion_options' in arg.dataset_args and arg.dataset_args['fusion_options'].get('enabled', False))
+        
+        fusion_options = dataset_args.get('fusion_options', {})
+        self.has_fusion = len(self.inertial_modality) > 1 or (fusion_options and fusion_options.get('enabled', False))
         self.fuse = self.has_fusion
-        self.filter_type = arg.filter_type if hasattr(arg, 'filter_type') else arg.dataset_args['fusion_options'].get('filter_type', 'madgwick') if 'fusion_options' in arg.dataset_args else "madgwick"
-        self.filter_params = arg.dataset_args['fusion_options'] if 'fusion_options' in arg.dataset_args else {}
-        self.use_cache = arg.dataset_args['fusion_options'].get('use_cache', True) if 'fusion_options' in arg.dataset_args else True
-        self.cache_dir = arg.dataset_args['fusion_options'].get('cache_dir', 'processed_data') if 'fusion_options' in arg.dataset_args else 'processed_data'
+        
+        self.filter_type = getattr(arg, 'filter_type', None) or fusion_options.get('filter_type', 'madgwick')
+        self.filter_params = fusion_options
+        self.use_cache = fusion_options.get('use_cache', True)
+        self.cache_dir = fusion_options.get('cache_dir', 'processed_data')
+        
         self.test_summary = {'test_configs': [], 'average_metrics': {}}
+        self.enable_kfold = getattr(arg, 'kfold', False)
+        
+        if self.enable_kfold and hasattr(arg, 'dataset_args') and arg.dataset_args and 'kfold' in arg.dataset_args:
+            self.kfold_config = arg.dataset_args.get('kfold', {})
+        else:
+            self.kfold_config = {"enabled": False}
         
         if self.use_cache:
-            os.makedirs(self.cache_dir, exist_ok=True)
+            os.makedirs(os.path.join(self.cache_dir, self.filter_type), exist_ok=True)
             
         os.makedirs(self.arg.work_dir, exist_ok=True)
-        self.save_config(arg.config, arg.work_dir)
+        if hasattr(arg, 'config') and arg.config:
+            self.save_config(arg.config, arg.work_dir)
         
         self.available_gpus = setup_gpu_environment(arg)
-        arg.device = self.available_gpus if self.available_gpus else arg.device
-        self.output_device = arg.device[0] if type(arg.device) is list and len(arg.device) > 0 else arg.device
+        arg.device = self.available_gpus if self.available_gpus else getattr(arg, 'device', [0])
+        self.output_device = arg.device[0] if isinstance(arg.device, list) and len(arg.device) > 0 else arg.device
         
-        self.model = self.load_model(arg.model, arg.model_args) if self.arg.phase == 'train' else torch.load(self.arg.weights)
-        if len(self.available_gpus) > 1 and arg.multi_gpu: 
-            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
-            
-        self.load_loss()
-        
-        if self.fuse and self.filter_type != 'none':
-            all_subjects = arg.subjects
-            cache_dir = os.path.join(self.cache_dir, self.filter_type)
-            
-            if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
-                self.print_log(f"Preprocessing all {len(all_subjects)} subjects with {self.filter_type} filter")
-                from utils.loader import preprocess_all_subjects
-                preprocess_all_subjects(all_subjects, self.filter_type, cache_dir, self.arg.dataset_args['max_length'])
-                self.print_log(f"Preprocessing complete")
+        if hasattr(arg, 'model') and arg.model:
+            self.model = self.load_model(arg.model, arg.model_args) if self.arg.phase == 'train' else torch.load(getattr(arg, 'weights', self.model_path))
+            if len(self.available_gpus) > 1 and getattr(arg, 'multi_gpu', False): 
+                self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
                 
-        self.print_log(f'# Parameters: {self.count_parameters(self.model)}')
-        self.print_log(f'Sensor modalities: {self.inertial_modality}')
-        self.print_log(f'Using fusion: {self.fuse} with filter type: {self.filter_type}')
-        
-        if self.available_gpus: 
-            self.print_log(f'Using GPUs: {self.available_gpus}')
+            self.load_loss()
+            
+            if self.fuse and self.filter_type != 'none':
+                all_subjects = arg.subjects
+                cache_dir = os.path.join(self.cache_dir, self.filter_type)
+                
+                if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
+                    self.print_log(f"Preprocessing all {len(all_subjects)} subjects with {self.filter_type} filter")
+                    from utils.imu_fusion import preprocess_all_subjects
+                    preprocess_all_subjects(all_subjects, self.filter_type, cache_dir, 
+                                          dataset_args.get('max_length', 64))
+                    self.print_log(f"Preprocessing complete")
+                    
+            self.print_log(f'# Parameters: {self.count_parameters(self.model)}')
+            self.print_log(f'Sensor modalities: {self.inertial_modality}')
+            self.print_log(f'Using fusion: {self.fuse} with filter type: {self.filter_type}')
+            
+            if self.available_gpus: 
+                self.print_log(f'Using GPUs: {self.available_gpus}')
+            else:
+                self.print_log('Using CPU for computation')
         else:
-            self.print_log('Using CPU for computation')
+            self.print_log("WARNING: No model specified")
         
-        if self.arg.rotate_tests or self.arg.test_combinations:
+        if getattr(arg, 'rotate_tests', False) or getattr(arg, 'test_combinations', False):
             self.test_train_combinations = generate_test_combinations(
-                self.arg.subjects, 
+                arg.subjects, 
                 self.permanent_train, 
                 self.val_subjects,
                 max_test_subjects=2
@@ -279,6 +322,32 @@ class Trainer:
         use_cuda = torch.cuda.is_available()
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
         Model = import_class(model)
+        
+        if isinstance(model_args, str):
+            try:
+                model_args = eval(model_args)
+            except:
+                try:
+                    model_args = yaml.safe_load(model_args)
+                except:
+                    model_args = {}
+        
+        if not model_args:
+            model_args = {
+                'num_layers': 3,
+                'embed_dim': 32,
+                'acc_coords': 3,
+                'quat_coords': 4,
+                'num_classes': 2,
+                'acc_frames': 64,
+                'mocap_frames': 64,
+                'num_heads': 4,
+                'fusion_type': 'concat',
+                'dropout': 0.3,
+                'use_batch_norm': True
+            }
+            self.arg.model_args = model_args
+            
         model = Model(**model_args).to(device)
         return model
 
@@ -326,43 +395,93 @@ class Trainer:
         plt.close()
 
     def load_data(self, train_subjects, test_subjects=None):
-        Feeder = import_class(self.arg.feeder)
-        builder = prepare_smartfallmm(self.arg)
-        
-        self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
-        
-        if self.has_empty_value(list(self.norm_train.values())):
+        try:
+            if not hasattr(self.arg, 'feeder') or not self.arg.feeder:
+                self.arg.feeder = 'Feeder.Make_Dataset.UTD_mm'
+                self.print_log(f"Using default feeder: {self.arg.feeder}")
+                
+            if not hasattr(self.arg, 'train_feeder_args') or not self.arg.train_feeder_args:
+                self.arg.train_feeder_args = {'batch_size': self.arg.batch_size, 'drop_last': True}
+                
+            if not hasattr(self.arg, 'val_feeder_args') or not self.arg.val_feeder_args:
+                self.arg.val_feeder_args = {'batch_size': self.arg.val_batch_size or self.arg.batch_size, 'drop_last': True}
+                
+            if not hasattr(self.arg, 'test_feeder_args') or not self.arg.test_feeder_args:
+                self.arg.test_feeder_args = {'batch_size': self.arg.val_batch_size or self.arg.val_batch_size or self.arg.batch_size, 'drop_last': False}
+                
+            Feeder = import_class(self.arg.feeder)
+            builder = prepare_smartfallmm(self.arg)
+            
+            self.print_log(f"Loading training data for subjects: {train_subjects}")
+            self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
+            
             if 'accelerometer' not in self.norm_train or len(self.norm_train['accelerometer']) == 0: 
+                self.print_log("ERROR: No accelerometer data found in training set")
                 return False
             if 'labels' not in self.norm_train or len(self.norm_train['labels']) == 0: 
+                self.print_log("ERROR: No labels found in training set")
                 return False
-                
-        self.data_loader['train'] = torch.utils.data.DataLoader(
-            dataset=Feeder(**self.arg.train_feeder_args, dataset=self.norm_train),
-            batch_size=self.arg.batch_size, shuffle=True, num_workers=self.arg.num_worker)
-        self.distribution_viz(self.norm_train['labels'], self.arg.work_dir, 'train')
-        
-        self.norm_val = split_by_subjects(builder, self.val_subjects, self.fuse)
-        if 'accelerometer' not in self.norm_val or len(self.norm_val['accelerometer']) == 0 or 'labels' not in self.norm_val or len(self.norm_val['labels']) == 0:
-            self.print_log("WARNING: Invalid validation data")
-            return False
             
-        self.data_loader['val'] = torch.utils.data.DataLoader(
-            dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_val),
-            batch_size=self.arg.val_batch_size, shuffle=False, num_workers=self.arg.num_worker)
-        self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
-        
-        if test_subjects:
-            self.norm_test = split_by_subjects(builder, test_subjects, self.fuse)
-            if 'accelerometer' not in self.norm_test or len(self.norm_test['accelerometer']) == 0 or 'labels' not in self.norm_test or len(self.norm_test['labels']) == 0:
-                self.print_log("WARNING: Invalid test data")
+            try:
+                self.data_loader['train'] = torch.utils.data.DataLoader(
+                    dataset=Feeder(**self.arg.train_feeder_args, dataset=self.norm_train),
+                    batch_size=self.arg.batch_size,
+                    shuffle=True,
+                    num_workers=self.arg.num_worker,
+                    collate_fn=getattr(Feeder, 'custom_collate_fn', None))
+                self.distribution_viz(self.norm_train['labels'], self.arg.work_dir, 'train')
+            except Exception as e:
+                self.print_log(f"ERROR creating train dataloader: {str(e)}")
+                self.print_log(traceback.format_exc())
+                return False
+            
+            self.print_log(f"Loading validation data for subjects: {self.val_subjects}")
+            self.norm_val = split_by_subjects(builder, self.val_subjects, self.fuse)
+            
+            if 'accelerometer' not in self.norm_val or len(self.norm_val['accelerometer']) == 0: 
+                self.print_log("WARNING: No accelerometer data found in validation set")
+            elif 'labels' not in self.norm_val or len(self.norm_val['labels']) == 0:
+                self.print_log("WARNING: No labels found in validation set")
             else:
-                self.data_loader['test'] = torch.utils.data.DataLoader(
-                    dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_test),
-                    batch_size=self.arg.val_batch_size, shuffle=False, num_workers=self.arg.num_worker)
-                self.distribution_viz(self.norm_test['labels'], self.arg.work_dir, 'test')
+                try:
+                    self.data_loader['val'] = torch.utils.data.DataLoader(
+                        dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_val),
+                        batch_size=self.arg.val_batch_size,
+                        shuffle=False,
+                        num_workers=self.arg.num_worker,
+                        collate_fn=getattr(Feeder, 'custom_collate_fn', None))
+                    self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
+                except Exception as e:
+                    self.print_log(f"ERROR creating validation dataloader: {str(e)}")
+                    self.print_log(traceback.format_exc())
+            
+            if test_subjects:
+                self.print_log(f"Loading test data for subjects: {test_subjects}")
+                self.norm_test = split_by_subjects(builder, test_subjects, self.fuse)
+                
+                if 'accelerometer' not in self.norm_test or len(self.norm_test['accelerometer']) == 0: 
+                    self.print_log("WARNING: No accelerometer data found in test set")
+                elif 'labels' not in self.norm_test or len(self.norm_test['labels']) == 0:
+                    self.print_log("WARNING: No labels found in test set")
+                else:
+                    try:
+                        self.data_loader['test'] = torch.utils.data.DataLoader(
+                            dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
+                            batch_size=self.arg.test_batch_size or self.arg.val_batch_size or self.arg.batch_size,
+                            shuffle=False,
+                            num_workers=self.arg.num_worker,
+                            collate_fn=getattr(Feeder, 'custom_collate_fn', None))
+                        self.distribution_viz(self.norm_test['labels'], self.arg.work_dir, 'test')
+                    except Exception as e:
+                        self.print_log(f"ERROR creating test dataloader: {str(e)}")
+                        self.print_log(traceback.format_exc())
+            
+            return True
         
-        return True
+        except Exception as e:
+            self.print_log(f"ERROR in load_data: {str(e)}")
+            self.print_log(traceback.format_exc())
+            return False
 
     def record_time(self): 
         self.cur_time = time.time()
@@ -427,11 +546,24 @@ class Trainer:
         
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             with torch.no_grad():
-                acc_data = inputs['accelerometer'].to(device)
+                if not isinstance(inputs, dict):
+                    if torch.is_tensor(inputs) and len(inputs.shape) == 2:
+                        inputs = inputs.unsqueeze(1)
+                    inputs = {'accelerometer': inputs}
+                
+                for key in inputs:
+                    if torch.is_tensor(inputs[key]) and len(inputs[key].shape) == 2:
+                        seq_length = 1
+                        inputs[key] = inputs[key].unsqueeze(1)
+                    inputs[key] = inputs[key].to(device).float() if torch.is_tensor(inputs[key]) else inputs[key]
+                
                 targets = targets.to(device)
                 gyro_data = inputs.get('gyroscope', None)
-                if gyro_data is not None: 
-                    gyro_data = gyro_data.to(device)
+                acc_data = inputs.get('accelerometer', None)
+                
+                if acc_data is None:
+                    self.print_log(f"ERROR: Missing accelerometer data in batch {batch_idx}")
+                    continue
                     
                 quaternion = inputs.get('quaternion', None)
                 if quaternion is None and gyro_data is not None and self.filter_type != 'none':
@@ -449,16 +581,24 @@ class Trainer:
                         )
                         batch_quaternions.append(torch.from_numpy(sample_quat).float())
                     quaternion = torch.stack(batch_quaternions).to(device)
+                    inputs['quaternion'] = quaternion
             
             timer['dataloader'] += self.split_time()
             self.optimizer.zero_grad()
             
-            if hasattr(self.model, 'forward_quaternion') and quaternion is not None: 
-                logits = self.model.forward_quaternion(acc_data.float(), quaternion.float())
-            elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'): 
-                logits = self.model.forward_multi_sensor(acc_data.float(), gyro_data.float())
-            else: 
-                logits = self.model(acc_data.float())
+            try:
+                if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
+                    logits = self.model.forward_quaternion(acc_data, quaternion)
+                elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'): 
+                    logits = self.model.forward_multi_sensor(acc_data, gyro_data)
+                elif hasattr(self.model, 'forward_accelerometer_only'):
+                    logits = self.model.forward_accelerometer_only(acc_data)
+                else:
+                    logits = self.model(inputs)
+            except Exception as e:
+                self.print_log(f"ERROR in forward pass: {str(e)}")
+                self.print_log(traceback.format_exc())
+                continue
                 
             loss = self.criterion(logits, targets)
             loss.mean().backward()
@@ -476,6 +616,10 @@ class Trainer:
             timer['stats'] += self.split_time()
             process.set_postfix({'loss': f"{train_loss/(batch_idx+1):.4f}", 'acc': f"{100.0*accuracy/cnt:.2f}%"})
         
+        if cnt == 0:
+            self.print_log("ERROR: No samples processed in training epoch")
+            return {'early_stop': True}
+            
         train_loss /= len(loader)
         accuracy *= 100. / cnt
         f1 = f1_score(y_true, y_pred, average='macro') * 100
@@ -528,6 +672,11 @@ class Trainer:
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
         self.model.eval()
         self.print_log(f'Evaluating on {mode} set (Epoch {epoch+1})')
+        
+        if mode not in self.data_loader:
+            self.print_log(f"ERROR: No dataloader available for {mode} set")
+            return {'loss': float('inf'), 'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'balanced_accuracy': 0}
+            
         loader = self.data_loader[mode]
         loss, cnt, accuracy = 0, 0, 0
         label_list, pred_list = [], []
@@ -535,11 +684,23 @@ class Trainer:
         
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
-                acc_data = inputs['accelerometer'].to(device)
+                if not isinstance(inputs, dict):
+                    if torch.is_tensor(inputs) and len(inputs.shape) == 2:
+                        inputs = inputs.unsqueeze(1)
+                    inputs = {'accelerometer': inputs}
+                
+                for key in inputs:
+                    if torch.is_tensor(inputs[key]) and len(inputs[key].shape) == 2:
+                        inputs[key] = inputs[key].unsqueeze(1)
+                    inputs[key] = inputs[key].to(device).float() if torch.is_tensor(inputs[key]) else inputs[key]
+                
                 targets = targets.to(device)
+                acc_data = inputs.get('accelerometer', None)
                 gyro_data = inputs.get('gyroscope', None)
-                if gyro_data is not None: 
-                    gyro_data = gyro_data.to(device)
+                
+                if acc_data is None:
+                    self.print_log(f"ERROR: Missing accelerometer data in batch {batch_idx}")
+                    continue
                     
                 quaternion = inputs.get('quaternion', None)
                 if quaternion is None and gyro_data is not None and self.filter_type != 'none':
@@ -557,13 +718,21 @@ class Trainer:
                         )
                         batch_quaternions.append(torch.from_numpy(sample_quat).float())
                     quaternion = torch.stack(batch_quaternions).to(device)
+                    inputs['quaternion'] = quaternion
                 
-                if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
-                    logits = self.model.forward_quaternion(acc_data.float(), quaternion.float())
-                elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'):
-                    logits = self.model.forward_multi_sensor(acc_data.float(), gyro_data.float())
-                else: 
-                    logits = self.model(acc_data.float())
+                try:
+                    if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
+                        logits = self.model.forward_quaternion(acc_data, quaternion)
+                    elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'):
+                        logits = self.model.forward_multi_sensor(acc_data, gyro_data)
+                    elif hasattr(self.model, 'forward_accelerometer_only'):
+                        logits = self.model.forward_accelerometer_only(acc_data)
+                    else:
+                        logits = self.model(inputs)
+                except Exception as e:
+                    self.print_log(f"ERROR in {mode} forward pass: {str(e)}")
+                    self.print_log(traceback.format_exc())
+                    continue
                 
                 batch_loss = self.criterion(logits, targets)
                 loss += batch_loss.sum().item()
@@ -578,12 +747,20 @@ class Trainer:
                 loss /= cnt
                 target = np.array(label_list)
                 y_pred = np.array(pred_list)
-                f1 = f1_score(target, y_pred, average='macro') * 100
-                precision, recall, _, _ = precision_recall_fscore_support(target, y_pred, average='macro')
-                precision *= 100
-                recall *= 100
-                balanced_acc = balanced_accuracy_score(target, y_pred) * 100
-                accuracy *= 100. / cnt
+                if len(np.unique(target)) > 1:
+                    f1 = f1_score(target, y_pred, average='macro') * 100
+                    precision, recall, _, _ = precision_recall_fscore_support(target, y_pred, average='macro')
+                    precision *= 100
+                    recall *= 100
+                    balanced_acc = balanced_accuracy_score(target, y_pred) * 100
+                else:
+                    f1 = 0.0
+                    precision = 0.0
+                    recall = 0.0
+                    balanced_acc = 0.0
+                    self.print_log(f"WARNING: Only one class found in {mode} set: {np.unique(target)}")
+                
+                accuracy = 100.0 * accuracy / cnt
                 
                 self.print_log(f'{mode.capitalize()} metrics: Loss={loss:.4f}, Acc={accuracy:.2f}%, F1={f1:.2f}, Precision={precision:.2f}%, Recall={recall:.2f}%, Balanced Acc={balanced_acc:.2f}%')
                 
@@ -611,11 +788,60 @@ class Trainer:
             avg_metrics[f"{metric}_std"] = float(np.std(values))
             
         self.test_summary['average_metrics'] = avg_metrics
+        self.test_summary['filter_type'] = self.filter_type
         
         summary_path = os.path.join(self.arg.work_dir, 'test_summary.json')
         with open(summary_path, 'w') as f:
             json.dump(self.test_summary, f, indent=2)
         self.print_log(f"Test summary saved to {summary_path}")
+    
+    def run_fold(self, train_subjects, test_subjects, fold_dir):
+        self.train_loss_summary, self.val_loss_summary, self.train_metrics, self.val_metrics = [], [], [], []
+        self.best_accuracy, self.best_f1, self.best_loss, self.patience_counter = 0, 0, float('inf'), 0
+        
+        if not self.load_data(train_subjects, test_subjects):
+            self.print_log("ERROR: Failed to load data for fold")
+            return None
+        
+        self.model = self.load_model(self.arg.model, self.arg.model_args)
+        if len(self.available_gpus) > 1 and self.arg.multi_gpu:
+            self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
+            
+        self.load_optimizer()
+        
+        for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
+            train_result = self.train(epoch)
+            if train_result.get('early_stop', False):
+                self.print_log(f"Early stopping after {epoch+1} epochs (no F1 improvement)")
+                break
+        
+        if len(self.train_loss_summary) > 0 and len(self.val_loss_summary) > 0:
+            try: 
+                self.loss_viz(self.train_loss_summary, self.val_loss_summary)
+                shutil.copy(os.path.join(self.arg.work_dir, "train_vs_val_loss.png"), 
+                          os.path.join(fold_dir, "train_vs_val_loss.png"))
+            except Exception as e: 
+                self.print_log(f"Error creating loss visualization: {str(e)}")
+        
+        if os.path.exists(self.model_path):
+            try:
+                self.load_weights(self.model_path)
+                self.print_log("Loaded best model for final evaluation")
+            except Exception as e: 
+                self.print_log(f"WARNING: Could not load best model: {str(e)}")
+        
+        self.model.eval()
+        test_metrics = self.eval(0, 'test')
+        
+        with open(os.path.join(fold_dir, 'validation_results.json'), 'w') as f:
+            json.dump(test_metrics, f, indent=2)
+        
+        for file in ['confusion_matrix_test.png', 'confusion_matrix_val.png']:
+            if os.path.exists(os.path.join(self.arg.work_dir, file)):
+                shutil.copy(os.path.join(self.arg.work_dir, file), 
+                          os.path.join(fold_dir, file))
+        
+        return test_metrics
     
     def start(self):
         try:
@@ -631,72 +857,30 @@ class Trainer:
                     self.print_log(f"Train: {train_subjects}")
                     self.print_log(f"Test: {test_subjects}")
                     
-                    self.train_loss_summary, self.val_loss_summary, self.train_metrics, self.val_metrics = [], [], [], []
-                    self.best_accuracy, self.best_f1, self.best_loss, self.patience_counter = 0, 0, float('inf'), 0
-                    
-                    if not self.load_data(train_subjects, test_subjects):
-                        self.print_log("ERROR: Failed to load data")
-                        continue
-                    
-                    self.model = self.load_model(self.arg.model, self.arg.model_args)
-                    if len(self.available_gpus) > 1 and self.arg.multi_gpu:
-                        self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
-                        
-                    self.load_optimizer()
-                    
                     config_dir = os.path.join(self.arg.work_dir, f"test_config_{config_idx+1}")
                     os.makedirs(config_dir, exist_ok=True)
                     
-                    for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
-                        train_result = self.train(epoch)
-                        if train_result.get('early_stop', False):
-                            self.print_log(f"Early stopping after {epoch+1} epochs (no F1 improvement)")
-                            break
+                    test_metrics = self.run_fold(train_subjects, test_subjects, config_dir)
                     
-                    if len(self.train_loss_summary) > 0 and len(self.val_loss_summary) > 0:
-                        try: 
-                            self.loss_viz(self.train_loss_summary, self.val_loss_summary)
-                            shutil.copy(os.path.join(self.arg.work_dir, "train_vs_val_loss.png"), 
-                                      os.path.join(config_dir, "train_vs_val_loss.png"))
-                        except Exception as e: 
-                            self.print_log(f"Error creating loss visualization: {str(e)}")
-                    
-                    if os.path.exists(self.model_path):
-                        try:
-                            self.load_weights(self.model_path)
-                            self.print_log("Loaded best model for final evaluation")
-                        except Exception as e: 
-                            self.print_log(f"WARNING: Could not load best model: {str(e)}")
-                    
-                    self.model.eval()
-                    test_metrics = self.eval(0, 'test')
-                    
-                    result_row = {
-                        'test_config': config_idx + 1,
-                        'train_subjects': str(train_subjects),
-                        'test_subjects': str(test_subjects),
-                        'accuracy': round(test_metrics['accuracy'], 2),
-                        'f1_score': round(test_metrics['f1'], 2),
-                        'precision': round(test_metrics['precision'], 2),
-                        'recall': round(test_metrics['recall'], 2)
-                    }
-                    
-                    test_results_df.loc[len(test_results_df)] = result_row
-                    
-                    self.test_summary['test_configs'].append({
-                        'config_id': config_idx + 1,
-                        'train_subjects': train_subjects,
-                        'test_subjects': test_subjects,
-                        'metrics': test_metrics
-                    })
-                    
-                    with open(os.path.join(config_dir, 'test_results.json'), 'w') as f:
-                        json.dump(test_metrics, f, indent=2)
-                    
-                    for file in ['confusion_matrix_test.png', 'confusion_matrix_val.png']:
-                        if os.path.exists(os.path.join(self.arg.work_dir, file)):
-                            shutil.copy(os.path.join(self.arg.work_dir, file), 
-                                      os.path.join(config_dir, file))
+                    if test_metrics:
+                        result_row = {
+                            'test_config': config_idx + 1,
+                            'train_subjects': str(train_subjects),
+                            'test_subjects': str(test_subjects),
+                            'accuracy': round(test_metrics['accuracy'], 2),
+                            'f1_score': round(test_metrics['f1'], 2),
+                            'precision': round(test_metrics['precision'], 2),
+                            'recall': round(test_metrics['recall'], 2)
+                        }
+                        
+                        test_results_df.loc[len(test_results_df)] = result_row
+                        
+                        self.test_summary['test_configs'].append({
+                            'config_id': config_idx + 1,
+                            'train_subjects': train_subjects,
+                            'test_subjects': test_subjects,
+                            'metrics': test_metrics
+                        })
                     
                     if not self.arg.test_combinations:
                         break
@@ -704,13 +888,60 @@ class Trainer:
                 self.save_test_summary()
                 test_results_df.to_csv(os.path.join(self.arg.work_dir, 'test_results.csv'), index=False)
                 
-                avg_metrics = self.test_summary['average_metrics']
-                self.print_log(f'\n===== Test Results Summary =====')
-                self.print_log(f'Mean accuracy: {avg_metrics["accuracy"]:.2f}% ± {avg_metrics["accuracy_std"]:.2f}%')
-                self.print_log(f'Mean F1 score: {avg_metrics["f1"]:.2f} ± {avg_metrics["f1_std"]:.2f}')
-                self.print_log(f'Mean precision: {avg_metrics["precision"]:.2f}% ± {avg_metrics["precision_std"]:.2f}%')
-                self.print_log(f'Mean recall: {avg_metrics["recall"]:.2f}% ± {avg_metrics["recall_std"]:.2f}%')
-                self.print_log(f'Mean balanced accuracy: {avg_metrics["balanced_accuracy"]:.2f}% ± {avg_metrics["balanced_accuracy_std"]:.2f}%')
+                avg_metrics = self.test_summary.get('average_metrics', {})
+                if avg_metrics:
+                    self.print_log(f'\n===== Test Results Summary ({self.filter_type}) =====')
+                    self.print_log(f'Mean accuracy: {avg_metrics.get("accuracy", 0):.2f}% ± {avg_metrics.get("accuracy_std", 0):.2f}%')
+                    self.print_log(f'Mean F1 score: {avg_metrics.get("f1", 0):.2f} ± {avg_metrics.get("f1_std", 0):.2f}')
+                    self.print_log(f'Mean precision: {avg_metrics.get("precision", 0):.2f}% ± {avg_metrics.get("precision_std", 0):.2f}%')
+                    self.print_log(f'Mean recall: {avg_metrics.get("recall", 0):.2f}% ± {avg_metrics.get("recall_std", 0):.2f}%')
+                    self.print_log(f'Mean balanced accuracy: {avg_metrics.get("balanced_accuracy", 0):.2f}% ± {avg_metrics.get("balanced_accuracy_std", 0):.2f}%')
+            
+            elif self.enable_kfold and self.kfold_config and self.kfold_config.get('enabled', False):
+                self.print_log(f"\n===== Running {self.kfold_config.get('num_folds', 5)}-fold cross validation =====")
+                fold_assignments = self.kfold_config.get('fold_assignments', [])
+                
+                if not fold_assignments:
+                    self.print_log("ERROR: No fold assignments configured")
+                    return
+                
+                results = []
+                for fold_idx, test_subjects in enumerate(fold_assignments):
+                    self.print_log(f"\n{'='*20} Fold {fold_idx+1}/{len(fold_assignments)} {'='*20}")
+                    
+                    train_subjects = self.permanent_train.copy()
+                    for s in self.arg.subjects:
+                        if s not in test_subjects and s not in self.val_subjects and s not in train_subjects:
+                            train_subjects.append(s)
+                    
+                    self.print_log(f"Train: {train_subjects}")
+                    self.print_log(f"Test: {test_subjects}")
+                    self.print_log(f"Validation: {self.val_subjects}")
+                    
+                    fold_dir = os.path.join(self.arg.work_dir, f"fold_{fold_idx+1}")
+                    os.makedirs(fold_dir, exist_ok=True)
+                    
+                    fold_metrics = self.run_fold(train_subjects, test_subjects, fold_dir)
+                    
+                    if fold_metrics:
+                        self.test_summary['test_configs'].append({
+                            'fold_id': fold_idx + 1,
+                            'train_subjects': train_subjects,
+                            'test_subjects': test_subjects,
+                            'metrics': fold_metrics
+                        })
+                        results.append(fold_metrics)
+                
+                if results:
+                    self.save_test_summary()
+                    self.print_log(f"\n===== Cross-validation Results Summary ({self.filter_type}) =====")
+                    avg_metrics = self.test_summary.get('average_metrics', {})
+                    self.print_log(f'Mean accuracy: {avg_metrics.get("accuracy", 0):.2f}% ± {avg_metrics.get("accuracy_std", 0):.2f}%')
+                    self.print_log(f'Mean F1 score: {avg_metrics.get("f1", 0):.2f} ± {avg_metrics.get("f1_std", 0):.2f}')
+                    self.print_log(f'Mean precision: {avg_metrics.get("precision", 0):.2f}% ± {avg_metrics.get("precision_std", 0):.2f}%')
+                    self.print_log(f'Mean recall: {avg_metrics.get("recall", 0):.2f}% ± {avg_metrics.get("recall_std", 0):.2f}%')
+                    self.print_log(f'Mean balanced accuracy: {avg_metrics.get("balanced_accuracy", 0):.2f}% ± {avg_metrics.get("balanced_accuracy_std", 0):.2f}%')
+            
             else:
                 train_subjects = [s for s in self.arg.subjects if s not in self.val_subjects]
                 
@@ -785,9 +1016,35 @@ def main():
         key = vars(arg).keys()
         for k in default_arg.keys():
             if k not in key: 
-                assert k in key, f'Unknown Argument: {k}'
-        parser.set_defaults(**default_arg)
-        arg = parser.parse_args()
+                arg.__dict__[k] = default_arg[k]
+    
+    if isinstance(arg.model_args, str):
+        try:
+            arg.model_args = eval(arg.model_args)
+        except:
+            try:
+                arg.model_args = yaml.safe_load(arg.model_args)
+            except:
+                arg.model_args = {}
+    
+    if isinstance(arg.dataset_args, str):
+        try:
+            arg.dataset_args = eval(arg.dataset_args)
+        except:
+            try:
+                arg.dataset_args = yaml.safe_load(arg.dataset_args)
+            except:
+                arg.dataset_args = {}
+    
+    if not hasattr(arg, 'subjects') or not arg.subjects:
+        arg.subjects = [32, 39, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 29]
+    
+    if not hasattr(arg, 'val_subjects') or not arg.val_subjects:
+        arg.val_subjects = [38, 46]
+    
+    if not hasattr(arg, 'permanent_train') or not arg.permanent_train:
+        arg.permanent_train = [45, 36, 29]
+    
     init_seed(arg.seed)
     trainer = Trainer(arg)
     trainer.start()
