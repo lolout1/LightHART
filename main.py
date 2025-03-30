@@ -21,10 +21,10 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from scipy.spatial.transform import Rotation
 from utils.dataset import prepare_smartfallmm, split_by_subjects
+from utils.imu_fusion import clear_filters
 
-MAX_THREADS = 40
+MAX_THREADS = 30
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
-FILTER_INSTANCES = {}
 
 def get_args():
     parser = argparse.ArgumentParser(description='Fall Detection and Human Activity Recognition')
@@ -94,129 +94,6 @@ def setup_gpu_environment(args):
         return devices
     else: return []
 
-def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None):
-    from utils.imu_fusion import MadgwickFilter, KalmanFilter, ExtendedKalmanFilter
-    key = f"{subject_id}_{action_id}_{filter_type}"
-    if key not in FILTER_INSTANCES:
-        if filter_type == 'madgwick':
-            beta = filter_params.get('beta', 0.1) if filter_params else 0.1
-            FILTER_INSTANCES[key] = MadgwickFilter(beta=beta)
-        elif filter_type == 'kalman':
-            FILTER_INSTANCES[key] = KalmanFilter()
-        elif filter_type == 'ekf':
-            FILTER_INSTANCES[key] = ExtendedKalmanFilter()
-        else:
-            FILTER_INSTANCES[key] = MadgwickFilter()
-    return FILTER_INSTANCES[key]
-
-def save_processed_data(subject_id, action_id, filter_type, data_dict, cache_dir="processed_data"):
-    os.makedirs(cache_dir, exist_ok=True)
-    data_id = f"S{subject_id:02d}_A{action_id:02d}_{filter_type}"
-    file_path = os.path.join(cache_dir, f"{data_id}.npz")
-    try:
-        np.savez_compressed(file_path, **data_dict)
-        return True
-    except Exception as e:
-        print(f"Error saving data: {e}")
-        return False
-
-def load_processed_data(subject_id, action_id, filter_type, cache_dir="processed_data"):
-    data_id = f"S{subject_id:02d}_A{action_id:02d}_{filter_type}"
-    file_path = os.path.join(cache_dir, f"{data_id}.npz")
-    if os.path.exists(file_path):
-        try:
-            data = np.load(file_path)
-            return {key: data[key] for key in data.files}
-        except Exception as e:
-            print(f"Error loading cached data: {e}")
-    return None
-
-def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_id=0, action_id=0, 
-                               filter_type='madgwick', filter_params=None, use_cache=True, cache_dir="processed_data"):
-    if use_cache:
-        cached_data = load_processed_data(subject_id, action_id, filter_type, cache_dir)
-        if cached_data is not None and 'quaternion' in cached_data:
-            return cached_data['quaternion']
-    orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
-    quaternions = np.zeros((len(acc_data), 4))
-    for i in range(len(acc_data)):
-        acc = acc_data[i]
-        gyro = gyro_data[i]
-        timestamp = timestamps[i] if timestamps is not None else None
-        gravity_direction = np.array([0, 0, 9.81])
-        if i > 0:
-            r = Rotation.from_quat([quaternions[i-1, 1], quaternions[i-1, 2], quaternions[i-1, 3], quaternions[i-1, 0]])
-            gravity_direction = r.inv().apply([0, 0, 9.81])
-        acc_with_gravity = acc + gravity_direction
-        norm = np.linalg.norm(acc_with_gravity)
-        if norm > 1e-6:
-            acc_with_gravity = acc_with_gravity / norm
-        q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
-        quaternions[i] = q
-    if use_cache:
-        save_processed_data(subject_id, action_id, filter_type, 
-                          {'quaternion': quaternions, 'acc_data': acc_data, 'gyro_data': gyro_data},
-                          cache_dir)
-    return quaternions
-
-def process_sliding_windows(acc_data, gyro_data, window_size, timestamps=None, subject_id=0, action_id=0, 
-                          filter_type='madgwick', filter_params=None, use_cache=True, cache_dir="processed_data"):
-    total_samples = len(acc_data)
-    if total_samples < window_size:
-        return np.zeros((1, window_size, 4))
-    num_windows = max(1, (total_samples - window_size) // (window_size // 2) + 1)
-    windows_quaternions = np.zeros((num_windows, window_size, 4))
-    if use_cache:
-        cache_id = f"S{subject_id:02d}_A{action_id:02d}_windows_{filter_type}"
-        cache_path = os.path.join(cache_dir, f"{cache_id}.npz")
-        if os.path.exists(cache_path):
-            try:
-                data = np.load(cache_path)
-                return data['windows']
-            except: pass
-    orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
-    orientation_filter.reset()
-    all_quaternions = np.zeros((total_samples, 4))
-    for i in range(total_samples):
-        acc = acc_data[i]
-        gyro = gyro_data[i]
-        timestamp = timestamps[i] if timestamps is not None else None
-        gravity_direction = np.array([0, 0, 9.81])
-        if i > 0:
-            r = Rotation.from_quat([all_quaternions[i-1, 1], all_quaternions[i-1, 2], all_quaternions[i-1, 3], all_quaternions[i-1, 0]])
-            gravity_direction = r.inv().apply([0, 0, 9.81])
-        acc_with_gravity = acc + gravity_direction
-        norm = np.linalg.norm(acc_with_gravity)
-        if norm > 1e-6:
-            acc_with_gravity = acc_with_gravity / norm
-        q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
-        all_quaternions[i] = q
-    for j in range(num_windows):
-        start_idx = j * (window_size // 2)
-        end_idx = min(start_idx + window_size, total_samples)
-        actual_length = end_idx - start_idx
-        windows_quaternions[j, :actual_length] = all_quaternions[start_idx:end_idx]
-    if use_cache:
-        os.makedirs(cache_dir, exist_ok=True)
-        try:
-            np.savez_compressed(cache_path, windows=windows_quaternions)
-        except: pass
-    return windows_quaternions
-
-def extract_window_data(inputs, window_idx, subject_id, action_id, filter_type, filter_params, use_cache=True, cache_dir="processed_data"):
-    acc_data = inputs['accelerometer']
-    gyro_data = inputs.get('gyroscope', None)
-    timestamps = inputs.get('timestamps', None)
-    if gyro_data is None or len(gyro_data) == 0:
-        return {'quaternion': np.zeros((len(acc_data), 4))}
-    window_quat = process_sequence_with_filter(
-        acc_data, gyro_data, timestamps, 
-        subject_id, action_id, 
-        filter_type, filter_params,
-        use_cache, cache_dir
-    )
-    return {'quaternion': window_quat}
-
 class Trainer:
     def __init__(self, arg):
         self.arg = arg
@@ -235,8 +112,7 @@ class Trainer:
         self.filter_params = arg.dataset_args['fusion_options'] if 'fusion_options' in arg.dataset_args else {}
         self.use_cache = arg.dataset_args['fusion_options'].get('use_cache', False) if 'fusion_options' in arg.dataset_args else False
         self.cache_dir = arg.dataset_args['fusion_options'].get('cache_dir', 'processed_data') if 'fusion_options' in arg.dataset_args else 'processed_data'
-        if self.use_cache:
-            os.makedirs(self.cache_dir, exist_ok=True)
+        if self.use_cache: os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.arg.work_dir, exist_ok=True)
         self.save_config(arg.config, arg.work_dir)
         self.available_gpus = setup_gpu_environment(arg)
@@ -394,20 +270,7 @@ class Trainer:
                 gyro_data = inputs.get('gyroscope', None)
                 if gyro_data is not None: gyro_data = gyro_data.to(device)
                 quaternion = inputs.get('quaternion', None)
-                if quaternion is None and gyro_data is not None:
-                    batch_quaternions = []
-                    for i in range(len(idx)):
-                        subject_id = int(idx[i])
-                        action_id = int(targets[i].item())
-                        sample_acc = acc_data[i].cpu().numpy()
-                        sample_gyro = gyro_data[i].cpu().numpy()
-                        sample_quat = process_sequence_with_filter(
-                            sample_acc, sample_gyro, None, subject_id, action_id, 
-                            self.filter_type, self.filter_params, 
-                            self.use_cache, self.cache_dir
-                        )
-                        batch_quaternions.append(torch.from_numpy(sample_quat).float())
-                    quaternion = torch.stack(batch_quaternions).to(device)
+                if quaternion is not None: quaternion = quaternion.to(device)
             timer['dataloader'] += self.split_time()
             self.optimizer.zero_grad()
             if hasattr(self.model, 'forward_quaternion') and quaternion is not None: 
@@ -489,20 +352,7 @@ class Trainer:
                 gyro_data = inputs.get('gyroscope', None)
                 if gyro_data is not None: gyro_data = gyro_data.to(device)
                 quaternion = inputs.get('quaternion', None)
-                if quaternion is None and gyro_data is not None:
-                    batch_quaternions = []
-                    for i in range(len(idx)):
-                        subject_id = int(idx[i])
-                        action_id = int(targets[i].item())
-                        sample_acc = acc_data[i].cpu().numpy()
-                        sample_gyro = gyro_data[i].cpu().numpy()
-                        sample_quat = process_sequence_with_filter(
-                            sample_acc, sample_gyro, None, subject_id, action_id, 
-                            self.filter_type, self.filter_params,
-                            self.use_cache, self.cache_dir
-                        )
-                        batch_quaternions.append(torch.from_numpy(sample_quat).float())
-                    quaternion = torch.stack(batch_quaternions).to(device)
+                if quaternion is not None: quaternion = quaternion.to(device)
                 
                 if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
                     logits = self.model.forward_quaternion(acc_data.float(), quaternion.float())
@@ -592,8 +442,7 @@ class Trainer:
                 os.makedirs(fold_dir, exist_ok=True)
                 fold_cache_dir = os.path.join(self.cache_dir, f"fold_{fold_idx+1}")
                 os.makedirs(fold_cache_dir, exist_ok=True)
-                global FILTER_INSTANCES
-                FILTER_INSTANCES = {}
+                clear_filters()
                 self.model = self.load_model(self.arg.model, self.arg.model_args)
                 if len(self.available_gpus) > 1 and self.arg.multi_gpu:
                     self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
@@ -692,8 +541,12 @@ def main():
     if arg.config is not None:
         with open(arg.config, 'r') as f: default_arg = yaml.load(f, Loader=yaml.FullLoader)
         key = vars(arg).keys()
+        parser.add_argument('--test-feeder-args', default=None, help='Test loader arguments') 
+        arg_after_add = parser.parse_args([])
+        key = vars(arg_after_add).keys()
         for k in default_arg.keys():
-            if k not in key: assert k in key, f'Unknown Argument: {k}'
+            if k not in key: 
+                parser.add_argument(f'--{k.replace("_", "-")}', default=None)
         parser.set_defaults(**default_arg)
         arg = parser.parse_args()
     init_seed(arg.seed)

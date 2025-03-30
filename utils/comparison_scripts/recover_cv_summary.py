@@ -38,7 +38,7 @@ def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> D
 def main():
     parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
     parser.add_argument("--output-dir", required=True, help="Model output directory")
-    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, ukf)")
+    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf)")
     args = parser.parse_args()
     
     fold_metrics = load_fold_results(args.output_dir)

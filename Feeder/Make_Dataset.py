@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import logging
 from torch.utils.data import Dataset
-from utils.imu_fusion import create_filter_id, get_filter, process_imu_data
 
 logger = logging.getLogger("feeder")
 
@@ -71,10 +70,7 @@ class UTD_mm_RealTime(Dataset):
         self.buffer_full = False
         self.windows_generated = 0
         
-        if self.current_filter is None:
-            self.current_filter = get_filter('realtime_filter', self.filter_type, create_if_missing=True)
-        else:
-            self.current_filter.reset()
+        self.current_filter.reset()
     
     def add_sample(self, acc, gyro, timestamp=None):
         if timestamp is None:

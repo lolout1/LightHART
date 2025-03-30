@@ -181,14 +181,13 @@ def create_comparison_report(df, output_path):
         f.write("- **Madgwick**: A computationally efficient orientation filter using gradient descent.\n")
         f.write("- **Kalman**: Standard Kalman filter for optimal sensor fusion.\n")
         f.write("- **EKF**: Extended Kalman Filter for non-linear orientation estimation.\n")
-        f.write("- **UKF**: Unscented Kalman Filter for highly accurate non-linear state estimation with better uncertainty handling.\n")
     print(f"Comparison report saved to {output_path}")
 
 def main():
     parser = argparse.ArgumentParser(description='Compare IMU fusion filter performance')
     parser.add_argument('--results-dir', required=True, help='Results directory')
     parser.add_argument('--output-csv', required=True, help='Output CSV file')
-    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'kalman', 'ekf', 'ukf'], help='Filter types to compare')
+    parser.add_argument('--filter-types', nargs='+', default=['madgwick', 'kalman', 'ekf'], help='Filter types to compare')
     args = parser.parse_args()
     results_df = load_filter_results(args.results_dir, args.filter_types)
     results_df.to_csv(args.output_csv, index=False)
@@ -258,7 +257,7 @@ def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> D
 def main():
     parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
     parser.add_argument("--output-dir", required=True, help="Model output directory")
-    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, ukf)")
+    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf)")
     args = parser.parse_args()
     
     fold_metrics = load_fold_results(args.output_dir)
@@ -295,7 +294,7 @@ model_args:
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 8
+  num_heads: 4
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
@@ -339,15 +338,6 @@ EOF
     gyro_threshold: 1.0
 EOF
             ;;
-        ukf)
-            cat >> "${output_file}" << EOF
-    alpha: 0.15
-    beta: 2.0
-    kappa: 1.0
-    acc_threshold: 3.0
-    gyro_threshold: 1.0
-EOF
-            ;;
     esac
     
     if [ "${CACHE_ENABLED}" = "true" ]; then
@@ -360,6 +350,8 @@ EOF
     cat >> "${output_file}" << EOF
     visualize: false
     save_aligned: true
+    window_stride: 32
+    is_linear_acc: true
 
 batch_size: ${BATCH_SIZE}
 val_batch_size: ${BATCH_SIZE}
@@ -373,6 +365,10 @@ train_feeder_args:
 val_feeder_args:
   batch_size: ${BATCH_SIZE}
   drop_last: true
+
+test_feeder_args:
+  batch_size: ${BATCH_SIZE}
+  drop_last: false
 
 seed: ${SEED}
 optimizer: adamw
@@ -417,7 +413,7 @@ train_filter_model() {
         --device 0 1 \
         --multi-gpu True \
         --patience ${PATIENCE} \
-        --parallel-threads 22 \
+        --parallel-threads 30 \
         --num-epoch ${NUM_EPOCHS} \
         --run-comparison True 2>&1 | tee "${output_dir}/logs/training.log"
     
@@ -455,7 +451,6 @@ run_filter_comparison() {
     create_filter_config "madgwick" "${CONFIG_DIR}/madgwick.yaml"
     create_filter_config "kalman" "${CONFIG_DIR}/kalman.yaml"
     create_filter_config "ekf" "${CONFIG_DIR}/ekf.yaml"
-    create_filter_config "ukf" "${CONFIG_DIR}/ukf.yaml"
     
     log "INFO" "============= TRAINING WITH MADGWICK FILTER (BASELINE) ============="
     train_filter_model "madgwick" "${CONFIG_DIR}/madgwick.yaml"
@@ -466,14 +461,11 @@ run_filter_comparison() {
     log "INFO" "============= TRAINING WITH EXTENDED KALMAN FILTER ============="
     train_filter_model "ekf" "${CONFIG_DIR}/ekf.yaml"
     
-    log "INFO" "============= TRAINING WITH UNSCENTED KALMAN FILTER ============="
-    train_filter_model "ukf" "${CONFIG_DIR}/ukf.yaml"
-    
     log "INFO" "============= GENERATING COMPARISON REPORT ============="
     python "${UTILS_DIR}/compare_filters.py" \
            --results-dir "${RESULTS_DIR}" \
            --output-csv "${REPORT_FILE}" \
-           --filter-types madgwick kalman ekf ukf
+           --filter-types madgwick kalman ekf
     
     log "INFO" "Filter comparison complete. Results available in:"
     log "INFO" "- ${REPORT_FILE}"
