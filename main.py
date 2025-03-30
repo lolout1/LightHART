@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from scipy.spatial.transform import Rotation
 from utils.dataset import prepare_smartfallmm, split_by_subjects
-from utils.imu_fusion import clear_filters, align_sequence, process_window_with_filter
+from utils.imu_fusion import clear_filters, align_sensor_data, process_window_with_filter
 
 MAX_THREADS = 30
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)

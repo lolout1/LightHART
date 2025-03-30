@@ -7,11 +7,12 @@ from collections import defaultdict
 from utils.loader import DatasetBuilder
 from utils.imu_fusion import (
     process_window_with_filter, 
-    align_sequence, 
+    align_sensor_data, 
     process_sequential_windows,
     create_filter_id
 )
 import logging
+import traceback
 
 logger = logging.getLogger("dataset")
 
@@ -50,35 +51,50 @@ class SmartFallMM:
         self.fusion_options = fusion_options or {}
 
     def add_modality(self, age_group: str, modality_name: str) -> None:
-        if age_group not in self.age_groups: raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
+        if age_group not in self.age_groups: 
+            raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
         self.age_groups[age_group][modality_name] = Modality(modality_name)
 
     def select_sensor(self, modality_name: str, sensor_name: str = None) -> None:
-        if modality_name == "skeleton": self.selected_sensors[modality_name] = None
+        if modality_name == "skeleton": 
+            self.selected_sensors[modality_name] = None
         else:
-            if sensor_name is None: raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
+            if sensor_name is None: 
+                raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
             self.selected_sensors[modality_name] = sensor_name
 
     def load_files(self) -> None:
         for age_group, modalities in self.age_groups.items():
             for modality_name, modality in modalities.items():
-                if modality_name == "skeleton": modality_dir = os.path.join(self.root_dir, age_group, modality_name)
+                if modality_name == "skeleton": 
+                    modality_dir = os.path.join(self.root_dir, age_group, modality_name)
                 else:
                     if modality_name in self.selected_sensors:
                         sensor_name = self.selected_sensors[modality_name]
                         modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
-                    else: continue
+                    else: 
+                        continue
 
                 for root, _, files in os.walk(modality_dir):
                     for file in files:
                         try:
                             if file.endswith('.csv'):
-                                subject_id = int(file[1:3])
-                                action_id = int(file[4:6])
-                                sequence_number = int(file[7:9])
-                                file_path = os.path.join(root, file)
-                                modality.add_file(subject_id, action_id, sequence_number, file_path)
-                        except Exception as e: logger.error(f"Error processing file {file}: {e}")
+                                # Extract identifiers from filename (format: SXXAYYTZZ.csv)
+                                parts = file.split('.')[0]
+                                # Handle both formats: SxxAyyTzz and S00A00T00
+                                if 'A' in parts and 'T' in parts:
+                                    s_part = parts.split('A')[0]
+                                    a_part = parts.split('A')[1].split('T')[0]
+                                    t_part = parts.split('T')[1]
+                                    
+                                    subject_id = int(s_part.replace('S', ''))
+                                    action_id = int(a_part)
+                                    sequence_number = int(t_part)
+                                    
+                                    file_path = os.path.join(root, file)
+                                    modality.add_file(subject_id, action_id, sequence_number, file_path)
+                        except Exception as e: 
+                            logger.error(f"Error processing file {file}: {e}")
 
     def match_trials(self) -> None:
         trial_dict = {}
@@ -86,13 +102,16 @@ class SmartFallMM:
             for modality_name, modality in modalities.items():
                 for modality_file in modality.files:
                     key = (modality_file.subject_id, modality_file.action_id, modality_file.sequence_number)
-                    if key not in trial_dict: trial_dict[key] = {}
+                    if key not in trial_dict: 
+                        trial_dict[key] = {}
                     trial_dict[key][modality_name] = modality_file.file_path
 
-        required_modalities = list(self.age_groups['young'].keys())
+        # Get required modalities
+        required_modalities = list(self.selected_sensors.keys())
         
         for key, files_dict in trial_dict.items():
-            if 'accelerometer' in files_dict and ('gyroscope' in files_dict or 'gyroscope' not in required_modalities):
+            # Trial is valid if it has accelerometer and gyroscope (for fusion)
+            if 'accelerometer' in files_dict and 'gyroscope' in files_dict:
                 subject_id, action_id, sequence_number = key
                 matched_trial = MatchedTrial(subject_id, action_id, sequence_number)
                 for modality_name, file_path in files_dict.items():
@@ -103,9 +122,11 @@ class SmartFallMM:
         for age in age_group: 
             for modality in modalities:
                 self.add_modality(age, modality)
-                if modality == 'skeleton': self.select_sensor('skeleton')
+                if modality == 'skeleton': 
+                    self.select_sensor('skeleton')
                 else: 
-                    for sensor in sensors: self.select_sensor(modality, sensor)
+                    for sensor in sensors: 
+                        self.select_sensor(modality, sensor)
 
         self.load_files()
         self.match_trials()

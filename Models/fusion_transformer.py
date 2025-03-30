@@ -64,9 +64,6 @@ class FusionTransModel(nn.Module):
             nn.GELU()
         )
         
-        self.pos_encoding = nn.Parameter(torch.zeros(1, acc_frames, embed_dim))
-        nn.init.normal_(self.pos_encoding, 0, 0.02)
-
         if feature_dim is None:
             if fusion_type == 'concat':
                 self.feature_dim = embed_dim * 3
@@ -77,8 +74,12 @@ class FusionTransModel(nn.Module):
                 self.feature_dim = embed_dim * 3
         else:
             self.feature_dim = feature_dim
+        
+        # Position encoding with correct dimension
+        self.pos_encoding = nn.Parameter(torch.zeros(1, acc_frames, self.feature_dim))
+        nn.init.normal_(self.pos_encoding, 0, 0.02)
             
-        self.feature_adapter = nn.Linear(self.feature_dim, self.feature_dim)
+        self.feature_adapter = nn.Linear(embed_dim * 3 if fusion_type == 'concat' else embed_dim, self.feature_dim)
         
         if fusion_type == 'attention':
             self.attention_proj_q = nn.Linear(embed_dim, embed_dim)
@@ -129,6 +130,8 @@ class FusionTransModel(nn.Module):
         
         self._init_weights()
         
+        logger.info(f"Model initialized with embed_dim={embed_dim}, feature_dim={self.feature_dim}")
+        
     def _init_weights(self):
         for name, p in self.named_parameters():
             if 'weight' in name and p.dim() > 1:
@@ -168,7 +171,6 @@ class FusionTransModel(nn.Module):
             
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
-                
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
             elif self.fusion_type == 'attention':
@@ -237,7 +239,6 @@ class FusionTransModel(nn.Module):
             
             if self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
-                
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
             elif self.fusion_type == 'attention' or self.fusion_type == 'weighted':
@@ -270,24 +271,30 @@ class FusionTransModel(nn.Module):
             batch_size, seq_len = acc_features.shape[0], acc_features.shape[1]
             
             if self.fusion_type == 'concat':
-                dummy_features = torch.zeros(
-                    batch_size, 
-                    seq_len, 
-                    self.feature_dim - self.embed_dim,
-                    device=acc_data.device
-                )
+                # Create zero tensors for missing modalities
+                gyro_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
+                quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
                 
-                fused_features = torch.cat([acc_features, dummy_features], dim=2)
+                # Concatenate all features
+                fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
+                
+                # Ensure dimensions match
+                if fused_features.shape[2] != self.feature_dim:
+                    fused_features = self.feature_adapter(fused_features)
             else:
+                # For other fusion types, just use accelerometer features
                 fused_features = self.feature_adapter(acc_features)
             
+            # Add positional encoding
             seq_len = fused_features.shape[1]
             fused_features = fused_features + self.pos_encoding[:, :seq_len, :]
             
+            # Apply transformer encoder
             transformer_output = self.transformer(fused_features)
             attn_weights = self.attn_pool(transformer_output)
             pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
+            # Classify
             logits = self.classifier(pooled)
             
             return logits
