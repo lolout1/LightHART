@@ -1,0 +1,36 @@
+# config/lightweight_fall_detection.yaml
+model: Models.lightweightTransformer.LightFallTransformer
+dataset: smartfallmm
+
+subjects: [29, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 32, 39]
+val_subjects: [38, 46]
+
+model_args:
+  num_layers: 2
+  embed_dim: 32
+  acc_coords: 3
+  num_classes: 2
+  acc_frames: 64
+  num_heads: 2
+  dropout: 0.2
+  use_batch_norm: true
+
+dataset_args:
+  mode: 'sliding_window'
+  max_length: 64
+  task: 'fd'
+  modalities: ['accelerometer', 'gyroscope']
+  age_group: ['young']
+  sensors: ['watch']
+  fusion_options:
+    enabled: false  # No filtering
+
+batch_size: 16
+test_batch_size: 16
+val_batch_size: 16
+num_epoch: 60
+
+seed: 42
+optimizer: adamw
+base_lr: 0.0005
+weight_decay: 0.0005

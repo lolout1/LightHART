@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument('--start-epoch', type=int, default=0, help='Start epoch number')
     parser.add_argument('--weights-only', type=str2bool, default=False, help='Load only weights')
     parser.add_argument('--optimizer', type=str, default='Adam', help='Optimizer')
-    parser.add_argument('--base-lr', type=float, default=0.001, metavar='LR', help='Base learning rate')
+    parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR', help='Base learning rate')
     parser.add_argument('--weight-decay', type=float, default=0.0004, help='Weight decay')
     parser.add_argument('--kfold', type=str2bool, default=False, help='Use cross validation')
     parser.add_argument('--num-folds', type=int, default=5, help='Number of folds')

@@ -38,13 +38,13 @@ def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> D
 def main():
     parser = argparse.ArgumentParser(description="Recover CV summary from fold results")
     parser.add_argument("--output-dir", required=True, help="Model output directory")
-    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, ukf)")
+    parser.add_argument("--filter-type", required=True, help="Filter type (madgwick, kalman, ekf, none)")
     args = parser.parse_args()
     
     fold_metrics = load_fold_results(args.output_dir)
     cv_summary = create_cv_summary(fold_metrics, args.filter_type)
     
-    summary_path = os.path.join(args.output_dir, "cv_summary.json")
+    summary_path = os.path.join(args.output_dir, "test_summary.json")
     with open(summary_path, 'w') as f:
         json.dump(cv_summary, f, indent=2)
         

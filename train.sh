@@ -4,7 +4,7 @@ set -o pipefail
 set -u
 
 DEVICE="0,1"
-BASE_LR=0.0001
+BASE_LR=0.001
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=100
 PATIENCE=15
@@ -62,7 +62,7 @@ model_args:
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 8
+  num_heads: 4
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
