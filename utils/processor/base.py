@@ -10,6 +10,192 @@ import logging
 
 logger = logging.getLogger("processor")
 
+# Add these functions to the top of utils/processor/base.py
+
+def fix_monotonic_timestamps(timestamps):
+    """Ensure timestamps are strictly increasing by correcting duplicates and inversions"""
+    if len(timestamps) <= 1:
+        return timestamps
+        
+    fixed_timestamps = np.array(timestamps, dtype=np.float64)
+    min_increment = 1e-6  # microsecond increment for duplicates
+    
+    # Identify duplicates and backward jumps
+    for i in range(1, len(fixed_timestamps)):
+        if fixed_timestamps[i] <= fixed_timestamps[i-1]:
+            # Fix timestamp by adding increment to previous timestamp
+            fixed_timestamps[i] = fixed_timestamps[i-1] + min_increment
+    
+    return fixed_timestamps
+
+def last_value_resample(data, timestamps, target_timestamps):
+    """
+    Resample data using last-value-forward approach (Android-compatible)
+    This method only uses past information, suitable for real-time processing
+    """
+    if len(data) == 0 or len(timestamps) == 0:
+        return np.zeros((len(target_timestamps), data.shape[1] if len(data.shape) > 1 else 1))
+        
+    # Ensure timestamps are monotonically increasing
+    timestamps = fix_monotonic_timestamps(timestamps)
+    
+    # Convert to numpy arrays if they aren't already
+    data = np.array(data)
+    timestamps = np.array(timestamps)
+    target_timestamps = np.array(target_timestamps)
+    
+    # Initialize output array
+    if len(data.shape) > 1:
+        resampled = np.zeros((len(target_timestamps), data.shape[1]))
+    else:
+        resampled = np.zeros(len(target_timestamps))
+    
+    # Find the first valid data point
+    if target_timestamps[0] < timestamps[0]:
+        # For timestamps before the first data point, use the first value
+        idx = 0
+    else:
+        # Find the first data point that occurred before or at the first target timestamp
+        idx = np.searchsorted(timestamps, target_timestamps[0], side='right') - 1
+        idx = max(0, idx)
+    
+    # If the resampling target starts before data, use the first data point for initial values
+    if idx == 0:
+        if len(data.shape) > 1:
+            resampled[0] = data[0]
+        else:
+            resampled[0] = data[0]
+    
+    # Resample each target timestamp
+    last_idx = idx
+    for i, target_time in enumerate(target_timestamps):
+        # Find the last measurement that occurred before or at the target time
+        while last_idx + 1 < len(timestamps) and timestamps[last_idx + 1] <= target_time:
+            last_idx += 1
+            
+        # Use the last valid measurement
+        if len(data.shape) > 1:
+            resampled[i] = data[last_idx]
+        else:
+            resampled[i] = data[last_idx]
+    
+    return resampled
+
+# Replace the selective_sliding_window function with this Android-compatible version
+def selective_sliding_window(data: np.ndarray, length: int, window_size: int, stride_size: int, height: float, distance: int) -> np.array:
+    try:
+        # Ensure data is at least 2D with 3 columns
+        if len(data.shape) == 1:
+            padded_data = np.zeros((len(data), 3))
+            padded_data[:, 0] = data
+            data = padded_data
+        elif data.shape[1] < 3:
+            padded_data = np.zeros((data.shape[0], 3))
+            padded_data[:, :data.shape[1]] = data
+            data = padded_data
+        
+        # Get the magnitude of acceleration
+        sqrt_sum = np.sqrt(np.sum(data**2, axis=1))
+        
+        # Find peaks - using a simpler peak detection suitable for Android real-time
+        # This avoids the scipy dependency which might be challenging for Android
+        peaks = []
+        for i in range(distance, len(sqrt_sum) - distance):
+            if sqrt_sum[i] > height:
+                # Check if it's a local maximum
+                local_max = True
+                for j in range(i - distance, i):
+                    if sqrt_sum[j] > sqrt_sum[i]:
+                        local_max = False
+                        break
+                for j in range(i + 1, i + distance + 1):
+                    if j < len(sqrt_sum) and sqrt_sum[j] > sqrt_sum[i]:
+                        local_max = False
+                        break
+                
+                if local_max:
+                    peaks.append(i)
+        
+        windows = []
+        
+        for peak in peaks:
+            start = max(0, peak - window_size // 2)
+            end = min(len(data), start + window_size)
+            
+            if end - start < window_size // 2:
+                continue
+                
+            window_data = np.zeros((window_size, data.shape[1]))
+            actual_length = end - start
+            window_data[:actual_length] = data[start:end]
+            windows.append(window_data)
+            
+        return windows
+    except Exception as e:
+        logger.error(f"Error in selective_sliding_window: {str(e)}")
+        return []
+
+# Replace the sliding_window function with this Android-compatible version
+def sliding_window(data: np.ndarray, window_size: int, stride_size: int) -> np.array:
+    """
+    Extract sliding windows from data
+    
+    Args:
+        data: Input data [samples, features]
+        window_size: Number of samples per window
+        stride_size: Number of samples to advance between windows
+        
+    Returns:
+        Array of windowed data [num_windows, window_size, features]
+    """
+    if len(data) < window_size:
+        return np.array([])
+        
+    # Calculate number of windows
+    num_windows = (len(data) - window_size) // stride_size + 1
+    
+    if num_windows <= 0:
+        return np.array([data[:window_size]])
+    
+    # Extract windows
+    windows = []
+    for i in range(num_windows):
+        start_idx = i * stride_size
+        end_idx = start_idx + window_size
+        
+        if end_idx <= len(data):
+            windows.append(data[start_idx:end_idx])
+    
+    return np.array(windows)
+
+# Override the pad_sequence_numpy function
+def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, input_shape: np.array) -> np.ndarray:
+    """
+    Pad or truncate sequence to fixed length without complex interpolation
+    
+    Args:
+        sequence: Input sequence
+        max_sequence_length: Target length
+        input_shape: Original shape
+        
+    Returns:
+        Padded/truncated sequence
+    """
+    shape = list(input_shape)
+    shape[0] = max_sequence_length
+    
+    # Simple solution that's compatible with Android real-time processing
+    new_sequence = np.zeros(shape, sequence.dtype)
+    
+    # If sequence is too long, truncate
+    if len(sequence) >= max_sequence_length:
+        new_sequence = sequence[:max_sequence_length]
+    # If sequence is too short, pad with zeros
+    else:
+        new_sequence[:len(sequence)] = sequence
+    
+    return new_sequence
+
 def csvloader(file_path: str, **kwargs) -> np.ndarray:
     try:
         try:
@@ -92,66 +278,6 @@ def avg_pool(sequence: np.array, window_size: int = 5, stride: int = 1,
     sequence = sequence.squeeze(0).numpy().transpose(1, 0)
     sequence = sequence.reshape(-1, *shape[1:])
     return sequence
-
-def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, input_shape: np.array) -> np.ndarray:
-    shape = list(input_shape)
-    shape[0] = max_sequence_length
-    pooled_sequence = avg_pool(sequence=sequence, max_length=max_sequence_length, shape=input_shape)
-    new_sequence = np.zeros(shape, sequence.dtype)
-    new_sequence[:len(pooled_sequence)] = pooled_sequence
-    return new_sequence
-
-def sliding_window(data: np.ndarray, clearing_time_index: int, max_time: int, 
-                   sub_window_size: int, stride_size: int) -> np.ndarray:
-    if clearing_time_index < sub_window_size - 1:
-        raise AssertionError("Clearing value needs to be greater or equal to (window size - 1)")
-    
-    start = clearing_time_index - sub_window_size + 1
-    if max_time >= data.shape[0] - sub_window_size:
-        max_time = max_time - sub_window_size + 1
-    
-    sub_windows = (
-        start + 
-        np.expand_dims(np.arange(sub_window_size), 0) + 
-        np.expand_dims(np.arange(max_time, step=stride_size), 0).T
-    )
-    return data[sub_windows]
-
-def selective_sliding_window(data: np.ndarray, length: int, window_size: int, stride_size: int, height: float, distance: int) -> np.array:
-    try:
-        # Ensure data is at least 2D with 3 columns
-        if len(data.shape) == 1:
-            padded_data = np.zeros((len(data), 3))
-            padded_data[:, 0] = data
-            data = padded_data
-        elif data.shape[1] < 3:
-            padded_data = np.zeros((data.shape[0], 3))
-            padded_data[:, :data.shape[1]] = data
-            data = padded_data
-        
-        # Get the magnitude of acceleration
-        sqrt_sum = np.sqrt(np.sum(data**2, axis=1))
-        
-        # Find peaks
-        peaks, _ = find_peaks(sqrt_sum, height=height, distance=distance)
-        windows = []
-        
-        for peak in peaks:
-            start = max(0, peak - window_size // 2)
-            end = min(len(data), start + window_size)
-            
-            if end - start < window_size // 2:
-                continue
-                
-            window_data = np.zeros((window_size, data.shape[1]))
-            actual_length = end - start
-            window_data[:actual_length] = data[start:end]
-            windows.append(window_data)
-            
-        return windows
-    except Exception as e:
-        logger.error(f"Error in selective_sliding_window: {str(e)}")
-        return []
 
 class Processor(ABC):
     def __init__(self, file_path: str, mode: str, max_length: str, label: int, **kwargs):
