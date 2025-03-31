@@ -39,10 +39,10 @@ def get_args():
     parser.add_argument('--num-epoch', type=int, default=60, metavar='N', help='Training epochs')
     parser.add_argument('--start-epoch', type=int, default=0, help='Start epoch number')
     parser.add_argument('--optimizer', type=str, default='Adam', help='Optimizer')
-    parser.add_argument('--base-lr', type=float, default=0.0001, metavar='LR', help='Base learning rate')
+    parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR', help='Base learning rate')
     parser.add_argument('--weight-decay', type=float, default=0.0004, help='Weight decay')
     parser.add_argument('--patience', type=int, default=15, help='Early stopping patience')
-    parser.add_argument('--model', default='Models.lightweightTransformer.LightFallTransformer', help='Model class path')
+    parser.add_argument('--model', default='Models.simple.FallDetectionTransformer', help='Model class path')
     parser.add_argument('--device', type=int, default=0, help='CUDA device ID')
     parser.add_argument('--model-args', default=None, help='Model arguments')
     parser.add_argument('--model-saved-name', type=str, default='lightweight_Transmodel', help='Model save name')
@@ -80,9 +80,8 @@ class Trainer:
             arg.model_args = {
                 'num_layers': 2,
                 'embed_dim': 32,
-                'acc_coords': 3,
                 'num_classes': 2,
-                'acc_frames': 64,
+                'seq_length': 64,
                 'num_heads': 2,
                 'dropout': 0.2,
                 'use_batch_norm': True
