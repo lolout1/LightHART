@@ -4,133 +4,109 @@ import torch.nn.functional as F
 import math
 
 class FallDetectionTransformer(nn.Module):
-    def __init__(self, seq_length=64, num_classes=2, num_heads=2, input_channels=3, num_layers=2, embed_dim=32, dropout=0.2, use_batch_norm=True, **kwargs):
+    def __init__(self, acc_frames=64, num_classes=2, num_heads=4, acc_coords=3, 
+                 num_layers=2, embed_dim=32, dropout=0.2, use_batch_norm=True, **kwargs):
         super().__init__()
-        self.seq_length = seq_length
+        self.acc_frames = acc_frames
         self.embed_dim = embed_dim
-        self.input_channels = input_channels
+        self.acc_coords = acc_coords
         self.num_classes = num_classes
         
-        # Accelerometer encoder - uses fixed-size operations for TFLite
+        # Encoder for accelerometer data
         self.acc_encoder = nn.Sequential(
-            nn.Conv1d(input_channels, embed_dim, kernel_size=3, padding=1),
+            nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-            nn.GELU(),
-            nn.Dropout(dropout/2)
+            nn.GELU(), nn.Dropout(dropout/2),
+            nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
+            nn.GELU()
         )
         
-        # Gyroscope encoder - uses fixed-size operations for TFLite
+        # Encoder for gyroscope data
         self.gyro_encoder = nn.Sequential(
-            nn.Conv1d(input_channels, embed_dim, kernel_size=3, padding=1),
+            nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
-            nn.GELU(),
-            nn.Dropout(dropout/2)
+            nn.GELU(), nn.Dropout(dropout/2),
+            nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
+            nn.GELU()
         )
         
-        # Fusion dimension
-        self.fusion_dim = embed_dim * 2
+        # Combined feature dimension
+        self.feature_dim = embed_dim * 2
         
-        # Pre-computed positional embeddings (no Embedding layer for TFLite)
-        pos_enc = torch.zeros(1, seq_length, self.fusion_dim)
-        position = torch.arange(seq_length).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, self.fusion_dim, 2).float() * (-math.log(10000.0) / self.fusion_dim))
-        pos_enc[0, :, 0::2] = torch.sin(position * div_term)
-        pos_enc[0, :, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("position_embeddings", pos_enc)
-        
-        # Transformer
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.fusion_dim,
-            nhead=num_heads,
-            dim_feedforward=self.fusion_dim * 2,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True
+        # Transformer encoder
+        encoder_layers = nn.TransformerEncoderLayer(
+            d_model=self.feature_dim, nhead=num_heads, dim_feedforward=self.feature_dim * 4,
+            dropout=dropout, activation='gelu', batch_first=True, norm_first=True
         )
         
         self.transformer = nn.TransformerEncoder(
-            encoder_layer=encoder_layer,
-            num_layers=num_layers,
-            norm=nn.LayerNorm(self.fusion_dim)
+            encoder_layer=encoder_layers, num_layers=num_layers, 
+            norm=nn.LayerNorm(self.feature_dim)
         )
         
         # Classification head
         self.classifier = nn.Sequential(
-            nn.Linear(self.fusion_dim, 64),
-            nn.LayerNorm(64),
-            nn.GELU(),
-            nn.Dropout(dropout),
+            nn.Linear(self.feature_dim, 64),
+            nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
+            nn.GELU(), nn.Dropout(dropout),
             nn.Linear(64, num_classes)
         )
         
         self._init_weights()
     
     def _init_weights(self):
-        # Weight initialization for better convergence
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None: 
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
-                if m.bias is not None: 
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, (nn.BatchNorm1d, nn.LayerNorm)):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+        for name, p in self.named_parameters():
+            if 'weight' in name and p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        nn.init.zeros_(self.classifier[-1].bias)
+        fan_in = self.classifier[-1].weight.size(1)
+        nn.init.normal_(self.classifier[-1].weight, 0, 1/math.sqrt(fan_in))
     
     def forward(self, acc_data, gyro_data):
         """
-        Forward pass with explicit tensor inputs for TFLite compatibility
+        Forward pass with explicit tensor arguments for AI Edge Torch compatibility.
         
         Args:
-            acc_data: Tensor of shape [batch_size, seq_length, channels] (NHWC format)
-            gyro_data: Tensor of shape [batch_size, seq_length, channels] (NHWC format)
+            acc_data: Accelerometer data [batch, seq_len, channels] or [batch, channels, seq_len]
+            gyro_data: Gyroscope data [batch, seq_len, channels] or [batch, channels, seq_len]
             
         Returns:
-            Tensor of shape [batch_size, num_classes] with class logits
+            Classification logits [batch, num_classes]
         """
-        # Get batch_size for reshaping operations
-        batch_size = acc_data.shape[0]
-        
-        # Convert from channel-last (NHWC) to channel-first (NCHW) for Conv1D
-        acc_data_conv = acc_data.transpose(1, 2)  # [batch, seq, ch] -> [batch, ch, seq]
-        gyro_data_conv = gyro_data.transpose(1, 2)  # [batch, seq, ch] -> [batch, ch, seq]
-        
-        # Process through encoders
-        acc_features = self.acc_encoder(acc_data_conv)  # [batch, embed_dim, seq]
-        gyro_features = self.gyro_encoder(gyro_data_conv)  # [batch, embed_dim, seq]
-        
-        # Convert back to channel-last for transformer
-        acc_features = acc_features.transpose(1, 2)  # [batch, seq, embed_dim]
-        gyro_features = gyro_features.transpose(1, 2)  # [batch, seq, embed_dim]
-        
-        # Fusion by concatenation
-        fused_features = torch.cat([acc_features, gyro_features], dim=2)  # [batch, seq, fusion_dim]
-        
-        # Get sequence length for positional embedding
-        seq_len = fused_features.shape[1]
-        
-        # Slice positional embeddings to match sequence length (fixed operation for TFLite)
-        if seq_len <= self.position_embeddings.shape[1]:
-            pos_emb = self.position_embeddings[:, :seq_len, :]
+        # Handle different input formats
+        if acc_data.shape[1] == self.acc_coords and len(acc_data.shape) == 3:
+            # Already in [batch, channels, seq_len] format
+            acc_data_conv = acc_data
         else:
-            # Handle case where input is longer than positional embeddings
-            pos_emb = torch.nn.functional.pad(
-                self.position_embeddings,
-                (0, 0, 0, seq_len - self.position_embeddings.shape[1], 0, 0)
-            )
+            # Convert to [batch, channels, seq_len] format
+            acc_data_conv = acc_data.transpose(1, 2)
+            
+        if gyro_data.shape[1] == self.acc_coords and len(gyro_data.shape) == 3:
+            # Already in [batch, channels, seq_len] format
+            gyro_data_conv = gyro_data
+        else:
+            # Convert to [batch, channels, seq_len] format
+            gyro_data_conv = gyro_data.transpose(1, 2)
         
-        # Add positional embeddings - broadcasting handles batch dimension
-        fused_features = fused_features + pos_emb
+        # Process accelerometer data
+        acc_features = self.acc_encoder(acc_data_conv)
+        # Process gyroscope data
+        gyro_features = self.gyro_encoder(gyro_data_conv)
         
-        # Apply transformer
+        # Convert to sequence-first format for transformer
+        acc_features = acc_features.transpose(1, 2)
+        gyro_features = gyro_features.transpose(1, 2)
+        
+        # Concatenate features
+        fused_features = torch.cat([acc_features, gyro_features], dim=2)
+        
+        # Process through transformer
         transformer_output = self.transformer(fused_features)
         
-        # Global average pooling (mean across sequence dimension)
-        pooled_output = torch.mean(transformer_output, dim=1)
+        # Global average pooling
+        pooled = torch.mean(transformer_output, dim=1)
         
         # Classification
-        return self.classifier(pooled_output)
+        return self.classifier(pooled)

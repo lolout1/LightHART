@@ -5,219 +5,47 @@ import pandas as pd
 import numpy as np 
 import torch
 import torch.nn.functional as F
-from scipy.signal import find_peaks
 import logging
 
 logger = logging.getLogger("processor")
 
-# Add these functions to the top of utils/processor/base.py
-
-def fix_monotonic_timestamps(timestamps):
-    """Ensure timestamps are strictly increasing by correcting duplicates and inversions"""
-    if len(timestamps) <= 1:
-        return timestamps
-        
-    fixed_timestamps = np.array(timestamps, dtype=np.float64)
-    min_increment = 1e-6  # microsecond increment for duplicates
-    
-    # Identify duplicates and backward jumps
-    for i in range(1, len(fixed_timestamps)):
-        if fixed_timestamps[i] <= fixed_timestamps[i-1]:
-            # Fix timestamp by adding increment to previous timestamp
-            fixed_timestamps[i] = fixed_timestamps[i-1] + min_increment
-    
-    return fixed_timestamps
-
-def last_value_resample(data, timestamps, target_timestamps):
-    """
-    Resample data using last-value-forward approach (Android-compatible)
-    This method only uses past information, suitable for real-time processing
-    """
-    if len(data) == 0 or len(timestamps) == 0:
-        return np.zeros((len(target_timestamps), data.shape[1] if len(data.shape) > 1 else 1))
-        
-    # Ensure timestamps are monotonically increasing
-    timestamps = fix_monotonic_timestamps(timestamps)
-    
-    # Convert to numpy arrays if they aren't already
-    data = np.array(data)
-    timestamps = np.array(timestamps)
-    target_timestamps = np.array(target_timestamps)
-    
-    # Initialize output array
-    if len(data.shape) > 1:
-        resampled = np.zeros((len(target_timestamps), data.shape[1]))
-    else:
-        resampled = np.zeros(len(target_timestamps))
-    
-    # Find the first valid data point
-    if target_timestamps[0] < timestamps[0]:
-        # For timestamps before the first data point, use the first value
-        idx = 0
-    else:
-        # Find the first data point that occurred before or at the first target timestamp
-        idx = np.searchsorted(timestamps, target_timestamps[0], side='right') - 1
-        idx = max(0, idx)
-    
-    # If the resampling target starts before data, use the first data point for initial values
-    if idx == 0:
-        if len(data.shape) > 1:
-            resampled[0] = data[0]
-        else:
-            resampled[0] = data[0]
-    
-    # Resample each target timestamp
-    last_idx = idx
-    for i, target_time in enumerate(target_timestamps):
-        # Find the last measurement that occurred before or at the target time
-        while last_idx + 1 < len(timestamps) and timestamps[last_idx + 1] <= target_time:
-            last_idx += 1
-            
-        # Use the last valid measurement
-        if len(data.shape) > 1:
-            resampled[i] = data[last_idx]
-        else:
-            resampled[i] = data[last_idx]
-    
-    return resampled
-
-# Replace the selective_sliding_window function with this Android-compatible version
-def selective_sliding_window(data: np.ndarray, length: int, window_size: int, stride_size: int, height: float, distance: int) -> np.array:
-    try:
-        # Ensure data is at least 2D with 3 columns
-        if len(data.shape) == 1:
-            padded_data = np.zeros((len(data), 3))
-            padded_data[:, 0] = data
-            data = padded_data
-        elif data.shape[1] < 3:
-            padded_data = np.zeros((data.shape[0], 3))
-            padded_data[:, :data.shape[1]] = data
-            data = padded_data
-        
-        # Get the magnitude of acceleration
-        sqrt_sum = np.sqrt(np.sum(data**2, axis=1))
-        
-        # Find peaks - using a simpler peak detection suitable for Android real-time
-        # This avoids the scipy dependency which might be challenging for Android
-        peaks = []
-        for i in range(distance, len(sqrt_sum) - distance):
-            if sqrt_sum[i] > height:
-                # Check if it's a local maximum
-                local_max = True
-                for j in range(i - distance, i):
-                    if sqrt_sum[j] > sqrt_sum[i]:
-                        local_max = False
-                        break
-                for j in range(i + 1, i + distance + 1):
-                    if j < len(sqrt_sum) and sqrt_sum[j] > sqrt_sum[i]:
-                        local_max = False
-                        break
-                
-                if local_max:
-                    peaks.append(i)
-        
-        windows = []
-        
-        for peak in peaks:
-            start = max(0, peak - window_size // 2)
-            end = min(len(data), start + window_size)
-            
-            if end - start < window_size // 2:
-                continue
-                
-            window_data = np.zeros((window_size, data.shape[1]))
-            actual_length = end - start
-            window_data[:actual_length] = data[start:end]
-            windows.append(window_data)
-            
-        return windows
-    except Exception as e:
-        logger.error(f"Error in selective_sliding_window: {str(e)}")
-        return []
-
-# Replace the sliding_window function with this Android-compatible version
-def sliding_window(data: np.ndarray, window_size: int, stride_size: int) -> np.array:
-    """
-    Extract sliding windows from data
-    
-    Args:
-        data: Input data [samples, features]
-        window_size: Number of samples per window
-        stride_size: Number of samples to advance between windows
-        
-    Returns:
-        Array of windowed data [num_windows, window_size, features]
-    """
-    if len(data) < window_size:
-        return np.array([])
-        
-    # Calculate number of windows
-    num_windows = (len(data) - window_size) // stride_size + 1
-    
-    if num_windows <= 0:
-        return np.array([data[:window_size]])
-    
-    # Extract windows
-    windows = []
-    for i in range(num_windows):
-        start_idx = i * stride_size
-        end_idx = start_idx + window_size
-        
-        if end_idx <= len(data):
-            windows.append(data[start_idx:end_idx])
-    
-    return np.array(windows)
-
-# Override the pad_sequence_numpy function
-def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, input_shape: np.array) -> np.ndarray:
-    """
-    Pad or truncate sequence to fixed length without complex interpolation
-    
-    Args:
-        sequence: Input sequence
-        max_sequence_length: Target length
-        input_shape: Original shape
-        
-    Returns:
-        Padded/truncated sequence
-    """
-    shape = list(input_shape)
-    shape[0] = max_sequence_length
-    
-    # Simple solution that's compatible with Android real-time processing
-    new_sequence = np.zeros(shape, sequence.dtype)
-    
-    # If sequence is too long, truncate
-    if len(sequence) >= max_sequence_length:
-        new_sequence = sequence[:max_sequence_length]
-    # If sequence is too short, pad with zeros
-    else:
-        new_sequence[:len(sequence)] = sequence
-    
-    return new_sequence
-
 def csvloader(file_path: str, **kwargs) -> np.ndarray:
+    """
+    Load a CSV file and extract the sensor data.
+    
+    Args:
+        file_path: Path to the CSV file
+        **kwargs: Additional keyword arguments
+        
+    Returns:
+        Numpy array with the sensor data
+    """
     try:
         try:
             file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
         except:
             file_data = pd.read_csv(file_path, index_col=False, header=None, sep=';').dropna().bfill()
         
+        # Determine the number of columns based on the file type
         if 'skeleton' in file_path:
-            cols = 96
+            cols = 96  # Fixed size for skeleton data (32 joints * 3 coordinates)
         else:
             if file_data.shape[1] > 4:
+                # Format with timestamps and extra columns
                 cols = file_data.shape[1] - 3
                 file_data = file_data.iloc[:, 3:]
             else:
+                # Simple format with 3 columns (x, y, z)
                 cols = 3
         
+        # Handle missing columns
         if file_data.shape[1] < cols:
             logger.warning(f"File has fewer columns than expected: {file_data.shape[1]} < {cols}")
             missing_cols = cols - file_data.shape[1]
             for i in range(missing_cols):
                 file_data[f'missing_{i}'] = 0
         
+        # Skip header rows if present
         if file_data.shape[0] > 2:
             activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
         else:
@@ -229,6 +57,16 @@ def csvloader(file_path: str, **kwargs) -> np.ndarray:
         raise
 
 def matloader(file_path: str, **kwargs):
+    """
+    Load a MAT file and extract the sensor data.
+    
+    Args:
+        file_path: Path to the MAT file
+        **kwargs: Additional keyword arguments
+        
+    Returns:
+        Numpy array with the sensor data
+    """
     key = kwargs.get('key', None)
     if key not in ['d_iner', 'd_skel']:
         raise ValueError(f'Unsupported {key} for matlab file')
@@ -241,6 +79,16 @@ LOADER_MAP = {
 }
 
 def ensure_3d_vector(v, default_value=0.0):
+    """
+    Ensure that a vector has 3 components.
+    
+    Args:
+        v: Input vector
+        default_value: Default value for missing components
+        
+    Returns:
+        3D vector
+    """
     if v is None:
         return np.array([default_value, default_value, default_value])
     
@@ -268,7 +116,20 @@ def ensure_3d_vector(v, default_value=0.0):
     return np.array([default_value, default_value, default_value])
 
 def avg_pool(sequence: np.array, window_size: int = 5, stride: int = 1, 
-             max_length: int = 512, shape: int = None) -> np.ndarray:
+             max_length: int = 128, shape: int = None) -> np.ndarray:
+    """
+    Apply average pooling to reduce sequence length.
+    
+    Args:
+        sequence: Input sequence
+        window_size: Size of the pooling window
+        stride: Stride for pooling
+        max_length: Maximum length of the output sequence
+        shape: Shape of the input sequence (optional)
+        
+    Returns:
+        Pooled sequence
+    """
     shape = sequence.shape if shape is None else shape
     sequence = sequence.reshape(shape[0], -1)
     sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
@@ -279,9 +140,75 @@ def avg_pool(sequence: np.array, window_size: int = 5, stride: int = 1,
     sequence = sequence.reshape(-1, *shape[1:])
     return sequence
 
+def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, input_shape: np.array) -> np.ndarray:
+    """
+    Pad a sequence to a fixed length.
+    
+    Args:
+        sequence: Input sequence
+        max_sequence_length: Target length for the sequence
+        input_shape: Shape of the input sequence
+        
+    Returns:
+        Padded sequence
+    """
+    shape = list(input_shape)
+    shape[0] = max_sequence_length
+    
+    # Use average pooling if sequence is too long
+    if len(sequence) > max_sequence_length:
+        pooled_sequence = avg_pool(sequence=sequence, max_length=max_sequence_length, shape=input_shape)
+    else:
+        pooled_sequence = sequence
+    
+    # Create new sequence with target length
+    new_sequence = np.zeros(shape, sequence.dtype)
+    new_sequence[:len(pooled_sequence)] = pooled_sequence
+    return new_sequence
+
+def fixed_size_windows(data: np.ndarray, window_size: int = 128, overlap: float = 0.5, min_windows: int = 1) -> List[np.ndarray]:
+    """
+    Creates fixed-size windows with overlap for consistent processing.
+    
+    Args:
+        data: Input sensor data with shape (n_samples, n_features)
+        window_size: Size of each window
+        overlap: Overlap ratio between consecutive windows (0.0-1.0)
+        min_windows: Minimum number of windows to create
+        
+    Returns:
+        List of windows, each with shape (window_size, n_features)
+    """
+    if len(data) < window_size:
+        # If data is too short, pad with zeros
+        padded = np.zeros((window_size, data.shape[1]))
+        padded[:len(data)] = data
+        return [padded]
+    
+    stride = int(window_size * (1 - overlap))
+    starts = list(range(0, len(data) - window_size + 1, stride))
+    
+    # Ensure at least min_windows are created
+    if len(starts) < min_windows:
+        # Create evenly spaced starting points
+        if len(data) <= window_size:
+            starts = [0]
+        else:
+            starts = np.linspace(0, len(data) - window_size, min_windows).astype(int).tolist()
+    
+    windows = []
+    for start in starts:
+        end = start + window_size
+        if end <= len(data):
+            windows.append(data[start:end])
+    
+    return windows
+
 class Processor(ABC):
-    def __init__(self, file_path: str, mode: str, max_length: str, label: int, **kwargs):
-        assert mode in ['sliding_window', 'avg_pool'], f'Processing mode: {mode} is undefined'
+    """Base class for data processing."""
+    
+    def __init__(self, file_path: str, mode: str, max_length: int, label: int, **kwargs):
+        assert mode in ['fixed_window', 'avg_pool'], f'Processing mode: {mode} is undefined'
         self.label = label 
         self.mode = mode
         self.max_length = max_length
@@ -291,20 +218,24 @@ class Processor(ABC):
         self.kwargs = kwargs
 
     def set_input_shape(self, sequence: np.ndarray) -> List[int]:
+        """Set the input shape based on the sequence."""
         self.input_shape = sequence.shape
 
     def _import_loader(self, file_path: str):
+        """Import the appropriate loader for the file type."""
         file_type = file_path.split('.')[-1]
         assert file_type in ['csv', 'mat'], f'Unsupported file type {file_type}'
         return LOADER_MAP[file_type]
     
     def load_file(self, file_path: str):
+        """Load a file using the appropriate loader."""
         loader = self._import_loader(file_path)
         data = loader(file_path, **self.kwargs)
         self.set_input_shape(data)
         return data
 
     def process(self, data):
+        """Process the input data."""
         if self.mode == 'avg_pool':
             # Ensure data has 3 columns for accelerometer/gyroscope
             if len(data.shape) == 1 or (len(data.shape) > 1 and data.shape[1] < 3):
@@ -317,28 +248,19 @@ class Processor(ABC):
                 data = np.array(valid_data)
                 self.input_shape = data.shape
             
+            # Pad or truncate sequence to fixed length
             data = pad_sequence_numpy(
                 sequence=data, 
                 max_sequence_length=self.max_length,
                 input_shape=self.input_shape
             )
-        else:  # sliding_window
-            if self.label == 1:  # Fall
-                data = selective_sliding_window(
-                    data, 
-                    length=self.input_shape[0],
-                    window_size=self.max_length, 
-                    stride_size=10, 
-                    height=1.4, 
-                    distance=50
-                )
-            else:  # ADL
-                data = selective_sliding_window(
-                    data, 
-                    length=self.input_shape[0],
-                    window_size=self.max_length, 
-                    stride_size=10, 
-                    height=1.2, 
-                    distance=100
-                )
+        else:  # fixed_window
+            # Create fixed-size windows
+            data = fixed_size_windows(
+                data,
+                window_size=self.max_length,
+                overlap=0.5,
+                min_windows=1
+            )
+        
         return data
