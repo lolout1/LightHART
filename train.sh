@@ -4,7 +4,7 @@ set -o pipefail
 set -u
 
 DEVICE="0,1"
-BASE_LR=0.001
+BASE_LR=0.0005
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=100
 PATIENCE=15
@@ -346,7 +346,7 @@ train_filter_model() {
     fi
     
     log "INFO" "Training model with ${filter_type} filter"
-    CUDA_VISIBLE_DEVICES=${DEVICE} python main.py \
+    CUDA_VISIBLE_DEVICES=${DEVICE} python main2.py \
         --config "${config_file}" \
         --work-dir "${output_dir}" \
         --model-saved-name "${filter_type}_model" \

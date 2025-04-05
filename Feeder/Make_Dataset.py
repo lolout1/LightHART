@@ -10,6 +10,7 @@ from typing import Dict, Tuple, List, Union, Optional
 import logging
 import time
 import os
+import traceback
 
 logger = logging.getLogger("make_dataset")
 
@@ -96,6 +97,13 @@ class UTD_mm(torch.utils.data.Dataset):
             self.gyro_data = np.zeros((self.total_samples, 64, 3))
             logger.info("Gyroscope data not available, using zeros")
             
+        if 'quaternion' in dataset and dataset['quaternion'] is not None and len(dataset['quaternion']) > 0:
+            self.quat_data = dataset['quaternion']
+            self.available_modalities.append('quaternion')
+        else:
+            self.quat_data = np.zeros((self.total_samples, 64, 4))
+            logger.info("Quaternion data not available, using zeros")
+            
         if 'skeleton' in dataset and dataset['skeleton'] is not None and len(dataset['skeleton']) > 0:
             self.skl_data = dataset['skeleton']
             try:
@@ -146,17 +154,25 @@ class UTD_mm(torch.utils.data.Dataset):
             acc = torch.tensor(self.acc_data[valid_index], dtype=torch.float32)
             gyro = torch.tensor(self.gyro_data[valid_index], dtype=torch.float32)
             
+            if hasattr(self, 'quat_data'):
+                quat = torch.tensor(self.quat_data[valid_index], dtype=torch.float32)
+            else:
+                quat = torch.zeros((self.acc_seq, 4), dtype=torch.float32)
+            
             label = self.labels[valid_index]
-            return (acc, gyro), label, valid_index
+            return (acc, gyro, quat), label, valid_index
             
         except Exception as e:
             logger.error(f"Error fetching data at index {index}: {str(e)}")
+            logger.error(traceback.format_exc())
             return self._create_fallback_sample()
     
     def _create_fallback_sample(self):
         emergency_acc = torch.zeros((self.acc_seq, self.channels), dtype=torch.float32)
         emergency_gyro = torch.zeros((self.acc_seq, self.channels), dtype=torch.float32)
-        return (emergency_acc, emergency_gyro), 0, 0
+        emergency_quat = torch.zeros((self.acc_seq, 4), dtype=torch.float32)
+        emergency_quat[:, 0] = 1.0  # Identity quaternion
+        return (emergency_acc, emergency_gyro, emergency_quat), 0, 0
     
     @staticmethod
     def custom_collate_fn(batch):
@@ -165,29 +181,58 @@ class UTD_mm(torch.utils.data.Dataset):
             labels = [item[1] for item in batch]
             indices = [item[2] for item in batch]
             
+            # Each data_tuple now contains (acc, gyro, quat)
             acc_tensors = []
             gyro_tensors = []
+            quat_tensors = []
             
             for data_tuple in data_tuples:
-                acc, gyro = data_tuple
-                acc_tensors.append(acc)
-                gyro_tensors.append(gyro)
+                if len(data_tuple) >= 3:
+                    acc, gyro, quat = data_tuple
+                    acc_tensors.append(acc)
+                    gyro_tensors.append(gyro)
+                    quat_tensors.append(quat)
+                elif len(data_tuple) == 2:
+                    acc, gyro = data_tuple
+                    acc_tensors.append(acc)
+                    gyro_tensors.append(gyro)
+                    # Create dummy quaternion
+                    quat = torch.zeros((acc.shape[0], 4), dtype=torch.float32)
+                    quat[:, 0] = 1.0  # Identity quaternion
+                    quat_tensors.append(quat)
+                else:
+                    # Handle unexpected tuple length
+                    acc = data_tuple[0] if len(data_tuple) > 0 else torch.zeros((64, 3))
+                    acc_tensors.append(acc)
+                    gyro = torch.zeros_like(acc)
+                    gyro_tensors.append(gyro)
+                    quat = torch.zeros((acc.shape[0], 4), dtype=torch.float32)
+                    quat[:, 0] = 1.0  # Identity quaternion
+                    quat_tensors.append(quat)
             
             try:
                 acc_batch = torch.stack(acc_tensors)
                 gyro_batch = torch.stack(gyro_tensors)
+                quat_batch = torch.stack(quat_tensors)
             except Exception as e:
                 logger.error(f"Error stacking tensors: {e}")
+                logger.error(traceback.format_exc())
                 # Create fallback tensors
                 batch_size = len(data_tuples)
                 acc_batch = torch.zeros((batch_size, 64, 3))
                 gyro_batch = torch.zeros((batch_size, 64, 3))
+                quat_batch = torch.zeros((batch_size, 64, 4))
+                quat_batch[:, :, 0] = 1.0  # Identity quaternion
             
             labels_tensor = torch.tensor(labels)
             indices_tensor = torch.tensor(indices)
             
-            return (acc_batch, gyro_batch), labels_tensor, indices_tensor
+            return {'accelerometer': acc_batch, 'gyroscope': gyro_batch, 'quaternion': quat_batch}, labels_tensor, indices_tensor
         
         except Exception as e:
             logger.error(f"Error in collate function: {str(e)}")
-            return (torch.zeros((1, 64, 3)), torch.zeros((1, 64, 3))), torch.tensor([0]), torch.tensor([0])
+            logger.error(traceback.format_exc())
+            batch_size = len(batch)
+            return {'accelerometer': torch.zeros((batch_size, 64, 3)), 
+                   'gyroscope': torch.zeros((batch_size, 64, 3)), 
+                   'quaternion': torch.zeros((batch_size, 64, 4))}, torch.zeros(batch_size).long(), torch.zeros(batch_size).long()
