@@ -1,4 +1,3 @@
-
 import tqdm
 import traceback
 import random
@@ -107,7 +106,6 @@ def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None)
     from utils.imu_fusion import MadgwickFilter, KalmanFilter, ExtendedKalmanFilter
     key = f"{subject_id}_{action_id}_{filter_type}"
     if key not in FILTER_INSTANCES:
-        print(f"Creating new filter instance for {key}")
         if filter_type == 'madgwick':
             beta = filter_params.get('beta', 0.1) if filter_params else 0.1
             FILTER_INSTANCES[key] = MadgwickFilter(beta=beta)
@@ -142,13 +140,11 @@ def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_i
     orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
     quaternions = np.zeros((len(acc_data), 4))
     
-    # Process each sample in the window
     for i in range(len(acc_data)):
         acc = acc_data[i]
         gyro = gyro_data[i]
         timestamp = timestamps[i] if timestamps is not None else None
         
-        # Use the previous orientation to estimate gravity
         gravity_direction = np.array([0, 0, 9.81])
         if i > 0:
             r = Rotation.from_quat([quaternions[i-1, 1], quaternions[i-1, 2], quaternions[i-1, 3], quaternions[i-1, 0]])
@@ -159,11 +155,9 @@ def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_i
         if norm > 1e-6:
             acc_with_gravity = acc_with_gravity / norm
             
-        # Update filter with current data (this maintains filter state)
         q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
         quaternions[i] = q
     
-    # Cache results for this window
     if use_cache:
         cache_dir_path = os.path.dirname(cache_path)
         if not os.path.exists(cache_dir_path):
@@ -179,39 +173,32 @@ def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_i
     
     return quaternions
 
-def extract_window_data(inputs, window_idx, subject_id, action_id, filter_type, filter_params, 
-                       use_cache=True, cache_dir="processed_data"):
-    acc_data = inputs['accelerometer']
-    gyro_data = inputs.get('gyroscope', None)
-    timestamps = inputs.get('timestamps', None)
+def generate_cv_folds(args):
+    all_subjects = args.subjects
+    val_subjects = args.val_subjects
+    permanent_train = args.permanent_train
     
-    if gyro_data is None or len(gyro_data) == 0:
-        return {'quaternion': np.zeros((len(acc_data), 4))}
+    cv_subjects = [s for s in all_subjects if s not in val_subjects and s not in permanent_train]
     
-    # Process this specific window with filter
-    window_quat = process_sequence_with_filter(
-        acc_data, gyro_data, timestamps, 
-        subject_id, action_id, 
-        filter_type, filter_params,
-        use_cache, cache_dir, window_idx
-    )
+    folds = []
+    test_pairs = [
+        [32, 39],
+        [30, 31],
+        [33, 34],
+        [35, 37],
+        [43, 44]
+    ]
     
-    return {'quaternion': window_quat}
-
-def generate_test_combinations(full_subjects, permanent_train=None, val_subjects=None, max_test_subjects=2):
-    if permanent_train is None:
-        permanent_train = []
-    if val_subjects is None:
-        val_subjects = []
-        
-    available_subjects = [s for s in full_subjects if s not in permanent_train and s not in val_subjects]
-    all_combos = []
+    for i, test_pair in enumerate(test_pairs):
+        train_subjects = permanent_train + [s for s in cv_subjects if s not in test_pair]
+        folds.append({
+            'fold_id': i + 1,
+            'train_subjects': train_subjects,
+            'val_subjects': val_subjects,
+            'test_subjects': test_pair
+        })
     
-    for test_set in combinations(available_subjects, max_test_subjects):
-        train_set = permanent_train + [s for s in available_subjects if s not in test_set]
-        all_combos.append((list(train_set), list(test_set)))
-    
-    return all_combos
+    return folds
 
 class Trainer:
     def __init__(self, arg):
@@ -227,12 +214,11 @@ class Trainer:
         self.weights_path = f'{self.arg.work_dir}/{self.arg.model_saved_name}_weights_only.pt'
         self.max_threads = min(getattr(arg, 'parallel_threads', 4), MAX_THREADS)
         
-        # Ensure dataset_args is properly initialized
         if not hasattr(arg, 'dataset_args') or arg.dataset_args is None:
             arg.dataset_args = {
                 'modalities': ['accelerometer', 'gyroscope'],
                 'mode': 'sliding_window',
-                'max_length': 64,
+                'max_length': 128,
                 'task': 'fd',
                 'age_group': ['young'],
                 'sensors': ['watch'],
@@ -275,29 +261,26 @@ class Trainer:
         if self.enable_kfold and hasattr(arg, 'dataset_args') and arg.dataset_args and 'kfold' in arg.dataset_args:
             self.kfold_config = arg.dataset_args.get('kfold', {})
         else:
-            self.kfold_config = {"enabled": False}
+            self.kfold_config = {"enabled": True, "num_folds": 5}
         
-        # Create cache directory structure
+        self.cv_folds = generate_cv_folds(arg)
+        
         if self.use_cache:
             filter_cache_dir = os.path.join(self.cache_dir, self.filter_type)
             os.makedirs(filter_cache_dir, exist_ok=True)
             
-        # Set up work directory
         os.makedirs(self.arg.work_dir, exist_ok=True)
         if hasattr(arg, 'config') and arg.config:
             self.save_config(arg.config, arg.work_dir)
         
-        # Setup GPU environment
         self.available_gpus = setup_gpu_environment(arg)
         arg.device = self.available_gpus if self.available_gpus else getattr(arg, 'device', [0])
         self.output_device = arg.device[0] if isinstance(arg.device, list) and len(arg.device) > 0 else arg.device
         
-        # Initialize model
         if not hasattr(arg, 'model') or not arg.model:
             arg.model = 'Models.fusion_transformer.FusionTransModel'
             self.print_log(f"Using default model: {arg.model}")
         
-        # Fix model_args if needed
         if not hasattr(arg, 'model_args') or not arg.model_args:
             arg.model_args = {
                 'num_layers': 3,
@@ -322,15 +305,12 @@ class Trainer:
                 except:
                     pass
         
-        # Create model
         self.model = self.load_model(arg.model, arg.model_args) if self.arg.phase == 'train' else torch.load(getattr(arg, 'weights', self.model_path))
         if len(self.available_gpus) > 1 and getattr(arg, 'multi_gpu', False): 
             self.model = nn.DataParallel(self.model, device_ids=self.available_gpus)
             
-        # Load loss function
         self.load_loss()
         
-        # Preprocess data if needed
         if self.fuse and self.filter_type != 'none':
             all_subjects = arg.subjects
             cache_dir = os.path.join(self.cache_dir, self.filter_type)
@@ -339,7 +319,7 @@ class Trainer:
                 self.print_log(f"Preprocessing all {len(all_subjects)} subjects with {self.filter_type} filter")
                 from utils.imu_fusion import preprocess_all_subjects
                 preprocess_all_subjects(all_subjects, self.filter_type, cache_dir, 
-                                      arg.dataset_args.get('max_length', 64))
+                                       arg.dataset_args.get('max_length', 64))
                 self.print_log(f"Preprocessing complete")
                 
         self.print_log(f'# Parameters: {self.count_parameters(self.model)}')
@@ -350,16 +330,6 @@ class Trainer:
             self.print_log(f'Using GPUs: {self.available_gpus}')
         else:
             self.print_log('Using CPU for computation')
-        
-        # Setup test combinations if needed
-        if getattr(arg, 'rotate_tests', False) or getattr(arg, 'test_combinations', False):
-            self.test_train_combinations = generate_test_combinations(
-                arg.subjects, 
-                self.permanent_train, 
-                self.val_subjects,
-                max_test_subjects=2
-            )
-            self.print_log(f"Generated {len(self.test_train_combinations)} test/train combinations")
 
     def save_config(self, src_path, desc_path):
         config_file = src_path.rpartition("/")[-1]
@@ -381,7 +351,6 @@ class Trainer:
         device = f'cuda:{self.output_device}' if use_cuda else 'cpu'
         Model = import_class(model)
         
-        # Ensure model_args is a proper dictionary
         if not model_args or not isinstance(model_args, dict):
             model_args = {
                 'num_layers': 3,
@@ -446,7 +415,6 @@ class Trainer:
 
     def load_data(self, train_subjects, test_subjects=None):
         try:
-            # Set default values for feeder and arguments
             if not hasattr(self.arg, 'feeder') or not self.arg.feeder:
                 self.arg.feeder = 'Feeder.Make_Dataset.UTD_mm'
                 self.print_log(f"Using default feeder: {self.arg.feeder}")
@@ -461,11 +429,9 @@ class Trainer:
                 test_batch_size = getattr(self.arg, 'test_batch_size', getattr(self.arg, 'val_batch_size', self.arg.batch_size))
                 self.arg.test_feeder_args = {'batch_size': test_batch_size, 'drop_last': False}
                 
-            # Prepare dataset
             Feeder = import_class(self.arg.feeder)
             builder = prepare_smartfallmm(self.arg)
             
-            # Load training data
             self.print_log(f"Loading training data for subjects: {train_subjects}")
             self.norm_train = split_by_subjects(builder, train_subjects, self.fuse)
             
@@ -477,7 +443,6 @@ class Trainer:
                 return False
             
             try:
-                # Create training dataloader
                 self.data_loader['train'] = torch.utils.data.DataLoader(
                     dataset=Feeder(**self.arg.train_feeder_args, dataset=self.norm_train),
                     batch_size=self.arg.batch_size,
@@ -490,7 +455,6 @@ class Trainer:
                 self.print_log(traceback.format_exc())
                 return False
             
-            # Load validation data
             self.print_log(f"Loading validation data for subjects: {self.val_subjects}")
             self.norm_val = split_by_subjects(builder, self.val_subjects, self.fuse)
             
@@ -500,7 +464,6 @@ class Trainer:
                 self.print_log("WARNING: No labels found in validation set")
             else:
                 try:
-                    # Create validation dataloader
                     self.data_loader['val'] = torch.utils.data.DataLoader(
                         dataset=Feeder(**self.arg.val_feeder_args, dataset=self.norm_val),
                         batch_size=self.arg.val_batch_size,
@@ -512,7 +475,6 @@ class Trainer:
                     self.print_log(f"ERROR creating validation dataloader: {str(e)}")
                     self.print_log(traceback.format_exc())
             
-            # Load test data if subjects are provided
             if test_subjects:
                 self.print_log(f"Loading test data for subjects: {test_subjects}")
                 self.norm_test = split_by_subjects(builder, test_subjects, self.fuse)
@@ -523,7 +485,6 @@ class Trainer:
                     self.print_log("WARNING: No labels found in test set")
                 else:
                     try:
-                        # Create test dataloader
                         test_batch_size = getattr(self.arg, 'test_batch_size', getattr(self.arg, 'val_batch_size', self.arg.batch_size))
                         self.data_loader['test'] = torch.utils.data.DataLoader(
                             dataset=Feeder(**self.arg.test_feeder_args, dataset=self.norm_test),
@@ -604,20 +565,17 @@ class Trainer:
         y_true, y_pred = [], []
         process = tqdm(loader, desc=f"Epoch {epoch+1}/{self.arg.num_epoch} (Train)")
         
-        # Reset filter cache at each epoch if not preserving state
         if not self.filter_params.get('preserve_filter_state', True):
             global FILTER_INSTANCES
             FILTER_INSTANCES = {}
         
         for batch_idx, (inputs, targets, idx) in enumerate(process):
             with torch.no_grad():
-                # Handle input format conversion
                 if not isinstance(inputs, dict):
                     if torch.is_tensor(inputs) and len(inputs.shape) == 2:
                         inputs = inputs.unsqueeze(1)
                     inputs = {'accelerometer': inputs}
                 
-                # Ensure correct tensor dimensions and move to device
                 for key in inputs:
                     if torch.is_tensor(inputs[key]) and len(inputs[key].shape) == 2:
                         inputs[key] = inputs[key].unsqueeze(1)
@@ -632,7 +590,6 @@ class Trainer:
                     self.print_log(f"ERROR: Missing accelerometer data in batch {batch_idx}")
                     continue
                     
-                # Generate quaternions if needed
                 quaternion = inputs.get('quaternion', None)
                 if quaternion is None and gyro_data is not None and self.filter_type != 'none':
                     batch_quaternions = []
@@ -645,7 +602,6 @@ class Trainer:
                             sample_acc = acc_data[i].cpu().numpy()
                             sample_gyro = gyro_data[i].cpu().numpy()
                             
-                            # Process each window with filter
                             sample_quat = process_sequence_with_filter(
                                 sample_acc, sample_gyro, None, subject_id, action_id, 
                                 self.filter_type, self.filter_params, 
@@ -656,9 +612,8 @@ class Trainer:
                             batch_quaternions.append(torch.from_numpy(sample_quat).float())
                         except Exception as e:
                             self.print_log(f"Error processing window {i}: {str(e)}")
-                            # Create empty quaternion
                             empty_quat = np.zeros((len(sample_acc), 4))
-                            empty_quat[:, 0] = 1.0  # w component = 1 for identity
+                            empty_quat[:, 0] = 1.0
                             batch_quaternions.append(torch.from_numpy(empty_quat).float())
                     
                     quaternion = torch.stack(batch_quaternions).to(device)
@@ -668,7 +623,6 @@ class Trainer:
             self.optimizer.zero_grad()
             
             try:
-                # Forward pass
                 if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
                     logits = self.model.forward_quaternion(acc_data, quaternion)
                 elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'): 
@@ -766,13 +720,11 @@ class Trainer:
         
         with torch.no_grad():
             for batch_idx, (inputs, targets, idx) in enumerate(process):
-                # Handle input format conversion
                 if not isinstance(inputs, dict):
                     if torch.is_tensor(inputs) and len(inputs.shape) == 2:
                         inputs = inputs.unsqueeze(1)
                     inputs = {'accelerometer': inputs}
                 
-                # Ensure correct tensor dimensions and move to device
                 for key in inputs:
                     if torch.is_tensor(inputs[key]) and len(inputs[key].shape) == 2:
                         inputs[key] = inputs[key].unsqueeze(1)
@@ -787,7 +739,6 @@ class Trainer:
                     self.print_log(f"ERROR: Missing accelerometer data in batch {batch_idx}")
                     continue
                     
-                # Generate quaternions if needed
                 quaternion = inputs.get('quaternion', None)
                 if quaternion is None and gyro_data is not None and self.filter_type != 'none':
                     batch_quaternions = []
@@ -800,7 +751,6 @@ class Trainer:
                             sample_acc = acc_data[i].cpu().numpy()
                             sample_gyro = gyro_data[i].cpu().numpy()
                             
-                            # Process each window with filter
                             sample_quat = process_sequence_with_filter(
                                 sample_acc, sample_gyro, None, subject_id, action_id, 
                                 self.filter_type, self.filter_params, 
@@ -811,16 +761,14 @@ class Trainer:
                             batch_quaternions.append(torch.from_numpy(sample_quat).float())
                         except Exception as e:
                             self.print_log(f"Error processing window {i}: {str(e)}")
-                            # Create empty quaternion
                             empty_quat = np.zeros((len(sample_acc), 4))
-                            empty_quat[:, 0] = 1.0  # w component = 1 for identity
+                            empty_quat[:, 0] = 1.0
                             batch_quaternions.append(torch.from_numpy(empty_quat).float())
                     
                     quaternion = torch.stack(batch_quaternions).to(device)
                     inputs['quaternion'] = quaternion
                 
                 try:
-                    # Forward pass
                     if hasattr(self.model, 'forward_quaternion') and quaternion is not None:
                         logits = self.model.forward_quaternion(acc_data, quaternion)
                     elif gyro_data is not None and hasattr(self.model, 'forward_multi_sensor'):
@@ -895,11 +843,18 @@ class Trainer:
             json.dump(self.test_summary, f, indent=2)
         self.print_log(f"Test summary saved to {summary_path}")
     
-    def run_fold(self, train_subjects, test_subjects, fold_dir):
+    def run_fold(self, fold_config, fold_dir):
         self.train_loss_summary, self.val_loss_summary, self.train_metrics, self.val_metrics = [], [], [], []
         self.best_accuracy, self.best_f1, self.best_loss, self.patience_counter = 0, 0, float('inf'), 0
+        fold_id = fold_config['fold_id']
+        train_subjects = fold_config['train_subjects']
+        test_subjects = fold_config['test_subjects']
         
-        self.print_log(f"Creating new model instance for fold")
+        self.print_log(f"\n{'='*20} Fold {fold_id} {'='*20}")
+        self.print_log(f"Train subjects: {train_subjects}")
+        self.print_log(f"Validation subjects: {self.val_subjects}")
+        self.print_log(f"Test subjects: {test_subjects}")
+        
         model_args = self.arg.model_args
         
         if not self.load_data(train_subjects, test_subjects):
@@ -924,7 +879,7 @@ class Trainer:
                 shutil.copy(os.path.join(self.arg.work_dir, "train_vs_val_loss.png"), 
                           os.path.join(fold_dir, "train_vs_val_loss.png"))
             except Exception as e: 
-                self.print_log(f"Error creating loss visualization: {str(e)}")
+                self.print_log(f"Error creating loss visualization: {e}")
         
         if os.path.exists(self.model_path):
             try:
@@ -936,8 +891,18 @@ class Trainer:
         self.model.eval()
         test_metrics = self.eval(0, 'test')
         
-        with open(os.path.join(fold_dir, 'validation_results.json'), 'w') as f:
-            json.dump(test_metrics, f, indent=2)
+        fold_summary = {
+            'fold_id': fold_id,
+            'train_subjects': train_subjects,
+            'val_subjects': self.val_subjects,
+            'test_subjects': test_subjects,
+            'best_val_f1': self.best_f1,
+            'best_val_accuracy': self.best_accuracy,
+            'test_metrics': test_metrics
+        }
+        
+        with open(os.path.join(fold_dir, 'fold_summary.json'), 'w') as f:
+            json.dump(fold_summary, f, indent=2)
         
         for file in ['confusion_matrix_test.png', 'confusion_matrix_val.png']:
             if os.path.exists(os.path.join(self.arg.work_dir, file)):
@@ -952,101 +917,34 @@ class Trainer:
             self.best_accuracy, self.best_f1, self.best_loss, self.patience_counter = 0, 0, float('inf'), 0
             self.print_log(f'Parameters:\n{str(vars(self.arg))}\n')
             
-            # Clear global filter instances to start fresh
             global FILTER_INSTANCES
             FILTER_INSTANCES = {}
             
-            if self.arg.rotate_tests or self.arg.test_combinations:
-                test_results_df = self.create_df()
-                
-                for config_idx, (train_subjects, test_subjects) in enumerate(self.test_train_combinations):
-                    self.print_log(f"\n{'='*20} Test Configuration {config_idx+1}/{len(self.test_train_combinations)} {'='*20}")
-                    self.print_log(f"Train: {train_subjects}")
-                    self.print_log(f"Test: {test_subjects}")
-                    
-                    config_dir = os.path.join(self.arg.work_dir, f"test_config_{config_idx+1}")
-                    os.makedirs(config_dir, exist_ok=True)
-                    
-                    # Clear filter instances between configurations
-                    FILTER_INSTANCES = {}
-                    
-                    test_metrics = self.run_fold(train_subjects, test_subjects, config_dir)
-                    
-                    if test_metrics:
-                        result_row = {
-                            'test_config': config_idx + 1,
-                            'train_subjects': str(train_subjects),
-                            'test_subjects': str(test_subjects),
-                            'accuracy': round(test_metrics['accuracy'], 2),
-                            'f1_score': round(test_metrics['f1'], 2),
-                            'precision': round(test_metrics['precision'], 2),
-                            'recall': round(test_metrics['recall'], 2)
-                        }
-                        
-                        test_results_df.loc[len(test_results_df)] = result_row
-                        
-                        self.test_summary['test_configs'].append({
-                            'config_id': config_idx + 1,
-                            'train_subjects': train_subjects,
-                            'test_subjects': test_subjects,
-                            'metrics': test_metrics
-                        })
-                    
-                    if not self.arg.test_combinations:
-                        break
-                
-                self.save_test_summary()
-                test_results_df.to_csv(os.path.join(self.arg.work_dir, 'test_results.csv'), index=False)
-                
-                avg_metrics = self.test_summary.get('average_metrics', {})
-                if avg_metrics:
-                    self.print_log(f'\n===== Test Results Summary ({self.filter_type}) =====')
-                    self.print_log(f'Mean accuracy: {avg_metrics.get("accuracy", 0):.2f}% ± {avg_metrics.get("accuracy_std", 0):.2f}%')
-                    self.print_log(f'Mean F1 score: {avg_metrics.get("f1", 0):.2f} ± {avg_metrics.get("f1_std", 0):.2f}')
-                    self.print_log(f'Mean precision: {avg_metrics.get("precision", 0):.2f}% ± {avg_metrics.get("precision_std", 0):.2f}%')
-                    self.print_log(f'Mean recall: {avg_metrics.get("recall", 0):.2f}% ± {avg_metrics.get("recall_std", 0):.2f}%')
-                    self.print_log(f'Mean balanced accuracy: {avg_metrics.get("balanced_accuracy", 0):.2f}% ± {avg_metrics.get("balanced_accuracy_std", 0):.2f}%')
-            
-            elif self.enable_kfold and self.kfold_config and self.kfold_config.get('enabled', False):
-                self.print_log(f"\n===== Running {self.kfold_config.get('num_folds', 5)}-fold cross validation =====")
-                fold_assignments = self.kfold_config.get('fold_assignments', [])
-                
-                if not fold_assignments:
-                    self.print_log("ERROR: No fold assignments configured")
-                    return
+            if self.enable_kfold:
+                self.print_log("\n===== Running 5-fold Cross Validation =====")
                 
                 results = []
-                for fold_idx, test_subjects in enumerate(fold_assignments):
-                    self.print_log(f"\n{'='*20} Fold {fold_idx+1}/{len(fold_assignments)} {'='*20}")
-                    
-                    # Clear filter instances between folds
-                    FILTER_INSTANCES = {}
-                    
-                    train_subjects = self.permanent_train.copy()
-                    for s in self.arg.subjects:
-                        if s not in test_subjects and s not in self.val_subjects and s not in train_subjects:
-                            train_subjects.append(s)
-                    
-                    self.print_log(f"Train: {train_subjects}")
-                    self.print_log(f"Test: {test_subjects}")
-                    self.print_log(f"Validation: {self.val_subjects}")
-                    
-                    fold_dir = os.path.join(self.arg.work_dir, f"fold_{fold_idx+1}")
+                for fold_config in self.cv_folds:
+                    fold_id = fold_config['fold_id']
+                    fold_dir = os.path.join(self.arg.work_dir, f"fold_{fold_id}")
                     os.makedirs(fold_dir, exist_ok=True)
                     
-                    fold_metrics = self.run_fold(train_subjects, test_subjects, fold_dir)
+                    FILTER_INSTANCES = {}
                     
-                    if fold_metrics:
+                    test_metrics = self.run_fold(fold_config, fold_dir)
+                    
+                    if test_metrics:
                         self.test_summary['test_configs'].append({
-                            'fold_id': fold_idx + 1,
-                            'train_subjects': train_subjects,
-                            'test_subjects': test_subjects,
-                            'metrics': fold_metrics
+                            'fold_id': fold_id,
+                            'train_subjects': fold_config['train_subjects'],
+                            'test_subjects': fold_config['test_subjects'],
+                            'metrics': test_metrics
                         })
-                        results.append(fold_metrics)
+                        results.append(test_metrics)
                 
                 if results:
                     self.save_test_summary()
+                    
                     self.print_log(f"\n===== Cross-validation Results Summary ({self.filter_type}) =====")
                     avg_metrics = self.test_summary.get('average_metrics', {})
                     self.print_log(f'Mean accuracy: {avg_metrics.get("accuracy", 0):.2f}% ± {avg_metrics.get("accuracy_std", 0):.2f}%')
@@ -1131,13 +1029,10 @@ def main():
             if k not in key: 
                 arg.__dict__[k] = default_arg[k]
     
-    # Initialize seed
     init_seed(arg.seed)
     
-    # Create and start trainer
     trainer = Trainer(arg)
     trainer.start()
 
 if __name__ == '__main__': 
     main()
-

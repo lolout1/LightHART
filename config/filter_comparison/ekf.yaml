@@ -21,7 +21,7 @@ model_args:
 
 dataset_args:
   mode: 'sliding_window'
-  max_length: 64
+  max_length: 128
   task: 'fd'
   modalities: ['accelerometer', 'gyroscope']
   age_group: ['young']
@@ -59,7 +59,7 @@ test_feeder_args:
 
 seed: 42
 optimizer: adamw
-base_lr: 0.001
+base_lr: 0.0005
 weight_decay: 0.001
 rotate_tests: true
 test_combinations: true

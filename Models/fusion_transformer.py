@@ -8,9 +8,78 @@ import traceback
 
 logger = logging.getLogger("model")
 
+class QuaternionOperation(nn.Module):
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.W_r = nn.Linear(embed_dim, embed_dim)
+        self.W_i = nn.Linear(embed_dim, embed_dim)
+        self.W_j = nn.Linear(embed_dim, embed_dim)
+        self.W_k = nn.Linear(embed_dim, embed_dim)
+        
+    def forward(self, q):
+        # Split quaternion into components (w,x,y,z)
+        qw, qx, qy, qz = torch.split(q, q.size(-1)//4, dim=-1)
+        
+        # Apply quaternion-specific transformation
+        r = self.W_r(qw) - self.W_i(qx) - self.W_j(qy) - self.W_k(qz)
+        i = self.W_r(qx) + self.W_i(qw) + self.W_j(qz) - self.W_k(qy)
+        j = self.W_r(qy) - self.W_i(qz) + self.W_j(qw) + self.W_k(qx)
+        k = self.W_r(qz) + self.W_i(qy) - self.W_j(qx) + self.W_k(qw)
+        
+        return torch.cat([r, i, j, k], dim=-1)
+
+class TemporalAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads=4):
+        super().__init__()
+        self.mha = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.norm = nn.LayerNorm(embed_dim)
+        
+    def forward(self, x):
+        attn_out, _ = self.mha(x, x, x)
+        return self.norm(x + attn_out)
+
+class HierarchicalFusion(nn.Module):
+    def __init__(self, acc_dim, gyro_dim, quat_dim, out_dim):
+        super().__init__()
+        # Local feature fusion (within modality)
+        self.acc_local = nn.Linear(acc_dim, acc_dim)
+        self.gyro_local = nn.Linear(gyro_dim, gyro_dim)
+        self.quat_local = QuaternionOperation(quat_dim)
+        
+        # Cross-modality attention
+        self.cross_attention = nn.MultiheadAttention(
+            (acc_dim + gyro_dim + quat_dim) // 3, 
+            num_heads=4, 
+            batch_first=True
+        )
+        
+        # Final fusion
+        self.fusion = nn.Sequential(
+            nn.Linear(acc_dim + gyro_dim + quat_dim, out_dim),
+            nn.LayerNorm(out_dim),
+            nn.GELU()
+        )
+        
+    def forward(self, acc, gyro, quat):
+        # Local processing
+        acc_local = self.acc_local(acc)
+        gyro_local = self.gyro_local(gyro)
+        quat_local = self.quat_local(quat)
+        
+        # Combine for cross-attention
+        fused = torch.cat([acc_local, gyro_local, quat_local], dim=-1)
+        fused_reshaped = rearrange(fused, 'b l c -> l b c')
+        
+        # Apply cross-attention
+        attn_out, _ = self.cross_attention(fused_reshaped, fused_reshaped, fused_reshaped)
+        attn_out = rearrange(attn_out, 'l b c -> b l c')
+        
+        # Final fusion
+        return self.fusion(torch.cat([acc_local, gyro_local, quat_local], dim=-1))
+
 class FusionTransModel(nn.Module):
     def __init__(self, acc_frames=64, mocap_frames=64, num_classes=2, num_heads=4, acc_coords=3,
-                quat_coords=4, num_layers=2, embed_dim=32, fusion_type='concat', dropout=0.3,
+                quat_coords=4, num_layers=2, embed_dim=32, fusion_type='hierarchical', dropout=0.3,
                 use_batch_norm=True, feature_dim=None, **kwargs):
         super().__init__()
         self.fusion_type = fusion_type
@@ -42,7 +111,7 @@ class FusionTransModel(nn.Module):
             nn.GELU()
         )
         
-        # Encoder for quaternion data
+        # Enhanced encoder for quaternion data with quaternion-specific operations
         self.quat_encoder = nn.Sequential(
             nn.Conv1d(quat_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -54,16 +123,31 @@ class FusionTransModel(nn.Module):
         
         # Determine feature dimensions based on fusion type
         if feature_dim is None:
-            if fusion_type == 'concat': self.feature_dim = embed_dim * 3
-            elif fusion_type in ['attention', 'weighted']: self.feature_dim = embed_dim
-            elif fusion_type == 'acc_only': self.feature_dim = embed_dim
-            else:
-                logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'concat'")
-                self.fusion_type = 'concat'
+            if fusion_type == 'hierarchical': 
+                self.feature_dim = embed_dim
+            elif fusion_type == 'concat': 
                 self.feature_dim = embed_dim * 3
-        else: self.feature_dim = feature_dim
+            elif fusion_type in ['attention', 'weighted']: 
+                self.feature_dim = embed_dim
+            elif fusion_type == 'acc_only': 
+                self.feature_dim = embed_dim
+            else:
+                logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'hierarchical'")
+                self.fusion_type = 'hierarchical'
+                self.feature_dim = embed_dim
+        else: 
+            self.feature_dim = feature_dim
+            
+        # Initialize fusion modules based on fusion type
+        if fusion_type == 'hierarchical':
+            self.hierarchical_fusion = HierarchicalFusion(
+                embed_dim, embed_dim, embed_dim, self.feature_dim
+            )
             
         self.feature_adapter = nn.Linear(self.feature_dim, self.feature_dim)
+        
+        # Temporal attention layer for better capturing event sequences
+        self.temporal_attention = TemporalAttention(self.feature_dim, num_heads)
         
         # Attention mechanism for fusion
         if fusion_type == 'attention':
@@ -96,8 +180,8 @@ class FusionTransModel(nn.Module):
         )
         
         # Optional attention pooling
-        self.attn_pool = fusion_type == 'attention'
-        if self.attn_pool: self.attn_pool = nn.Linear(self.feature_dim, 1)
+        self.attn_pool = True  # Always use attention pooling for better sequence modeling
+        self.attn_pool_layer = nn.Linear(self.feature_dim, 1)
         
         # Classification head
         self.classifier = nn.Sequential(
@@ -163,10 +247,14 @@ class FusionTransModel(nn.Module):
                 quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
             # Fusion based on strategy
-            if self.fusion_type == 'concat':
+            if self.fusion_type == 'hierarchical':
+                fused_features = self.hierarchical_fusion(acc_features, gyro_features, quat_features)
+                
+            elif self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
+                    
             elif self.fusion_type == 'attention':
                 q = self.attention_proj_q(acc_features)
                 k = self.attention_proj_k(torch.cat([gyro_features, quat_features], dim=-1))
@@ -176,6 +264,7 @@ class FusionTransModel(nn.Module):
                 attn_weights = F.softmax(attn_scores, dim=-1)
                 fused_features = torch.matmul(attn_weights, v)
                 fused_features = self.feature_adapter(fused_features)
+                
             elif self.fusion_type == 'weighted':
                 acc_weight = torch.sigmoid(self.acc_weight)
                 gyro_weight = torch.sigmoid(self.gyro_weight)
@@ -187,15 +276,15 @@ class FusionTransModel(nn.Module):
                 fused_features = acc_weight * acc_features + gyro_weight * gyro_features + quat_weight * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
+            # Apply temporal attention for better sequence modeling
+            fused_features = self.temporal_attention(fused_features)
+            
             # Process through transformer
             transformer_output = self.transformer(fused_features)
             
-            # Pooling strategy
-            if hasattr(self, 'attn_pool') and self.attn_pool:
-                attn_weights = F.softmax(self.attn_pool(transformer_output), dim=1)
-                pooled = torch.sum(transformer_output * attn_weights, dim=1)
-            else: 
-                pooled = torch.mean(transformer_output, dim=1)
+            # Attention pooling for better representation
+            attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
             return self.classifier(pooled)
         except Exception as e:
@@ -226,8 +315,10 @@ class FusionTransModel(nn.Module):
             seq_len = acc_features.shape[1]
             quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
-            # Fusion based on strategy
-            if self.fusion_type == 'concat':
+            # Use the same fusion strategy as all_modalities but with zero quaternion
+            if self.fusion_type == 'hierarchical':
+                fused_features = self.hierarchical_fusion(acc_features, gyro_features, quat_features)
+            elif self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
@@ -236,9 +327,16 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[1] * gyro_features
                 fused_features = self.feature_adapter(fused_features)
             
+            # Apply temporal attention
+            fused_features = self.temporal_attention(fused_features)
+            
             # Process through transformer
             transformer_output = self.transformer(fused_features)
-            pooled = torch.mean(transformer_output, dim=1)
+            
+            # Attention pooling
+            attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
+            
             return self.classifier(pooled)
         except Exception as e:
             logger.error(f"Error in forward_acc_gyro_only: {e}")
@@ -255,11 +353,13 @@ class FusionTransModel(nn.Module):
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
-            # Create dummy features for other modalities
-            batch_size = acc_features.shape[0]
-            seq_len = acc_features.shape[1]
+            # Apply temporal attention directly to accelerometer features
+            acc_features = self.temporal_attention(acc_features)
             
+            # Create dummy features for other modalities if needed
             if self.fusion_type == 'concat':
+                batch_size = acc_features.shape[0]
+                seq_len = acc_features.shape[1]
                 dummy_features = torch.zeros(batch_size, seq_len, self.feature_dim - self.embed_dim, device=acc_data.device)
                 fused_features = torch.cat([acc_features, dummy_features], dim=2)
             else: 
@@ -267,7 +367,11 @@ class FusionTransModel(nn.Module):
             
             # Process through transformer
             transformer_output = self.transformer(fused_features)
-            pooled = torch.mean(transformer_output, dim=1)
+            
+            # Attention pooling
+            attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
+            
             return self.classifier(pooled)
         except Exception as e:
             logger.error(f"Error in forward_accelerometer_only: {e}")
@@ -312,7 +416,9 @@ class FusionTransModel(nn.Module):
             gyro_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
             # Fusion based on strategy
-            if self.fusion_type == 'concat':
+            if self.fusion_type == 'hierarchical':
+                fused_features = self.hierarchical_fusion(acc_features, gyro_features, quat_features)
+            elif self.fusion_type == 'concat':
                 fused_features = torch.cat([acc_features, gyro_features, quat_features], dim=2)
                 if fused_features.shape[2] != self.feature_dim:
                     fused_features = self.feature_adapter(fused_features)
@@ -321,9 +427,16 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[2] * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
+            # Apply temporal attention
+            fused_features = self.temporal_attention(fused_features)
+            
             # Process through transformer
             transformer_output = self.transformer(fused_features)
-            pooled = torch.mean(transformer_output, dim=1)
+            
+            # Attention pooling
+            attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
+            pooled = torch.sum(transformer_output * attn_weights, dim=1)
+            
             return self.classifier(pooled)
         except Exception as e:
             logger.error(f"Error in forward_quaternion: {e}")
