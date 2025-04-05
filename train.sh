@@ -354,7 +354,7 @@ train_filter_model() {
         --multi-gpu True \
         --patience ${PATIENCE} \
         --filter-type "${filter_type}" \
-        --parallel-threads 32 \
+        --parallel-threads 42 \
         --num-epoch ${NUM_EPOCHS} 2>&1 | tee "${output_dir}/logs/training.log"
     
     # Attempt to recover CV summary if needed
