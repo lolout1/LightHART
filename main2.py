@@ -23,7 +23,7 @@ from scipy.spatial.transform import Rotation
 from utils.dataset import prepare_smartfallmm, split_by_subjects
 from itertools import combinations
 
-MAX_THREADS = 16
+MAX_THREADS = 46
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 FILTER_INSTANCES = {}
 
@@ -231,7 +231,7 @@ class Trainer:
                     'preserve_filter_state': True,
                     'acc_threshold': 3.0,
                     'gyro_threshold': 1.0,
-                    'visualize': False,
+                    'visualize': True,
                     'save_aligned': True
                 }
             }
@@ -286,17 +286,17 @@ class Trainer:
         if not hasattr(arg, 'model_args') or not arg.model_args:
             arg.model_args = {
                 'num_layers': 3,
-                'embed_dim': 48,
+                'embed_dim': 36,
                 'acc_coords': 3,
                 'quat_coords': 4,
                 'num_classes': 2,
-                'acc_frames': 64,
-                'mocap_frames': 64,
-                'num_heads': 4,
+                'acc_frames': 128,
+                'mocap_frames': 128,
+                'num_heads': 2,
                 'fusion_type': 'concat',
                 'dropout': 0.3,
                 'use_batch_norm': True,
-                'feature_dim': 144
+                'feature_dim': 112
             }
         elif isinstance(arg.model_args, str):
             try:
@@ -345,13 +345,13 @@ class Trainer:
         if not model_args or not isinstance(model_args, dict):
             model_args = {
                 'num_layers': 3,
-                'embed_dim': 48,
+                'embed_dim': 96,
                 'acc_coords': 3,
                 'quat_coords': 4,
                 'num_classes': 2,
-                'acc_frames': 64,
-                'mocap_frames': 64,
-                'num_heads': 4,
+                'acc_frames': 128,
+                'mocap_frames': 128,
+                'num_heads': 2,
                 'fusion_type': 'concat',
                 'dropout': 0.3,
                 'use_batch_norm': True,

@@ -4,7 +4,7 @@ set -o pipefail
 set -u
 
 DEVICE="0,1"
-BASE_LR=0.001
+BASE_LR=0.0005
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=100
 PATIENCE=15
@@ -58,17 +58,17 @@ rotate_tests: true
 
 model_args:
   num_layers: 3
-  embed_dim: 48
+  embed_dim: 36
   acc_coords: 3
   quat_coords: 4
   num_classes: 2
-  acc_frames: 64
-  mocap_frames: 64
+  acc_frames: 128
+  mocap_frames: 128
   num_heads: 2
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
-  feature_dim: 144
+  feature_dim: 108
 
 dataset_args:
   mode: 'sliding_window'
