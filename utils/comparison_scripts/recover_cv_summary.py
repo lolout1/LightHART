@@ -6,12 +6,20 @@ def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
     fold_metrics = []
     fold_dirs = sorted(glob.glob(os.path.join(output_dir, "fold_*")))
     for i, fold_dir in enumerate(fold_dirs, 1):
-        results_file = os.path.join(fold_dir, "validation_results.json")
+        results_file = os.path.join(fold_dir, "fold_summary.json")
         if os.path.exists(results_file):
             try:
                 with open(results_file, 'r') as f: results = json.load(f)
-                results["fold"] = i
-                fold_metrics.append(results)
+                fold_metrics.append({
+                    'fold': i,
+                    'accuracy': results.get('test_metrics', {}).get('accuracy', 0),
+                    'f1': results.get('test_metrics', {}).get('f1', 0),
+                    'precision': results.get('test_metrics', {}).get('precision', 0),
+                    'recall': results.get('test_metrics', {}).get('recall', 0),
+                    'balanced_accuracy': results.get('test_metrics', {}).get('balanced_accuracy', 0),
+                    'train_subjects': results.get('train_subjects', []),
+                    'test_subjects': results.get('test_subjects', [])
+                })
                 print(f"Loaded results from {results_file}")
             except Exception as e:
                 print(f"Error loading {results_file}: {e}")
@@ -19,7 +27,7 @@ def load_fold_results(output_dir: str) -> List[Dict[str, Any]]:
 
 def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> Dict[str, Any]:
     if not fold_metrics:
-        return {"filter_type": filter_type, "average_metrics": {"accuracy": 0, "f1": 0, "precision": 0, "recall": 0, "balanced_accuracy": 0}, "fold_metrics": []}
+        return {"filter_type": filter_type, "average_metrics": {}, "fold_metrics": [], "test_configs": []}
     
     metrics = ["accuracy", "f1", "precision", "recall", "balanced_accuracy"]
     avg_metrics = {}
@@ -32,8 +40,28 @@ def create_cv_summary(fold_metrics: List[Dict[str, Any]], filter_type: str) -> D
         else:
             avg_metrics[metric] = 0
             avg_metrics[f"{metric}_std"] = 0
-            
-    return {"filter_type": filter_type, "average_metrics": avg_metrics, "fold_metrics": fold_metrics}
+    
+    test_configs = []
+    for fold in fold_metrics:
+        test_configs.append({
+            'fold_id': fold.get('fold', 0),
+            'train_subjects': fold.get('train_subjects', []),
+            'test_subjects': fold.get('test_subjects', []),
+            'metrics': {
+                'accuracy': fold.get('accuracy', 0),
+                'f1': fold.get('f1', 0),
+                'precision': fold.get('precision', 0),
+                'recall': fold.get('recall', 0),
+                'balanced_accuracy': fold.get('balanced_accuracy', 0),
+            }
+        })
+    
+    return {
+        "filter_type": filter_type, 
+        "average_metrics": avg_metrics, 
+        "fold_metrics": fold_metrics,
+        "test_configs": test_configs
+    }
 
 def main():
     parser = argparse.ArgumentParser(description="Recover CV summary from fold results")

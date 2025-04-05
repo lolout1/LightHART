@@ -4,7 +4,7 @@ set -o pipefail
 set -u
 
 DEVICE="0,1"
-BASE_LR=0.0005
+BASE_LR=0.001
 WEIGHT_DECAY=0.001
 NUM_EPOCHS=100
 PATIENCE=15
@@ -14,7 +14,7 @@ RESULTS_DIR="filter_comparison_results"
 CONFIG_DIR="config/filter_comparison"
 UTILS_DIR="utils/comparison_scripts"
 REPORT_FILE="${RESULTS_DIR}/comparison_results.csv"
-CACHE_ENABLED="true"
+CACHE_ENABLED="false"
 CACHE_DIR="processed_data"
 
 mkdir -p "${RESULTS_DIR}/logs"
@@ -53,6 +53,8 @@ subjects: [32, 39, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 29]
 val_subjects: [38, 46]
 permanent_train: [45, 36, 29]
 test_batch_size: ${BATCH_SIZE}
+kfold: true
+rotate_tests: true
 
 model_args:
   num_layers: 3
@@ -62,7 +64,7 @@ model_args:
   num_classes: 2
   acc_frames: 64
   mocap_frames: 64
-  num_heads: 4
+  num_heads: 2
   fusion_type: 'concat'
   dropout: 0.3
   use_batch_norm: true
@@ -85,14 +87,15 @@ EOF
     case "${filter_type}" in
         madgwick)
             cat >> "${output_file}" << EOF
-    beta: 0.15
+    beta: 0.2
+    zeta: 0.02
     acc_threshold: 3.0
     gyro_threshold: 1.0
 EOF
             ;;
         kalman)
             cat >> "${output_file}" << EOF
-    process_noise: 5e-5
+    process_noise: 2e-5
     measurement_noise: 0.1
     acc_threshold: 3.0
     gyro_threshold: 1.0
@@ -119,6 +122,10 @@ EOF
     use_cache: true
     cache_dir: "${cache_dir}"
 EOF
+    else
+        cat >> "${output_file}" << EOF
+    use_cache: false
+EOF
     fi
     
     cat >> "${output_file}" << EOF
@@ -128,7 +135,6 @@ EOF
 batch_size: ${BATCH_SIZE}
 val_batch_size: ${BATCH_SIZE}
 num_epoch: ${NUM_EPOCHS}
-kfold: true
 num_folds: 5
 
 feeder: Feeder.Make_Dataset.UTD_mm
@@ -373,7 +379,7 @@ train_filter_model() {
         --multi-gpu True \
         --patience ${PATIENCE} \
         --filter-type "${filter_type}" \
-        --parallel-threads 4 \
+        --parallel-threads 42 \
         --num-epoch ${NUM_EPOCHS} 2>&1 | tee "${output_dir}/logs/training.log"
     
     if [ ! -f "${output_dir}/test_summary.json" ]; then
@@ -424,4 +430,78 @@ run_filter_comparison() {
     log "INFO" "- ${RESULTS_DIR}/visualizations/filter_comparison.png"
 }
 
+# Create high-level test script for specific filters
+create_single_filter_test() {
+    local filter_type="$1"
+    local script_file="${UTILS_DIR}/test_${filter_type}.sh"
+    
+    cat > "${script_file}" << EOF
+#!/bin/bash
+set -e
+set -o pipefail
+
+CONFIG_FILE="${CONFIG_DIR}/${filter_type}.yaml"
+OUTPUT_DIR="${RESULTS_DIR}/${filter_type}_model"
+
+if [ ! -f "\${CONFIG_FILE}" ]; then
+    echo "Config file not found: \${CONFIG_FILE}"
+    exit 1
+fi
+
+mkdir -p "\${OUTPUT_DIR}/logs"
+
+echo "Starting training with ${filter_type} filter"
+CUDA_VISIBLE_DEVICES=${DEVICE} python main2.py \\
+    --config "\${CONFIG_FILE}" \\
+    --work-dir "\${OUTPUT_DIR}" \\
+    --model-saved-name "${filter_type}_model" \\
+    --device 0 1 \\
+    --multi-gpu True \\
+    --patience ${PATIENCE} \\
+    --filter-type "${filter_type}" \\
+    --parallel-threads 8 \\
+    --num-epoch ${NUM_EPOCHS} 2>&1 | tee "\${OUTPUT_DIR}/logs/training.log"
+
+if [ ! -f "\${OUTPUT_DIR}/test_summary.json" ]; then
+    echo "Recovering summary from fold results"
+    python "${UTILS_DIR}/recover_cv_summary.py" \\
+           --output-dir "\${OUTPUT_DIR}" \\
+           --filter-type "${filter_type}"
+fi
+
+echo "Training complete"
+EOF
+    chmod +x "${script_file}"
+}
+
+# Create all single filter test scripts
+create_test_scripts() {
+    for filter_type in madgwick kalman ekf none; do
+        create_single_filter_test "${filter_type}"
+    done
+}
+
+create_config_files() {
+    log "INFO" "Creating configuration files for all filters"
+    for filter_type in madgwick kalman ekf none; do
+        create_filter_config "${filter_type}" "${CONFIG_DIR}/${filter_type}.yaml"
+        check_status "Failed to create config for ${filter_type}"
+    done
+}
+
+prepare_environment() {
+    log "INFO" "Preparing environment for filter comparison"
+    mkdir -p "${RESULTS_DIR}/logs"
+    mkdir -p "${RESULTS_DIR}/visualizations"
+    mkdir -p "${CONFIG_DIR}"
+    mkdir -p "${UTILS_DIR}"
+    
+    create_comparison_script
+    create_recovery_script
+    create_config_files
+    create_test_scripts
+}
+
+# Main execution
+prepare_environment
 run_filter_comparison

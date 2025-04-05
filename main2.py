@@ -23,7 +23,7 @@ from scipy.spatial.transform import Rotation
 from utils.dataset import prepare_smartfallmm, split_by_subjects
 from itertools import combinations
 
-MAX_THREADS = 40
+MAX_THREADS = 16
 thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
 FILTER_INSTANCES = {}
 
@@ -42,13 +42,13 @@ def get_args():
     parser.add_argument('--num-epoch', type=int, default=60, metavar='N', help='Training epochs')
     parser.add_argument('--start-epoch', type=int, default=0, help='Start epoch number')
     parser.add_argument('--weights-only', type=str2bool, default=False, help='Load only weights')
-    parser.add_argument('--optimizer', type=str, default='Adam', help='Optimizer')
+    parser.add_argument('--optimizer', type=str, default='AdamW', help='Optimizer')
     parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR', help='Base learning rate')
     parser.add_argument('--weight-decay', type=float, default=0.0004, help='Weight decay')
-    parser.add_argument('--kfold', type=str2bool, default=False, help='Use cross validation')
+    parser.add_argument('--kfold', type=str2bool, default=True, help='Use cross validation')
     parser.add_argument('--num-folds', type=int, default=5, help='Number of folds')
-    parser.add_argument('--patience', type=int, default=10, help='Early stopping patience')
-    parser.add_argument('--model', default=None, help='Model class path')
+    parser.add_argument('--patience', type=int, default=15, help='Early stopping patience')
+    parser.add_argument('--model', default='Models.fusion_transformer.FusionTransModel', help='Model class path')
     parser.add_argument('--device', nargs='+', default=[0], type=int, help='CUDA device IDs')
     parser.add_argument('--model-args', default=None, help='Model arguments')
     parser.add_argument('--weights', type=str, help='Pretrained weights file')
@@ -59,7 +59,7 @@ def get_args():
     parser.add_argument('--subjects', nargs='+', type=int, default=[32,39,30,31,33,34,35,37,43,44,45,36,29], help='Subject IDs')
     parser.add_argument('--val-subjects', nargs='+', type=int, default=[38,46], help='Validation subject IDs')
     parser.add_argument('--permanent-train', nargs='+', type=int, default=[45,36,29], help='Always in training set')
-    parser.add_argument('--feeder', default=None, help='DataLoader class')
+    parser.add_argument('--feeder', default='Feeder.Make_Dataset.UTD_mm', help='DataLoader class')
     parser.add_argument('--train-feeder-args', default=None, help='Train loader arguments')
     parser.add_argument('--val-feeder-args', default=None, help='Validation loader arguments')
     parser.add_argument('--test-feeder-args', default=None, help='Test loader arguments')
@@ -72,7 +72,7 @@ def get_args():
     parser.add_argument('--parallel-threads', type=int, default=4, help='Processing threads')
     parser.add_argument('--run-comparison', type=str2bool, default=False, help='Run filter comparison')
     parser.add_argument('--filter-type', type=str, default='madgwick', help='Filter type to use')
-    parser.add_argument('--rotate-tests', type=str2bool, default=False, help='Rotate through test combinations')
+    parser.add_argument('--rotate-tests', type=str2bool, default=True, help='Rotate through test combinations')
     parser.add_argument('--test-combinations', type=str2bool, default=False, help='Test all combinations')
     return parser
 
@@ -107,10 +107,10 @@ def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None)
     key = f"{subject_id}_{action_id}_{filter_type}"
     if key not in FILTER_INSTANCES:
         if filter_type == 'madgwick':
-            beta = filter_params.get('beta', 0.1) if filter_params else 0.1
+            beta = filter_params.get('beta', 0.20) if filter_params else 0.20
             FILTER_INSTANCES[key] = MadgwickFilter(beta=beta)
         elif filter_type == 'kalman':
-            process_noise = filter_params.get('process_noise', 5e-5) if filter_params else 5e-5
+            process_noise = filter_params.get('process_noise', 2e-5) if filter_params else 2e-5
             measurement_noise = filter_params.get('measurement_noise', 0.1) if filter_params else 0.1
             FILTER_INSTANCES[key] = KalmanFilter(process_noise=process_noise, measurement_noise=measurement_noise)
         elif filter_type == 'ekf':
@@ -122,42 +122,34 @@ def get_or_create_filter(subject_id, action_id, filter_type, filter_params=None)
     return FILTER_INSTANCES[key]
 
 def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_id=0, action_id=0, 
-                              filter_type='madgwick', filter_params=None, use_cache=True, 
+                              filter_type='madgwick', filter_params=None, use_cache=False, 
                               cache_dir="processed_data", window_id=0):
     if filter_type == 'none':
         return np.zeros((len(acc_data), 4))
-        
     cache_key = f"S{subject_id:02d}A{action_id:02d}W{window_id:04d}_{filter_type}"
     cache_path = os.path.join(cache_dir, f"{cache_key}.npz")
-    
     if use_cache and os.path.exists(cache_path):
         try:
             cached_data = np.load(cache_path)
             return cached_data['quaternion']
         except Exception as e:
-            print(f"Warning: Failed to load cached data: {str(e)}")
-    
+            pass
     orientation_filter = get_or_create_filter(subject_id, action_id, filter_type, filter_params)
     quaternions = np.zeros((len(acc_data), 4))
-    
     for i in range(len(acc_data)):
         acc = acc_data[i]
         gyro = gyro_data[i]
         timestamp = timestamps[i] if timestamps is not None else None
-        
         gravity_direction = np.array([0, 0, 9.81])
         if i > 0:
             r = Rotation.from_quat([quaternions[i-1, 1], quaternions[i-1, 2], quaternions[i-1, 3], quaternions[i-1, 0]])
             gravity_direction = r.inv().apply([0, 0, 9.81])
-            
         acc_with_gravity = acc + gravity_direction
         norm = np.linalg.norm(acc_with_gravity)
         if norm > 1e-6:
             acc_with_gravity = acc_with_gravity / norm
-            
         q = orientation_filter.update(acc_with_gravity, gyro, timestamp)
         quaternions[i] = q
-    
     if use_cache:
         cache_dir_path = os.path.dirname(cache_path)
         if not os.path.exists(cache_dir_path):
@@ -168,40 +160,47 @@ def process_sequence_with_filter(acc_data, gyro_data, timestamps=None, subject_i
                                window_id=window_id,
                                subject_id=subject_id,
                                action_id=action_id)
-        except Exception as e:
-            print(f"Warning: Failed to cache results: {str(e)}")
-    
+        except Exception as save_error: 
+            pass
     return quaternions
 
 def generate_cv_folds(args):
     all_subjects = args.subjects
     val_subjects = args.val_subjects
     permanent_train = args.permanent_train
-    
     cv_subjects = [s for s in all_subjects if s not in val_subjects and s not in permanent_train]
-    
-    num_test_per_fold = max(2, len(cv_subjects) // args.num_folds)
-    
-    folds = []
-    test_subject_sets = []
-    
-    for i in range(0, len(cv_subjects), num_test_per_fold):
-        end = min(i + num_test_per_fold, len(cv_subjects))
-        if end - i < num_test_per_fold and i > 0 and len(test_subject_sets) > 0:
-            test_subject_sets[-1].extend(cv_subjects[i:end])
-        else:
-            test_subject_sets.append(cv_subjects[i:end])
-    
-    for i, test_subjects in enumerate(test_subject_sets):
-        train_subjects = permanent_train + [s for s in cv_subjects if s not in test_subjects]
-        folds.append({
-            'fold_id': i + 1,
-            'train_subjects': train_subjects,
-            'val_subjects': val_subjects,
-            'test_subjects': test_subjects
-        })
-    
-    return folds
+    if args.rotate_tests:
+        folds = []
+        for i in range(0, len(cv_subjects), 2):
+            if i+1 < len(cv_subjects):
+                test_subjects = [cv_subjects[i], cv_subjects[i+1]]
+                train_subjects = permanent_train + [s for s in cv_subjects if s not in test_subjects]
+                folds.append({
+                    'fold_id': i//2 + 1,
+                    'train_subjects': train_subjects,
+                    'val_subjects': val_subjects,
+                    'test_subjects': test_subjects
+                })
+        return folds
+    else:
+        num_test_per_fold = max(2, len(cv_subjects) // args.num_folds)
+        folds = []
+        test_subject_sets = []
+        for i in range(0, len(cv_subjects), num_test_per_fold):
+            end = min(i + num_test_per_fold, len(cv_subjects))
+            if end - i < num_test_per_fold and i > 0 and len(test_subject_sets) > 0:
+                test_subject_sets[-1].extend(cv_subjects[i:end])
+            else:
+                test_subject_sets.append(cv_subjects[i:end])
+        for i, test_subjects in enumerate(test_subject_sets):
+            train_subjects = permanent_train + [s for s in cv_subjects if s not in test_subjects]
+            folds.append({
+                'fold_id': i + 1,
+                'train_subjects': train_subjects,
+                'val_subjects': val_subjects,
+                'test_subjects': test_subjects
+            })
+        return folds
 
 class Trainer:
     def __init__(self, arg):
@@ -255,11 +254,11 @@ class Trainer:
         
         self.filter_type = getattr(arg, 'filter_type', None) or fusion_options.get('filter_type', 'madgwick')
         self.filter_params = fusion_options
-        self.use_cache = fusion_options.get('use_cache', True)
+        self.use_cache = fusion_options.get('use_cache', False)
         self.cache_dir = fusion_options.get('cache_dir', 'processed_data')
         
         self.test_summary = {'test_configs': [], 'average_metrics': {}}
-        self.enable_kfold = getattr(arg, 'kfold', False)
+        self.enable_kfold = getattr(arg, 'kfold', True)
         
         if self.enable_kfold and hasattr(arg, 'dataset_args') and arg.dataset_args and 'kfold' in arg.dataset_args:
             self.kfold_config = arg.dataset_args.get('kfold', {})
@@ -314,17 +313,6 @@ class Trainer:
             
         self.load_loss()
         
-        if self.fuse and self.filter_type != 'none':
-            all_subjects = arg.subjects
-            cache_dir = os.path.join(self.cache_dir, self.filter_type)
-            
-            if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
-                self.print_log(f"Preprocessing all {len(all_subjects)} subjects with {self.filter_type} filter")
-                from utils.imu_fusion import preprocess_all_subjects
-                preprocess_all_subjects(all_subjects, self.filter_type, cache_dir, 
-                                       arg.dataset_args.get('max_length', 64))
-                self.print_log(f"Preprocessing complete")
-                
         self.print_log(f'# Parameters: {self.count_parameters(self.model)}')
         self.print_log(f'Sensor modalities: {self.inertial_modality}')
         self.print_log(f'Using fusion: {self.fuse} with filter type: {self.filter_type}')
@@ -363,7 +351,7 @@ class Trainer:
                 'num_classes': 2,
                 'acc_frames': 64,
                 'mocap_frames': 64,
-                'num_heads': 8,
+                'num_heads': 4,
                 'fusion_type': 'concat',
                 'dropout': 0.3,
                 'use_batch_norm': True,
@@ -385,7 +373,6 @@ class Trainer:
                 self.model.load_state_dict(torch.load(weights_path))
             return True
         except Exception as e:
-            self.print_log(f"Error loading weights: {str(e)}")
             return False
 
     def save_weights(self, path=None, weights_only=False):
@@ -402,7 +389,6 @@ class Trainer:
                     torch.save(self.model, path if path else self.model_path)
             return True
         except Exception as e:
-            self.print_log(f"Error saving weights: {str(e)}")
             return False
 
     def load_optimizer(self):
@@ -412,9 +398,9 @@ class Trainer:
         elif optimizer_name == "adamw": 
             self.optimizer = optim.AdamW(self.model.parameters(), lr=self.arg.base_lr, weight_decay=self.arg.weight_decay)
         elif optimizer_name == "sgd": 
-            self.optimizer = optim.SGD(self.model.parameters(), lr=self.arg.base_lr, weight_decay=self.arg.weight_decay)
+            self.optimizer = optim.SGD(self.model.parameters(), lr=self.arg.base_lr, weight_decay=self.arg.weight_decay, momentum=0.9)
         else: 
-            raise ValueError(f"Unsupported optimizer: {optimizer_name}")
+            self.optimizer = optim.AdamW(self.model.parameters(), lr=self.arg.base_lr, weight_decay=self.arg.weight_decay)
 
     def distribution_viz(self, labels, work_dir, mode):
         values, count = np.unique(labels, return_counts=True)
@@ -465,7 +451,6 @@ class Trainer:
                 self.distribution_viz(self.norm_train['labels'], self.arg.work_dir, 'train')
             except Exception as e:
                 self.print_log(f"ERROR creating train dataloader: {str(e)}")
-                self.print_log(traceback.format_exc())
                 return False
             
             self.print_log(f"Loading validation data for subjects: {self.val_subjects}")
@@ -486,7 +471,6 @@ class Trainer:
                     self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
                 except Exception as e:
                     self.print_log(f"ERROR creating validation dataloader: {str(e)}")
-                    self.print_log(traceback.format_exc())
             
             if test_subjects:
                 self.print_log(f"Loading test data for subjects: {test_subjects}")
@@ -508,13 +492,11 @@ class Trainer:
                         self.distribution_viz(self.norm_test['labels'], self.arg.work_dir, 'test')
                     except Exception as e:
                         self.print_log(f"ERROR creating test dataloader: {str(e)}")
-                        self.print_log(traceback.format_exc())
             
             return True
         
         except Exception as e:
             self.print_log(f"ERROR in load_data: {str(e)}")
-            self.print_log(traceback.format_exc())
             return False
 
     def record_time(self): 
@@ -531,6 +513,7 @@ class Trainer:
         if self.arg.print_log:
             with open(f'{self.arg.work_dir}/log.txt', 'a') as f: 
                 print(string, file=f)
+
     def loss_viz(self, train_loss, val_loss):
         epochs = range(len(train_loss))
         plt.figure(figsize=(12, 8))
@@ -623,7 +606,6 @@ class Trainer:
                             )
                             batch_quaternions.append(torch.from_numpy(sample_quat).float())
                         except Exception as e:
-                            self.print_log(f"Error processing window {i}: {str(e)}")
                             empty_quat = np.zeros((len(sample_acc), 4))
                             empty_quat[:, 0] = 1.0
                             batch_quaternions.append(torch.from_numpy(empty_quat).float())
@@ -645,7 +627,6 @@ class Trainer:
                     logits = self.model(inputs)
             except Exception as e:
                 self.print_log(f"ERROR in forward pass: {str(e)}")
-                self.print_log(traceback.format_exc())
                 continue
                 
             loss = self.criterion(logits, targets)
@@ -701,7 +682,6 @@ class Trainer:
                 self.save_weights(self.model_path, weights_only=False)
                 self.save_weights(self.weights_path, weights_only=True)
             except Exception as e:
-                self.print_log(f"Error saving model: {str(e)}")
                 emergency_path = os.path.join(self.arg.work_dir, 'best_model_emergency.pt')
                 try:
                     self.save_weights(emergency_path, weights_only=False)
@@ -772,7 +752,6 @@ class Trainer:
                             )
                             batch_quaternions.append(torch.from_numpy(sample_quat).float())
                         except Exception as e:
-                            self.print_log(f"Error processing window {i}: {str(e)}")
                             empty_quat = np.zeros((len(sample_acc), 4))
                             empty_quat[:, 0] = 1.0
                             batch_quaternions.append(torch.from_numpy(empty_quat).float())
@@ -791,7 +770,6 @@ class Trainer:
                         logits = self.model(inputs)
                 except Exception as e:
                     self.print_log(f"ERROR in {mode} forward pass: {str(e)}")
-                    self.print_log(traceback.format_exc())
                     continue
                 
                 batch_loss = self.criterion(logits, targets)
@@ -893,7 +871,6 @@ class Trainer:
             except Exception as e: 
                 self.print_log(f"Error creating loss visualization: {e}")
         
-        # Create a backup of the best model if we need to load it later
         fold_model_path = os.path.join(fold_dir, f"best_model_fold_{fold_id}.pt")
         fold_weights_path = os.path.join(fold_dir, f"best_weights_fold_{fold_id}.pt")
         try:
@@ -902,7 +879,6 @@ class Trainer:
         except Exception as e:
             self.print_log(f"Warning: Could not backup best model: {str(e)}")
         
-        # Load the best model for final evaluation
         load_success = self.load_weights(self.model_path) or self.load_weights(self.weights_path)
         if load_success:
             self.print_log("Loaded best model for final evaluation")
@@ -975,12 +951,10 @@ class Trainer:
                     self.print_log(f'Mean balanced accuracy: {avg_metrics.get("balanced_accuracy", 0):.2f}% ± {avg_metrics.get("balanced_accuracy_std", 0):.2f}%')
             
             else:
-                # Generate one fold with the available subjects
                 available_subjects = [s for s in self.arg.subjects if s not in self.val_subjects]
                 train_subjects = [s for s in available_subjects if s in self.permanent_train]
                 test_subjects = [s for s in available_subjects if s not in self.permanent_train]
                 
-                # Choose 2 subjects for testing
                 if len(test_subjects) > 2:
                     test_subjects = test_subjects[:2]
                     
@@ -1008,7 +982,6 @@ class Trainer:
                     except Exception as e: 
                         self.print_log(f"Error creating loss visualization: {str(e)}")
                 
-                # Load the best model for final evaluation
                 load_success = self.load_weights(self.model_path) or self.load_weights(self.weights_path)
                 if load_success:
                     self.print_log("Loaded best model for final evaluation")
