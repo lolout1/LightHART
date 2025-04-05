@@ -180,22 +180,25 @@ def generate_cv_folds(args):
     
     cv_subjects = [s for s in all_subjects if s not in val_subjects and s not in permanent_train]
     
-    folds = []
-    test_pairs = [
-        [32, 39],
-        [30, 31],
-        [33, 34],
-        [35, 37],
-        [43, 44]
-    ]
+    num_test_per_fold = max(2, len(cv_subjects) // args.num_folds)
     
-    for i, test_pair in enumerate(test_pairs):
-        train_subjects = permanent_train + [s for s in cv_subjects if s not in test_pair]
+    folds = []
+    test_subject_sets = []
+    
+    for i in range(0, len(cv_subjects), num_test_per_fold):
+        end = min(i + num_test_per_fold, len(cv_subjects))
+        if end - i < num_test_per_fold and i > 0 and len(test_subject_sets) > 0:
+            test_subject_sets[-1].extend(cv_subjects[i:end])
+        else:
+            test_subject_sets.append(cv_subjects[i:end])
+    
+    for i, test_subjects in enumerate(test_subject_sets):
+        train_subjects = permanent_train + [s for s in cv_subjects if s not in test_subjects]
         folds.append({
             'fold_id': i + 1,
             'train_subjects': train_subjects,
             'val_subjects': val_subjects,
-            'test_subjects': test_pair
+            'test_subjects': test_subjects
         })
     
     return folds
@@ -375,22 +378,32 @@ class Trainer:
 
     def load_weights(self, path=None):
         weights_path = path if path else self.model_path
-        if isinstance(self.model, nn.DataParallel): 
-            self.model.module.load_state_dict(torch.load(weights_path))
-        else: 
-            self.model.load_state_dict(torch.load(weights_path))
+        try:
+            if isinstance(self.model, nn.DataParallel): 
+                self.model.module.load_state_dict(torch.load(weights_path))
+            else: 
+                self.model.load_state_dict(torch.load(weights_path))
+            return True
+        except Exception as e:
+            self.print_log(f"Error loading weights: {str(e)}")
+            return False
 
     def save_weights(self, path=None, weights_only=False):
-        if weights_only:
-            if isinstance(self.model, nn.DataParallel):
-                torch.save(self.model.module.state_dict(), path if path else self.weights_path)
+        try:
+            if weights_only:
+                if isinstance(self.model, nn.DataParallel):
+                    torch.save(self.model.module.state_dict(), path if path else self.weights_path)
+                else:
+                    torch.save(self.model.state_dict(), path if path else self.weights_path)
             else:
-                torch.save(self.model.state_dict(), path if path else self.weights_path)
-        else:
-            if isinstance(self.model, nn.DataParallel):
-                torch.save(self.model.module, path if path else self.model_path)
-            else:
-                torch.save(self.model, path if path else self.model_path)
+                if isinstance(self.model, nn.DataParallel):
+                    torch.save(self.model.module, path if path else self.model_path)
+                else:
+                    torch.save(self.model, path if path else self.model_path)
+            return True
+        except Exception as e:
+            self.print_log(f"Error saving weights: {str(e)}")
+            return False
 
     def load_optimizer(self):
         optimizer_name = self.arg.optimizer.lower()
@@ -518,7 +531,6 @@ class Trainer:
         if self.arg.print_log:
             with open(f'{self.arg.work_dir}/log.txt', 'a') as f: 
                 print(string, file=f)
-
     def loss_viz(self, train_loss, val_loss):
         epochs = range(len(train_loss))
         plt.figure(figsize=(12, 8))
@@ -881,12 +893,21 @@ class Trainer:
             except Exception as e: 
                 self.print_log(f"Error creating loss visualization: {e}")
         
-        if os.path.exists(self.model_path):
-            try:
-                self.load_weights(self.model_path)
-                self.print_log("Loaded best model for final evaluation")
-            except Exception as e: 
-                self.print_log(f"WARNING: Could not load best model: {str(e)}")
+        # Create a backup of the best model if we need to load it later
+        fold_model_path = os.path.join(fold_dir, f"best_model_fold_{fold_id}.pt")
+        fold_weights_path = os.path.join(fold_dir, f"best_weights_fold_{fold_id}.pt")
+        try:
+            shutil.copy(self.model_path, fold_model_path)
+            shutil.copy(self.weights_path, fold_weights_path)
+        except Exception as e:
+            self.print_log(f"Warning: Could not backup best model: {str(e)}")
+        
+        # Load the best model for final evaluation
+        load_success = self.load_weights(self.model_path) or self.load_weights(self.weights_path)
+        if load_success:
+            self.print_log("Loaded best model for final evaluation")
+        else:
+            self.print_log("WARNING: Could not load best model, using current model state")
         
         self.model.eval()
         test_metrics = self.eval(0, 'test')
@@ -905,9 +926,9 @@ class Trainer:
             json.dump(fold_summary, f, indent=2)
         
         for file in ['confusion_matrix_test.png', 'confusion_matrix_val.png']:
-            if os.path.exists(os.path.join(self.arg.work_dir, file)):
-                shutil.copy(os.path.join(self.arg.work_dir, file), 
-                          os.path.join(fold_dir, file))
+            src_path = os.path.join(self.arg.work_dir, file)
+            if os.path.exists(src_path):
+                shutil.copy(src_path, os.path.join(fold_dir, file))
         
         return test_metrics
     
@@ -921,7 +942,7 @@ class Trainer:
             FILTER_INSTANCES = {}
             
             if self.enable_kfold:
-                self.print_log("\n===== Running 5-fold Cross Validation =====")
+                self.print_log("\n===== Running Cross Validation =====")
                 
                 results = []
                 for fold_config in self.cv_folds:
@@ -954,9 +975,22 @@ class Trainer:
                     self.print_log(f'Mean balanced accuracy: {avg_metrics.get("balanced_accuracy", 0):.2f}% ± {avg_metrics.get("balanced_accuracy_std", 0):.2f}%')
             
             else:
-                train_subjects = [s for s in self.arg.subjects if s not in self.val_subjects]
+                # Generate one fold with the available subjects
+                available_subjects = [s for s in self.arg.subjects if s not in self.val_subjects]
+                train_subjects = [s for s in available_subjects if s in self.permanent_train]
+                test_subjects = [s for s in available_subjects if s not in self.permanent_train]
                 
-                if not self.load_data(train_subjects):
+                # Choose 2 subjects for testing
+                if len(test_subjects) > 2:
+                    test_subjects = test_subjects[:2]
+                    
+                train_subjects.extend([s for s in available_subjects if s not in test_subjects and s not in train_subjects])
+                
+                self.print_log(f"Train subjects: {train_subjects}")
+                self.print_log(f"Validation subjects: {self.val_subjects}")
+                self.print_log(f"Test subjects: {test_subjects}")
+                
+                if not self.load_data(train_subjects, test_subjects):
                     self.print_log("ERROR: Failed to load data")
                     return
                 
@@ -974,36 +1008,37 @@ class Trainer:
                     except Exception as e: 
                         self.print_log(f"Error creating loss visualization: {str(e)}")
                 
-                if os.path.exists(self.model_path):
-                    try:
-                        self.load_weights(self.model_path)
-                        self.print_log("Loaded best model for final evaluation")
-                    except Exception as e: 
-                        self.print_log(f"WARNING: Could not load best model: {str(e)}")
+                # Load the best model for final evaluation
+                load_success = self.load_weights(self.model_path) or self.load_weights(self.weights_path)
+                if load_success:
+                    self.print_log("Loaded best model for final evaluation")
+                else:
+                    self.print_log("WARNING: Could not load best model, using current model state")
                 
                 self.model.eval()
-                final_metrics = self.eval(0, 'val')
+                test_metrics = self.eval(0, 'test')
+                val_metrics = self.eval(0, 'val')
                 
-                self.print_log(f'\n===== Final Results =====')
-                self.print_log(f'Accuracy: {final_metrics["accuracy"]:.2f}%')
-                self.print_log(f'F1 score: {final_metrics["f1"]:.2f}')
-                self.print_log(f'Precision: {final_metrics["precision"]:.2f}%')
-                self.print_log(f'Recall: {final_metrics["recall"]:.2f}%')
-                self.print_log(f'Balanced accuracy: {final_metrics["balanced_accuracy"]:.2f}%')
+                self.print_log(f'\n===== Final Test Results =====')
+                self.print_log(f'Accuracy: {test_metrics["accuracy"]:.2f}%')
+                self.print_log(f'F1 score: {test_metrics["f1"]:.2f}')
+                self.print_log(f'Precision: {test_metrics["precision"]:.2f}%')
+                self.print_log(f'Recall: {test_metrics["recall"]:.2f}%')
+                self.print_log(f'Balanced accuracy: {test_metrics["balanced_accuracy"]:.2f}%')
                 
                 self.test_summary['test_configs'].append({
                     'config_id': 1,
                     'train_subjects': train_subjects,
-                    'test_subjects': self.val_subjects,
-                    'metrics': final_metrics
+                    'test_subjects': test_subjects,
+                    'metrics': test_metrics
                 })
                 
                 self.test_summary['average_metrics'] = {
-                    'accuracy': final_metrics['accuracy'],
-                    'f1': final_metrics['f1'],
-                    'precision': final_metrics['precision'],
-                    'recall': final_metrics['recall'],
-                    'balanced_accuracy': final_metrics['balanced_accuracy']
+                    'accuracy': test_metrics['accuracy'],
+                    'f1': test_metrics['f1'],
+                    'precision': test_metrics['precision'],
+                    'recall': test_metrics['recall'],
+                    'balanced_accuracy': test_metrics['balanced_accuracy']
                 }
                 
                 self.save_test_summary()
