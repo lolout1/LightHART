@@ -1,4 +1,3 @@
-from typing import List, Dict, Tuple, Union, Optional, Any
 import os
 import numpy as np
 import pandas as pd
@@ -7,62 +6,63 @@ import logging
 from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation
 from scipy.signal import find_peaks, butter, filtfilt
-import traceback
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("dataset")
 
-class ModalityFile: 
-    def __init__(self, subject_id: int, action_id: int, sequence_number: int, file_path: str) -> None: 
+class ModalityFile:
+    def __init__(self, subject_id, action_id, sequence_number, file_path):
         self.subject_id = subject_id
         self.action_id = action_id
         self.sequence_number = sequence_number
         self.file_path = file_path
 
 class Modality:
-    def __init__(self, name: str) -> None:
-        self.name = name 
-        self.files: List[ModalityFile] = []
+    def __init__(self, name):
+        self.name = name
+        self.files = []
     
-    def add_file(self, subject_id: int, action_id: int, sequence_number: int, file_path: str) -> None: 
+    def add_file(self, subject_id, action_id, sequence_number, file_path):
         modality_file = ModalityFile(subject_id, action_id, sequence_number, file_path)
         self.files.append(modality_file)
 
-class MatchedTrial: 
-    def __init__(self, subject_id: int, action_id: int, sequence_number: int) -> None:
+class MatchedTrial:
+    def __init__(self, subject_id, action_id, sequence_number):
         self.subject_id = subject_id
         self.action_id = action_id
         self.sequence_number = sequence_number
-        self.files: Dict[str, str] = {}
+        self.files = {}
     
-    def add_file(self, modality_name: str, file_path: str) -> None:
+    def add_file(self, modality_name, file_path):
         self.files[modality_name] = file_path
 
 class SmartFallMM:
-    def __init__(self, root_dir: str, fusion_options: Optional[Dict] = None) -> None:
+    def __init__(self, root_dir, fusion_options=None):
         self.root_dir = root_dir
         self.age_groups = {"old": {}, "young": {}}
         self.matched_trials = []
         self.selected_sensors = {}
         self.fusion_options = fusion_options or {}
-        self.target_sample_rate = fusion_options.get('target_sample_rate', 30.0) if fusion_options else 30.0
-        self.window_size = fusion_options.get('window_size', 128) if fusion_options else 128
-        self.window_overlap = fusion_options.get('window_overlap', 0.5) if fusion_options else 0.5
+        self.target_sample_rate = self.fusion_options.get('target_sample_rate', 30.0)
+        self.window_size = self.fusion_options.get('window_size', 128)
+        self.window_overlap = self.fusion_options.get('window_overlap', 0.5)
         self.invalid_files = []
+        self.filter_states = {}
 
-    def add_modality(self, age_group: str, modality_name: str) -> None:
+    def add_modality(self, age_group, modality_name):
         if age_group not in self.age_groups:
-            raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
+            return
         self.age_groups[age_group][modality_name] = Modality(modality_name)
 
-    def select_sensor(self, modality_name: str, sensor_name: str = None) -> None:
+    def select_sensor(self, modality_name, sensor_name=None):
         if modality_name == "skeleton":
             self.selected_sensors[modality_name] = None
         else:
             if sensor_name is None:
-                raise ValueError(f"Sensor must be specified for modality '{modality_name}'")
+                return
             self.selected_sensors[modality_name] = sensor_name
 
-    def load_files(self) -> None:
+    def load_files(self):
         for age_group, modalities in self.age_groups.items():
             for modality_name, modality in modalities.items():
                 if modality_name == "skeleton":
@@ -84,10 +84,10 @@ class SmartFallMM:
                                 file_path = os.path.join(root, file)
                                 modality.add_file(subject_id, action_id, sequence_number, file_path)
                         except Exception as e:
-                            logger.error(f"Error processing file {file}: {e}")
+                            logger.debug(f"Error processing file {file}: {e}")
                             self.invalid_files.append(os.path.join(root, file))
 
-    def match_trials(self) -> None:
+    def match_trials(self):
         trial_dict = {}
         for age_group, modalities in self.age_groups.items():
             for modality_name, modality in modalities.items():
@@ -106,8 +106,10 @@ class SmartFallMM:
                 for modality_name, file_path in files_dict.items():
                     matched_trial.add_file(modality_name, file_path)
                 self.matched_trials.append(matched_trial)
+                
+        logger.info(f"Matched {len(self.matched_trials)} trials across modalities")
 
-    def pipe_line(self, age_group: List[str], modalities: List[str], sensors: List[str]):
+    def pipe_line(self, age_group, modalities, sensors):
         for age in age_group: 
             for modality in modalities:
                 self.add_modality(age, modality)
@@ -119,291 +121,227 @@ class SmartFallMM:
         self.load_files()
         self.match_trials()
         logger.info(f"Loaded {len(self.matched_trials)} matched trials")
-        
-    def extract_timestamps_and_values(self, file_path: str):
-        try:
-            for sep in [',', ';', '\t']:
-                try:
-                    data_frame = pd.read_csv(file_path, sep=sep, header=None)
-                    break
-                except:
-                    continue
+
+    def parse_csv_file(self, file_path):
+        if not os.path.exists(file_path):
+            logger.debug(f"File does not exist: {file_path}")
+            return None, None
             
-            if 'data_frame' not in locals():
-                logger.error(f"Failed to parse {file_path}")
-                return None, None
+        try:
+            with open(file_path, 'r') as f:
+                first_line = f.readline().strip()
                 
-            data_frame = data_frame.dropna().bfill()
-            first_row = data_frame.iloc[0].astype(str)
-            header_indicators = ["timestamp", "time", "date", "unnamed", "index"]
-            if any(any(indicator in val.lower() for indicator in header_indicators) for val in first_row):
-                data_frame = data_frame.iloc[1:].reset_index(drop=True)
-                
+            sep = ',' if ',' in first_line else ';'
+            skip_rows = 0
+            
+            # Try to determine if there's a header by checking first line content
+            if any(word in first_line.lower() for word in ['time', 'date', 'timestamp']):
+                skip_rows = 1
+            
+            # Read data with the detected parameters
+            data_frame = pd.read_csv(file_path, sep=sep, header=None, skiprows=skip_rows)
+            
+            # Clean data: remove NaN, duplicated timestamps
+            data_frame = data_frame.dropna()
+            
+            # Special handling for skeleton data
             if 'skeleton' in file_path:
                 if data_frame.shape[1] < 96:
-                    logger.warning(f"Invalid skeleton data dimensions in {file_path}")
-                    return None, None
-                values = data_frame.iloc[:, :96].values.astype(np.float32)
-                timestamps = np.arange(len(values))
-                return timestamps, values
+                    logger.debug(f"Skeleton data incomplete: {file_path} - columns: {data_frame.shape[1]}")
+                    padded = np.zeros((data_frame.shape[0], 96))
+                    padded[:, :data_frame.shape[1]] = data_frame.values
+                    return np.arange(len(padded)), padded
+                return np.arange(len(data_frame)), data_frame.values
             
-            if data_frame.shape[1] > 4:
-                try:
-                    timestamps = data_frame.iloc[:, 0].values.astype(np.float64)
-                    values = data_frame.iloc[:, 3:6].values.astype(np.float32)
-                except:
-                    return None, None
-            else:
-                try:
-                    try:
-                        timestamps = pd.to_datetime(data_frame.iloc[:, 0], errors='coerce')
-                        if pd.isna(timestamps).all():
-                            timestamps = pd.to_numeric(data_frame.iloc[:, 0], errors='coerce')
-                            if pd.isna(timestamps).any():
-                                return None, None
-                        else:
-                            timestamps = timestamps.values.astype(np.int64) / 1e9
-                    except:
-                        return None, None
-                    values = data_frame.iloc[:, 1:4].values.astype(np.float32)
-                except:
-                    return None, None
-                
-            if np.isnan(values).any() or np.isinf(values).any():
+            # For accelerometer/gyroscope data
+            if data_frame.empty or data_frame.shape[0] < 3:
+                logger.debug(f"Not enough data points in file: {file_path}")
+                return None, None
+            
+            # Parse timestamps and values
+            timestamp_col = 0
+            value_cols = list(range(1, min(4, data_frame.shape[1])))
+            
+            # Try to parse timestamp column
+            try:
+                # Check if timestamp is datetime format
+                if isinstance(data_frame.iloc[0, timestamp_col], str) and any(c in data_frame.iloc[0, timestamp_col] for c in ['-', ':', '/']):
+                    # Convert timestamps to milliseconds
+                    timestamps = pd.to_datetime(data_frame.iloc[:, timestamp_col], errors='coerce')
+                    # Make timestamps relative to first timestamp
+                    timestamps = (timestamps - timestamps.iloc[0]).dt.total_seconds() * 1000
+                else:
+                    # Try to convert directly to numeric
+                    timestamps = pd.to_numeric(data_frame.iloc[:, timestamp_col], errors='coerce')
+            except Exception as e:
+                logger.debug(f"Error parsing timestamps in {file_path}: {e}")
+                # Use synthetic timestamps as fallback
+                timestamps = np.arange(len(data_frame)) * (1000/30)  # 30 Hz
+            
+            # Extract values from columns 1-3
+            try:
+                values = data_frame.iloc[:, value_cols].astype(float).values
+                # Pad if we have fewer than 3 columns
+                if values.shape[1] < 3:
+                    padded = np.zeros((values.shape[0], 3))
+                    padded[:, :values.shape[1]] = values
+                    values = padded
+            except Exception as e:
+                logger.debug(f"Error extracting values from {file_path}: {e}")
+                return None, None
+            
+            # Final validation
+            if len(values) < 3 or np.isnan(values).any() or np.isinf(values).any():
+                logger.debug(f"Invalid values in {file_path}")
+                return None, None
+            
+            # Drop duplicate timestamps
+            unique_idx = np.where(np.diff(timestamps) > 0)[0]
+            unique_idx = np.append(unique_idx, len(timestamps)-1)  # Add last point
+            unique_idx = np.insert(unique_idx, 0, 0)  # Add first point
+            
+            if len(unique_idx) < 3:
+                logger.debug(f"Not enough unique timestamps in {file_path}")
                 return None, None
                 
-            if len(values) < 3:
-                return None, None
-                
-            return timestamps, values
+            return timestamps[unique_idx], values[unique_idx]
             
         except Exception as e:
-            logger.error(f"Error extracting data from {file_path}: {e}")
-            return None, None
-        
-    def resample_to_fixed_rate(self, timestamps, values, target_rate=None):
-        if target_rate is None:
-            target_rate = self.target_sample_rate
-            
-        if timestamps is None or values is None or len(timestamps) <= 1 or values.shape[0] <= 1:
-            return None, None
-            
-        try:
-            if not np.all(np.diff(timestamps) > 0):
-                valid_indices = np.concatenate(([0], np.where(np.diff(timestamps) > 0)[0] + 1))
-                timestamps = timestamps[valid_indices]
-                values = values[valid_indices]
-                
-                if len(timestamps) <= 1:
-                    return None, None
-                    
-            time_range = timestamps[-1] - timestamps[0]
-            if time_range > 1000:
-                timestamps = timestamps / 1000.0
-            elif time_range > 1e9:
-                timestamps = timestamps / 1e9
-                
-            start_time = timestamps[0]
-            end_time = timestamps[-1]
-            
-            if end_time - start_time < 0.5:
-                return None, None
-                
-            desired_times = np.arange(start_time, end_time, 1.0/target_rate)
-            
-            if len(desired_times) < 3:
-                return None, None
-                
-            resampled_data = np.zeros((len(desired_times), values.shape[1]))
-            
-            for axis in range(values.shape[1]):
-                try:
-                    interp_func = interp1d(timestamps, values[:, axis], 
-                                         bounds_error=False, 
-                                         fill_value=(values[0, axis], values[-1, axis]))
-                    resampled_data[:, axis] = interp_func(desired_times)
-                except:
-                    idx = np.argmin(np.abs(timestamps[:, np.newaxis] - desired_times), axis=0)
-                    resampled_data[:, axis] = values[idx, axis]
-            
-            return resampled_data, desired_times
-            
-        except:
+            logger.debug(f"Exception parsing {file_path}: {e}")
             return None, None
 
-    def apply_lowpass_filter(self, data, cutoff=5.0, fs=30.0, order=2):
-        if data is None or len(data) <= 3:
-            return data
-            
-        nyq = 0.5 * fs
-        normal_cutoff = cutoff / nyq
-        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    def align_sensor_data(self, acc_file, gyro_file):
+        acc_timestamps, acc_values = self.parse_csv_file(acc_file)
+        gyro_timestamps, gyro_values = self.parse_csv_file(gyro_file)
         
-        filtered_data = np.zeros_like(data)
-        for axis in range(data.shape[1]):
-            try:
-                filtered_data[:, axis] = filtfilt(b, a, data[:, axis])
-            except:
-                filtered_data[:, axis] = data[:, axis]
-        
-        return filtered_data
-
-    def align_sensor_data(self, acc_file: str, gyro_file: str):
-        try:
-            acc_timestamps, acc_values = self.extract_timestamps_and_values(acc_file)
-            gyro_timestamps, gyro_values = self.extract_timestamps_and_values(gyro_file)
-            
-            if acc_timestamps is None or gyro_timestamps is None or acc_values is None or gyro_values is None:
-                return None, None, None
-                
-            resampled_acc, acc_times = self.resample_to_fixed_rate(acc_timestamps, acc_values)
-            resampled_gyro, gyro_times = self.resample_to_fixed_rate(gyro_timestamps, gyro_values)
-            
-            if resampled_acc is None or resampled_gyro is None:
-                return None, None, None
-            
-            start_time = max(acc_times[0], gyro_times[0])
-            end_time = min(acc_times[-1], gyro_times[-1])
-            
-            if start_time >= end_time:
-                return None, None, None
-            
-            common_times = np.arange(start_time, end_time, 1.0/self.target_sample_rate)
-            
-            if len(common_times) < 3:
-                return None, None, None
-            
-            aligned_acc = np.zeros((len(common_times), 3))
-            aligned_gyro = np.zeros((len(common_times), 3))
-            
-            for axis in range(min(3, acc_values.shape[1])):
-                try:
-                    acc_interp = interp1d(acc_times, resampled_acc[:, axis], 
-                                        bounds_error=False, 
-                                        fill_value=(resampled_acc[0, axis], resampled_acc[-1, axis]))
-                    aligned_acc[:, axis] = acc_interp(common_times)
-                except:
-                    idx = np.argmin(np.abs(acc_times[:, np.newaxis] - common_times), axis=0)
-                    aligned_acc[:, axis] = resampled_acc[idx, axis]
-            
-            for axis in range(min(3, gyro_values.shape[1])):
-                try:
-                    gyro_interp = interp1d(gyro_times, resampled_gyro[:, axis],
-                                          bounds_error=False,
-                                          fill_value=(resampled_gyro[0, axis], resampled_gyro[-1, axis]))
-                    aligned_gyro[:, axis] = gyro_interp(common_times)
-                except:
-                    idx = np.argmin(np.abs(gyro_times[:, np.newaxis] - common_times), axis=0)
-                    aligned_gyro[:, axis] = resampled_gyro[idx, axis]
-            
-            aligned_acc = self.apply_lowpass_filter(aligned_acc, cutoff=10.0, fs=self.target_sample_rate)
-            aligned_gyro = self.apply_lowpass_filter(aligned_gyro, cutoff=10.0, fs=self.target_sample_rate)
-            
-            return aligned_acc, aligned_gyro, common_times
-        
-        except:
+        if acc_timestamps is None or gyro_timestamps is None or acc_values is None or gyro_values is None:
+            trial_id = os.path.basename(acc_file).split('.')[0] if acc_file else "unknown"
+            logger.debug(f"Failed to extract data for trial {trial_id}")
             return None, None, None
-    
-    def fixed_size_windows(self, data, window_size=None, stride=10):
-        if window_size is None:
-            window_size = self.window_size
             
-        if data is None or len(data) < window_size // 2:
-            return None
-            
-        windows = []
-        for start in range(0, len(data) - window_size + 1, stride):
-            windows.append(data[start:start + window_size])
-            
-        if not windows and len(data) > window_size // 2:
-            padded = np.zeros((window_size, data.shape[1]))
-            padded[:len(data)] = data
-            windows = [padded]
-            
-        return windows
-
-    def selective_sliding_window(self, data, window_size=None, stride=10):
-        if window_size is None:
-            window_size = self.window_size
-            
-        if data is None or len(data) < window_size // 2:
-            return None
-            
+        # Find common time range
+        start_time = max(acc_timestamps[0], gyro_timestamps[0])
+        end_time = min(acc_timestamps[-1], gyro_timestamps[-1])
+        
+        if start_time >= end_time:
+            trial_id = os.path.basename(acc_file).split('.')[0]
+            logger.debug(f"No common time range for trial {trial_id}")
+            return None, None, None
+        
+        # Create common time base with target sample rate
+        common_times = np.linspace(start_time, end_time, int((end_time-start_time)*self.target_sample_rate/1000))
+        
+        if len(common_times) < 10:  # Ensure we have enough points
+            trial_id = os.path.basename(acc_file).split('.')[0]
+            logger.debug(f"Too few common time points for trial {trial_id}")
+            return None, None, None
+        
+        # Resample to common time base using linear interpolation
+        aligned_acc = np.zeros((len(common_times), 3))
+        aligned_gyro = np.zeros((len(common_times), 3))
+        
+        for axis in range(3):
+            if axis < acc_values.shape[1]:
+                try:
+                    interp_func = interp1d(acc_timestamps, acc_values[:, axis], bounds_error=False, 
+                                         fill_value=(acc_values[0, axis], acc_values[-1, axis]), kind='linear')
+                    aligned_acc[:, axis] = interp_func(common_times)
+                except Exception as e:
+                    logger.debug(f"Interpolation error for acc axis {axis}: {e}")
+                    idx = np.argmin(np.abs(acc_timestamps[:, np.newaxis] - common_times), axis=0)
+                    aligned_acc[:, axis] = acc_values[idx, axis]
+        
+        for axis in range(3):
+            if axis < gyro_values.shape[1]:
+                try:
+                    interp_func = interp1d(gyro_timestamps, gyro_values[:, axis], bounds_error=False, 
+                                         fill_value=(gyro_values[0, axis], gyro_values[-1, axis]), kind='linear')
+                    aligned_gyro[:, axis] = interp_func(common_times)
+                except Exception as e:
+                    logger.debug(f"Interpolation error for gyro axis {axis}: {e}")
+                    idx = np.argmin(np.abs(gyro_timestamps[:, np.newaxis] - common_times), axis=0)
+                    aligned_gyro[:, axis] = gyro_values[idx, axis]
+        
+        # Apply bandpass filtering with more lenient parameters
         try:
-            if data.shape[1] >= 3:
-                acc_magnitude = np.sqrt(np.sum(data[:, :3]**2, axis=1))
-                height = max(1.5, np.mean(acc_magnitude) + 1.5 * np.std(acc_magnitude))
-                distance = max(10, window_size // 8)
-                peaks, _ = find_peaks(acc_magnitude, height=height, distance=distance)
-                
-                if len(peaks) == 0:
-                    peaks = [np.argmax(acc_magnitude)]
-                
-                windows = []
-                for peak in peaks:
-                    half_window = window_size // 2
-                    start = max(0, peak - half_window)
-                    end = min(len(data), start + window_size)
-                    
-                    if end - start < window_size:
-                        if start == 0:
-                            end = min(len(data), window_size)
-                        else:
-                            start = max(0, end - window_size)
-                    
-                    if end - start == window_size:
-                        windows.append(data[start:end])
-                
-                if not windows:
-                    return self.fixed_size_windows(data, window_size, stride)
-                
-                return windows
-            else:
-                return self.fixed_size_windows(data, window_size, stride)
-                
-        except:
-            return self.fixed_size_windows(data, window_size, stride)
+            nyq = 0.5 * self.target_sample_rate
+            low, high = 0.01 / nyq, 15.0 / nyq  # More lenient filtering
+            b, a = butter(2, [low, high], btype='band')
+            
+            for axis in range(3):
+                aligned_acc[:, axis] = filtfilt(b, a, aligned_acc[:, axis])
+            
+            low, high = 0.01 / nyq, 12.0 / nyq
+            b, a = butter(2, [low, high], btype='band')
+            
+            for axis in range(3):
+                aligned_gyro[:, axis] = filtfilt(b, a, aligned_gyro[:, axis])
+        except Exception as e:
+            logger.debug(f"Filtering error: {e}")
+        
+        return aligned_acc, aligned_gyro, common_times
+    
+    def create_sliding_windows(self, data, window_size=None, stride=32):
+        if window_size is None:
+            window_size = self.window_size
+            
+        if data is None or len(data) < window_size // 2:
+            return []
+            
+        # Use simple sliding windows with stride 32
+        windows = []
+        for start in range(0, max(1, len(data) - window_size + 1), stride):
+            if start + window_size <= len(data):
+                windows.append(data[start:start + window_size])
+            
+        return windows if windows else []
 
     def load_trial_data(self, trial):
-        try:
-            trial_id = f"S{trial.subject_id:02d}A{trial.action_id:02d}T{trial.sequence_number:02d}"
+        if not ('accelerometer' in trial.files and 'gyroscope' in trial.files):
+            return None
             
-            if not ('accelerometer' in trial.files and 'gyroscope' in trial.files):
-                return None
-                
-            aligned_acc, aligned_gyro, aligned_times = self.align_sensor_data(
-                trial.files['accelerometer'],
-                trial.files['gyroscope']
-            )
+        # Check if files exist
+        if not os.path.exists(trial.files['accelerometer']) or not os.path.exists(trial.files['gyroscope']):
+            return None
             
-            if aligned_acc is None or aligned_gyro is None or aligned_times is None:
-                return None
-                
-            if len(aligned_acc) < self.window_size // 2:
-                return None
-                
-            trial_data = {
-                'accelerometer': aligned_acc,
-                'gyroscope': aligned_gyro,
-                'timestamps': aligned_times
-            }
+        trial_id = f"S{trial.subject_id:02d}A{trial.action_id:02d}T{trial.sequence_number:02d}"
+        logger.debug(f"Processing trial {trial_id}")
             
-            if 'skeleton' in trial.files:
-                try:
-                    skeleton_timestamps, skeleton_values = self.extract_timestamps_and_values(trial.files['skeleton'])
+        aligned_acc, aligned_gyro, aligned_times = self.align_sensor_data(
+            trial.files['accelerometer'],
+            trial.files['gyroscope']
+        )
+        
+        if aligned_acc is None or aligned_gyro is None or aligned_times is None:
+            logger.debug(f"Failed to align data for trial {trial_id}")
+            return None
+            
+        trial_data = {
+            'accelerometer': aligned_acc,
+            'gyroscope': aligned_gyro,
+            'timestamps': aligned_times
+        }
+        
+        # Only process skeleton if available
+        if 'skeleton' in trial.files and os.path.exists(trial.files['skeleton']):
+            try:
+                skeleton_timestamps, skeleton_values = self.parse_csv_file(trial.files['skeleton'])
+                
+                if skeleton_timestamps is not None and skeleton_values is not None and len(skeleton_values) > 0:
+                    num_frames = skeleton_values.shape[0]
                     
-                    if skeleton_timestamps is not None and skeleton_values is not None:
-                        num_frames = skeleton_values.shape[0]
+                    if skeleton_values.shape[1] == 96:
+                        skeleton_data = skeleton_values.reshape(num_frames, 32, 3)
                         
-                        if skeleton_values.shape[1] == 96:
-                            skeleton_data = skeleton_values.reshape(num_frames, 32, 3)
+                        if num_frames > 2:
+                            # Adjust skeleton timestamps to match IMU timebase
+                            if len(skeleton_timestamps) != num_frames:
+                                skeleton_times = np.linspace(0, num_frames/30.0, num_frames) * 1000
+                            else:
+                                skeleton_times = skeleton_timestamps
                             
-                            if num_frames > 2:
-                                if skeleton_timestamps is None or len(skeleton_timestamps) != num_frames:
-                                    skeleton_times = np.linspace(0, num_frames/30.0, num_frames)
-                                else:
-                                    skeleton_times = skeleton_timestamps
-                                
+                            # Align time bases
+                            try:
                                 skeleton_times = skeleton_times - skeleton_times[0] + aligned_times[0]
                                 
                                 resampled_skeleton = np.zeros((len(aligned_times), 32, 3))
@@ -420,25 +358,26 @@ class SmartFallMM:
                                             )
                                             
                                             resampled_skeleton[:, joint, coord] = interp_func(aligned_times)
-                                        except:
-                                            idx = np.argmin(np.abs(skeleton_times[:, np.newaxis] - aligned_times), axis=0)
-                                            resampled_skeleton[:, joint, coord] = skeleton_data[idx, joint, coord]
+                                        except Exception as e:
+                                            logger.debug(f"Error interpolating skeleton joint {joint},{coord}: {e}")
+                                            continue
                                 
                                 trial_data['skeleton'] = resampled_skeleton
-                except:
-                    pass
-            
-            return trial_data
-            
-        except:
-            return None
-
-    def create_windowed_samples(self, trial_data, label):
-        if trial_data is None:
-            return None
-            
-        is_fall = label > 9
+                            except Exception as e:
+                                logger.debug(f"Error aligning skeleton data for {trial_id}: {e}")
+            except Exception as e:
+                logger.debug(f"Error processing skeleton data for {trial_id}: {e}")
         
+        return trial_data
+
+    def process_trial(self, trial, label, filter_instance=None):
+        trial_id = f"S{trial.subject_id:02d}A{trial.action_id:02d}T{trial.sequence_number:02d}"
+        trial_data = self.load_trial_data(trial)
+        
+        if trial_data is None:
+            logger.debug(f"No data for trial {trial_id}")
+            return None
+            
         windows = {
             'accelerometer': [],
             'gyroscope': [],
@@ -448,73 +387,64 @@ class SmartFallMM:
         if 'skeleton' in trial_data:
             windows['skeleton'] = []
             
-        if is_fall:
-            acc_windows = self.selective_sliding_window(trial_data['accelerometer'])
-        else:
-            acc_windows = self.fixed_size_windows(trial_data['accelerometer'])
+        # Create sliding windows for accelerometer data
+        acc_windows = self.create_sliding_windows(trial_data['accelerometer'], self.window_size, stride=32)
         
-        if acc_windows is None or len(acc_windows) == 0:
-            return windows
+        if not acc_windows:
+            logger.debug(f"No windows generated for trial {trial_id}")
+            return None
         
-        for acc_window in acc_windows:
-            best_match_start = 0
-            best_match_score = float('inf')
+        # For each accelerometer window, find corresponding gyroscope and skeleton windows
+        for i, acc_window in enumerate(acc_windows):
+            window_start = i * 32  # Matching the stride
+            window_end = window_start + self.window_size
             
-            for i in range(0, len(trial_data['accelerometer']) - len(acc_window) + 1, 10):
-                score = np.sum(np.abs(trial_data['accelerometer'][i:i+5, :] - acc_window[:5, :]))
-                if score < best_match_score:
-                    best_match_score = score
-                    best_match_start = i
+            # Ensure we don't go out of bounds
+            if window_end > len(trial_data['accelerometer']):
+                window_start = len(trial_data['accelerometer']) - self.window_size
+                window_end = len(trial_data['accelerometer'])
             
+            # Add accelerometer window
             windows['accelerometer'].append(acc_window)
             
-            gyro_start = best_match_start
-            gyro_end = gyro_start + self.window_size
-            if gyro_end <= len(trial_data['gyroscope']):
-                gyro_window = trial_data['gyroscope'][gyro_start:gyro_end]
+            # Add corresponding gyroscope window
+            if window_end <= len(trial_data['gyroscope']):
+                gyro_window = trial_data['gyroscope'][window_start:window_end]
+                windows['gyroscope'].append(gyro_window)
             else:
-                gyro_window = np.zeros((self.window_size, trial_data['gyroscope'].shape[1]))
-                gyro_window[:len(trial_data['gyroscope']) - gyro_start] = trial_data['gyroscope'][gyro_start:]
+                # This should rarely happen due to alignment, but just in case
+                logger.debug(f"Gyro window bounds issue in trial {trial_id}, window {i}")
+                continue
             
-            windows['gyroscope'].append(gyro_window)
+            # Add label for this window
             windows['labels'].append(label)
             
+            # Add skeleton window if available
             if 'skeleton' in trial_data:
-                skel_start = best_match_start
-                skel_end = skel_start + self.window_size
-                if skel_end <= len(trial_data['skeleton']):
-                    skel_window = trial_data['skeleton'][skel_start:skel_end]
+                if window_end <= len(trial_data['skeleton']):
+                    skeleton_window = trial_data['skeleton'][window_start:window_end]
+                    windows['skeleton'].append(skeleton_window)
                 else:
-                    skel_window = np.zeros((self.window_size, *trial_data['skeleton'].shape[1:]))
-                    skel_window[:len(trial_data['skeleton']) - skel_start] = trial_data['skeleton'][skel_start:]
-                
-                windows['skeleton'].append(skel_window)
+                    logger.debug(f"Skeleton window bounds issue in trial {trial_id}, window {i}")
+                    continue
         
+        # Convert lists to numpy arrays
         for key in windows:
             if windows[key]:
-                windows[key] = np.array(windows[key])
+                try:
+                    windows[key] = np.array(windows[key])
+                except Exception as e:
+                    logger.debug(f"Error converting {key} to array for trial {trial_id}: {e}")
+                    windows[key] = np.array([])
             else:
-                if key == 'accelerometer' or key == 'gyroscope':
-                    windows[key] = np.array([])
-                elif key == 'skeleton':
-                    windows[key] = np.array([])
-                elif key == 'labels':
-                    windows[key] = np.array([])
-                    
+                windows[key] = np.array([])
+        
+        # Final validation
+        if len(windows['accelerometer']) == 0 or len(windows['gyroscope']) == 0 or len(windows['labels']) == 0:
+            logger.debug(f"Empty windows for trial {trial_id}")
+            return None
+        
         return windows
-                
-    def process_trial(self, trial, label):
-        trial_data = self.load_trial_data(trial)
-        
-        if trial_data is None:
-            return None
-            
-        windowed_data = self.create_windowed_samples(trial_data, label)
-        
-        if windowed_data is None or ('accelerometer' not in windowed_data) or len(windowed_data['accelerometer']) == 0:
-            return None
-        
-        return windowed_data
 
 class DatasetBuilder:
     def __init__(self, dataset, mode='window', max_length=128, task='fd', fusion_options=None, **kwargs):
@@ -529,8 +459,9 @@ class DatasetBuilder:
         self.window_size = fusion_options.get('window_size', 128) if fusion_options else 128
         self.window_overlap = fusion_options.get('window_overlap', 0.5) if fusion_options else 0.5
         self.load_errors = []
+        self.filter_instances = {}
     
-    def make_dataset(self, subjects: List[int], fuse: bool = True):
+    def make_dataset(self, subjects, fuse=True):
         self.data = {
             'accelerometer': [],
             'gyroscope': [],
@@ -539,6 +470,7 @@ class DatasetBuilder:
         
         valid_trials = 0
         skipped_trials = 0
+        filter_type = self.fusion_options.get('filter_type', 'none') if self.fusion_options else 'none'
         
         for trial in self.dataset.matched_trials:
             if trial.subject_id not in subjects:
@@ -552,7 +484,13 @@ class DatasetBuilder:
                 label = trial.action_id - 1
                 
             try:
-                trial_data = self.dataset.process_trial(trial, label)
+                trial_id = f"S{trial.subject_id:02d}A{trial.action_id:02d}T{trial.sequence_number:02d}"
+                
+                # Get or create filter instance for this trial
+                filter_key = f"{trial.subject_id}_{trial.action_id}_{filter_type}"
+                filter_instance = self.filter_instances.get(filter_key)
+                
+                trial_data = self.dataset.process_trial(trial, label, filter_instance)
                 
                 if trial_data is None:
                     skipped_trials += 1
@@ -577,10 +515,7 @@ class DatasetBuilder:
                 valid_trials += 1
                 
             except Exception as e:
-                trial_id = f"S{trial.subject_id:02d}A{trial.action_id:02d}T{trial.sequence_number:02d}"
-                error_msg = f"Error processing trial {trial_id}: {str(e)}"
-                logger.error(error_msg)
-                self.load_errors.append(error_msg)
+                logger.debug(f"Error processing trial {trial.subject_id}_{trial.action_id}: {e}")
                 skipped_trials += 1
                 continue
                 
@@ -591,13 +526,13 @@ class DatasetBuilder:
                 try:
                     self.data[key] = np.concatenate(self.data[key], axis=0)
                 except Exception as e:
-                    logger.error(f"Error concatenating {key} data: {e}")
+                    logger.debug(f"Error concatenating {key} data: {e}")
                     if key in self.data:
                         del self.data[key]
                     
         return self.data
         
-    def normalization(self) -> Dict[str, np.ndarray]:
+    def normalization(self):
         from sklearn.preprocessing import StandardScaler
         
         for key, value in self.data.items():
@@ -614,11 +549,11 @@ class DatasetBuilder:
                     elif key == 'fusion_features' and len(value.shape) == 2:
                         self.data[key] = StandardScaler().fit_transform(value)
                 except Exception as e:
-                    logger.error(f"Error normalizing {key} data: {e}")
+                    logger.debug(f"Error normalizing {key} data: {e}")
         
         return self.data
 
-def prepare_smartfallmm(arg) -> DatasetBuilder:
+def prepare_smartfallmm(arg):
     fusion_options = arg.dataset_args.get('fusion_options', {})
     
     if 'target_sample_rate' not in fusion_options:
@@ -651,15 +586,13 @@ def prepare_smartfallmm(arg) -> DatasetBuilder:
     
     return builder
 
-def split_by_subjects(builder, subjects, fuse=True) -> Dict[str, np.ndarray]:
+def split_by_subjects(builder, subjects, fuse=True):
     data = builder.make_dataset(subjects, fuse)
-    
     norm_data = builder.normalization()
     
     for key in norm_data:
         if key != 'labels' and key in norm_data and len(norm_data[key]) > 0:
             if len(norm_data[key].shape) == 2:
-                logger.warning(f"Adding missing sequence dimension to {key} data")
                 samples, features = norm_data[key].shape
                 norm_data[key] = norm_data[key].reshape(samples, 1, features)
     

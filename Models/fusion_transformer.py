@@ -8,25 +8,21 @@ import traceback
 
 logger = logging.getLogger("model")
 
-class QuaternionOperation(nn.Module):
+class EnhancedQuaternionOperation(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
-        self.W_r = nn.Linear(embed_dim, embed_dim)
-        self.W_i = nn.Linear(embed_dim, embed_dim)
-        self.W_j = nn.Linear(embed_dim, embed_dim)
-        self.W_k = nn.Linear(embed_dim, embed_dim)
+        self.quat_projection = nn.Linear(4, embed_dim)
+        self.orientation_encoder = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.GELU()
+        )
         
     def forward(self, q):
-        # Split quaternion into components (w,x,y,z)
-        qw, qx, qy, qz = torch.split(q, q.size(-1)//4, dim=-1)
-        
-        # Apply quaternion-specific transformation
-        r = self.W_r(qw) - self.W_i(qx) - self.W_j(qy) - self.W_k(qz)
-        i = self.W_r(qx) + self.W_i(qw) + self.W_j(qz) - self.W_k(qy)
-        j = self.W_r(qy) - self.W_i(qz) + self.W_j(qw) + self.W_k(qx)
-        k = self.W_r(qz) + self.W_i(qy) - self.W_j(qx) + self.W_k(qw)
-        
-        return torch.cat([r, i, j, k], dim=-1)
+        q_reshaped = q.view(q.size(0), q.size(1), 4)
+        quat_embedded = self.quat_projection(q_reshaped)
+        orientation_features = self.orientation_encoder(quat_embedded)
+        return orientation_features
 
 class TemporalAttention(nn.Module):
     def __init__(self, embed_dim, num_heads=4):
@@ -41,19 +37,14 @@ class TemporalAttention(nn.Module):
 class HierarchicalFusion(nn.Module):
     def __init__(self, acc_dim, gyro_dim, quat_dim, out_dim):
         super().__init__()
-        # Local feature fusion (within modality)
         self.acc_local = nn.Linear(acc_dim, acc_dim)
         self.gyro_local = nn.Linear(gyro_dim, gyro_dim)
-        self.quat_local = QuaternionOperation(quat_dim)
-        
-        # Cross-modality attention
+        self.quat_local = EnhancedQuaternionOperation(quat_dim)
         self.cross_attention = nn.MultiheadAttention(
             (acc_dim + gyro_dim + quat_dim) // 3, 
             num_heads=4, 
             batch_first=True
         )
-        
-        # Final fusion
         self.fusion = nn.Sequential(
             nn.Linear(acc_dim + gyro_dim + quat_dim, out_dim),
             nn.LayerNorm(out_dim),
@@ -61,20 +52,13 @@ class HierarchicalFusion(nn.Module):
         )
         
     def forward(self, acc, gyro, quat):
-        # Local processing
         acc_local = self.acc_local(acc)
         gyro_local = self.gyro_local(gyro)
         quat_local = self.quat_local(quat)
-        
-        # Combine for cross-attention
         fused = torch.cat([acc_local, gyro_local, quat_local], dim=-1)
         fused_reshaped = rearrange(fused, 'b l c -> l b c')
-        
-        # Apply cross-attention
         attn_out, _ = self.cross_attention(fused_reshaped, fused_reshaped, fused_reshaped)
         attn_out = rearrange(attn_out, 'l b c -> b l c')
-        
-        # Final fusion
         return self.fusion(torch.cat([acc_local, gyro_local, quat_local], dim=-1))
 
 class FusionTransModel(nn.Module):
@@ -91,7 +75,7 @@ class FusionTransModel(nn.Module):
         self.num_classes = num_classes
         self.seq_len = self.acc_frames
         
-        # Encoder for accelerometer data
+        # Encoders
         self.acc_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -101,7 +85,6 @@ class FusionTransModel(nn.Module):
             nn.GELU()
         )
         
-        # Encoder for gyroscope data
         self.gyro_encoder = nn.Sequential(
             nn.Conv1d(acc_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -111,7 +94,6 @@ class FusionTransModel(nn.Module):
             nn.GELU()
         )
         
-        # Enhanced encoder for quaternion data with quaternion-specific operations
         self.quat_encoder = nn.Sequential(
             nn.Conv1d(quat_coords, embed_dim, kernel_size=3, padding='same'),
             nn.BatchNorm1d(embed_dim) if use_batch_norm else nn.Identity(),
@@ -121,7 +103,7 @@ class FusionTransModel(nn.Module):
             nn.GELU()
         )
         
-        # Determine feature dimensions based on fusion type
+        # Feature dimensions
         if feature_dim is None:
             if fusion_type == 'hierarchical': 
                 self.feature_dim = embed_dim
@@ -132,21 +114,18 @@ class FusionTransModel(nn.Module):
             elif fusion_type == 'acc_only': 
                 self.feature_dim = embed_dim
             else:
-                logger.warning(f"Unknown fusion type '{fusion_type}', defaulting to 'hierarchical'")
                 self.fusion_type = 'hierarchical'
                 self.feature_dim = embed_dim
         else: 
             self.feature_dim = feature_dim
             
-        # Initialize fusion modules based on fusion type
+        # Fusion modules
         if fusion_type == 'hierarchical':
             self.hierarchical_fusion = HierarchicalFusion(
                 embed_dim, embed_dim, embed_dim, self.feature_dim
             )
             
         self.feature_adapter = nn.Linear(self.feature_dim, self.feature_dim)
-        
-        # Temporal attention layer for better capturing event sequences
         self.temporal_attention = TemporalAttention(self.feature_dim, num_heads)
         
         # Attention mechanism for fusion
@@ -161,16 +140,13 @@ class FusionTransModel(nn.Module):
             self.gyro_weight = nn.Parameter(torch.ones(1))
             self.quat_weight = nn.Parameter(torch.ones(1))
         
-        # Adjust number of heads if needed
+        # Adjust heads
         if self.feature_dim % num_heads != 0:
-            adjusted_heads = max(1, self.feature_dim // (self.feature_dim // num_heads))
-            if adjusted_heads != num_heads:
-                logger.info(f"Adjusting heads from {num_heads} to {adjusted_heads} to match feature dimension")
-            num_heads = adjusted_heads
+            num_heads = max(1, self.feature_dim // (self.feature_dim // num_heads))
             
-        # Transformer encoder
+        # Transformer
         encoder_layers = nn.TransformerEncoderLayer(
-            d_model=self.feature_dim, nhead=num_heads, dim_feedforward=self.feature_dim * 4,
+            d_model=self.feature_dim, nhead=num_heads, dim_feedforward=self.feature_dim * 2,
             dropout=dropout, activation='gelu', batch_first=True, norm_first=True
         )
         
@@ -179,18 +155,14 @@ class FusionTransModel(nn.Module):
             norm=nn.LayerNorm(self.feature_dim)
         )
         
-        # Optional attention pooling
-        self.attn_pool = True  # Always use attention pooling for better sequence modeling
+        self.attn_pool = True
         self.attn_pool_layer = nn.Linear(self.feature_dim, 1)
         
         # Classification head
         self.classifier = nn.Sequential(
-            nn.Linear(self.feature_dim, 128),
-            nn.LayerNorm(128) if use_batch_norm else nn.Identity(),
-            nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(128, 64),
+            nn.Linear(self.feature_dim, 64),
             nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
-            nn.GELU(), nn.Dropout(dropout/2),
+            nn.GELU(), nn.Dropout(dropout),
             nn.Linear(64, num_classes)
         )
         
@@ -206,33 +178,28 @@ class FusionTransModel(nn.Module):
 
     def forward_all_modalities(self, acc_data, gyro_data, quat_data=None):
         try:
-            # Handle accelerometer data
-            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(acc_data.shape) == 2:
+                acc_data = acc_data.unsqueeze(1)
             
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
-            # Handle gyroscope data
-            if len(gyro_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                gyro_data = gyro_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(gyro_data.shape) == 2:
+                gyro_data = gyro_data.unsqueeze(1)
                 
             gyro_data = rearrange(gyro_data, 'b l c -> b c l')
             gyro_features = self.gyro_encoder(gyro_data)
             gyro_features = rearrange(gyro_features, 'b c l -> b l c')
             
-            # Handle quaternion data
             if quat_data is not None and not torch.all(quat_data == 0):
-                if len(quat_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                    quat_data = quat_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+                if len(quat_data.shape) == 2:
+                    quat_data = quat_data.unsqueeze(1)
                 
-                # Normalize quaternions
                 quat_norm = torch.norm(quat_data, dim=2, keepdim=True)
                 quat_norm = torch.where(quat_norm > 1e-8, quat_norm, torch.ones_like(quat_norm))
                 quat_data = quat_data / quat_norm
                 
-                # Ensure consistent quaternion sign
                 for b in range(quat_data.shape[0]):
                     for i in range(1, quat_data.shape[1]):
                         dot_product = torch.sum(quat_data[b, i-1] * quat_data[b, i])
@@ -246,7 +213,6 @@ class FusionTransModel(nn.Module):
                 seq_len = acc_features.shape[1] if len(acc_features.shape) > 1 else 1
                 quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
-            # Fusion based on strategy
             if self.fusion_type == 'hierarchical':
                 fused_features = self.hierarchical_fusion(acc_features, gyro_features, quat_features)
                 
@@ -276,13 +242,8 @@ class FusionTransModel(nn.Module):
                 fused_features = acc_weight * acc_features + gyro_weight * gyro_features + quat_weight * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
-            # Apply temporal attention for better sequence modeling
             fused_features = self.temporal_attention(fused_features)
-            
-            # Process through transformer
             transformer_output = self.transformer(fused_features)
-            
-            # Attention pooling for better representation
             attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
             pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
@@ -294,28 +255,24 @@ class FusionTransModel(nn.Module):
 
     def forward_acc_gyro_only(self, acc_data, gyro_data):
         try:
-            # Handle accelerometer data
-            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(acc_data.shape) == 2:
+                acc_data = acc_data.unsqueeze(1)
             
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
-            # Handle gyroscope data
-            if len(gyro_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                gyro_data = gyro_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(gyro_data.shape) == 2:
+                gyro_data = gyro_data.unsqueeze(1)
                 
             gyro_data = rearrange(gyro_data, 'b l c -> b c l')
             gyro_features = self.gyro_encoder(gyro_data)
             gyro_features = rearrange(gyro_features, 'b c l -> b l c')
             
-            # Create empty quaternion features
             batch_size = acc_features.shape[0]
             seq_len = acc_features.shape[1]
             quat_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
-            # Use the same fusion strategy as all_modalities but with zero quaternion
             if self.fusion_type == 'hierarchical':
                 fused_features = self.hierarchical_fusion(acc_features, gyro_features, quat_features)
             elif self.fusion_type == 'concat':
@@ -327,13 +284,8 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[1] * gyro_features
                 fused_features = self.feature_adapter(fused_features)
             
-            # Apply temporal attention
             fused_features = self.temporal_attention(fused_features)
-            
-            # Process through transformer
             transformer_output = self.transformer(fused_features)
-            
-            # Attention pooling
             attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
             pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
@@ -345,18 +297,15 @@ class FusionTransModel(nn.Module):
 
     def forward_accelerometer_only(self, acc_data):
         try:
-            # Handle accelerometer data
-            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(acc_data.shape) == 2:
+                acc_data = acc_data.unsqueeze(1)
             
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
-            # Apply temporal attention directly to accelerometer features
             acc_features = self.temporal_attention(acc_features)
             
-            # Create dummy features for other modalities if needed
             if self.fusion_type == 'concat':
                 batch_size = acc_features.shape[0]
                 seq_len = acc_features.shape[1]
@@ -365,10 +314,7 @@ class FusionTransModel(nn.Module):
             else: 
                 fused_features = self.feature_adapter(acc_features)
             
-            # Process through transformer
             transformer_output = self.transformer(fused_features)
-            
-            # Attention pooling
             attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
             pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
@@ -383,24 +329,20 @@ class FusionTransModel(nn.Module):
             if quat_data is None or torch.all(torch.abs(quat_data) < 1e-6):
                 return self.forward_accelerometer_only(acc_data)
             
-            # Handle accelerometer data
-            if len(acc_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                acc_data = acc_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(acc_data.shape) == 2:
+                acc_data = acc_data.unsqueeze(1)
                 
             acc_data = rearrange(acc_data, 'b l c -> b c l')
             acc_features = self.acc_encoder(acc_data)
             acc_features = rearrange(acc_features, 'b c l -> b l c')
             
-            # Handle quaternion data
-            if len(quat_data.shape) == 2:  # If missing sequence dimension [batch, channels]
-                quat_data = quat_data.unsqueeze(1)  # Add sequence dimension [batch, 1, channels]
+            if len(quat_data.shape) == 2:
+                quat_data = quat_data.unsqueeze(1)
             
-            # Normalize quaternions
             quat_norm = torch.norm(quat_data, dim=2, keepdim=True)
             quat_norm = torch.where(quat_norm > 1e-8, quat_norm, torch.ones_like(quat_norm))
             quat_data = quat_data / quat_norm
             
-            # Ensure consistent quaternion sign
             for b in range(quat_data.shape[0]):
                 for i in range(1, quat_data.shape[1]):
                     dot_product = torch.sum(quat_data[b, i-1] * quat_data[b, i])
@@ -410,12 +352,10 @@ class FusionTransModel(nn.Module):
             quat_features = self.quat_encoder(quat_data)
             quat_features = rearrange(quat_features, 'b c l -> b l c')
             
-            # Create empty gyroscope features
             batch_size = acc_features.shape[0]
             seq_len = acc_features.shape[1]
             gyro_features = torch.zeros(batch_size, seq_len, self.embed_dim, device=acc_data.device)
             
-            # Fusion based on strategy
             if self.fusion_type == 'hierarchical':
                 fused_features = self.hierarchical_fusion(acc_features, gyro_features, quat_features)
             elif self.fusion_type == 'concat':
@@ -427,13 +367,8 @@ class FusionTransModel(nn.Module):
                 fused_features = weights[0] * acc_features + weights[2] * quat_features
                 fused_features = self.feature_adapter(fused_features)
             
-            # Apply temporal attention
             fused_features = self.temporal_attention(fused_features)
-            
-            # Process through transformer
             transformer_output = self.transformer(fused_features)
-            
-            # Attention pooling
             attn_weights = F.softmax(self.attn_pool_layer(transformer_output), dim=1)
             pooled = torch.sum(transformer_output * attn_weights, dim=1)
             
