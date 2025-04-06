@@ -17,10 +17,8 @@ from scipy.signal import butter, filtfilt
 # Import orientation filters
 from utils.imu_fusion import (
     MadgwickFilter, 
-    ComplementaryFilter, 
     KalmanFilter, 
     ExtendedKalmanFilter, 
-    UnscentedKalmanFilter,
     process_imu_data
 )
 
@@ -46,8 +44,6 @@ def compare_filter_accuracy(acc_data, gyro_data, timestamps=None, filter_types=N
         # Create filter instance
         if filter_type == 'madgwick':
             orientation_filter = MadgwickFilter()
-        elif filter_type == 'comp':
-            orientation_filter = ComplementaryFilter()
         elif filter_type == 'kalman':
             orientation_filter = KalmanFilter()
         elif filter_type == 'ekf':
@@ -437,10 +433,6 @@ def generate_report(comparison_file: str, output_dir: str):
             f.write("- Uses gradient descent optimization\n")
             f.write("- Good for real-time applications\n\n")
             
-            f.write("### Complementary Filter\n")
-            f.write("- Simple and computationally efficient\n")
-            f.write("- Combines accelerometer and gyroscope data\n")
-            f.write("- Lowest computational requirements\n\n")
             
             f.write("### Kalman Filter\n")
             f.write("- Optimal for linear systems with Gaussian noise\n")
@@ -452,10 +444,6 @@ def generate_report(comparison_file: str, output_dir: str):
             f.write("- More accurate than basic Kalman for complex motions\n")
             f.write("- Higher computational cost than basic Kalman\n\n")
             
-            f.write("### Unscented Kalman Filter (UKF)\n")
-            f.write("- Best handling of non-linearities without derivatives\n")
-            f.write("- Most accurate for highly dynamic motions\n")
-            f.write("- Highest computational cost\n\n")
             
             f.write("## Recommendations\n\n")
             f.write(f"Based on the performance analysis, we recommend using the **{best_filter.upper()}** filter for fall detection applications on wearable devices.\n\n")

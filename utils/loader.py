@@ -2,15 +2,15 @@
 Dataset Builder for SmartFallMM
 
 This module handles loading, preprocessing, and alignment of multi-modal sensor data
-for human activity recognition and fall detection. It implements various techniques
-for handling variably-sampled sensor data, including hybrid interpolation that
-intelligently switches between cubic spline and linear methods.
+for human activity recognition and fall detection. It implements specialized techniques
+for handling variably-sampled sensor data and fusion of accelerometer and gyroscope data
+using different orientation filters.
 
 Key features:
-- High-performance parallel processing of multiple files
+- High-performance parallel processing with thread pooling
 - Efficient alignment of variable-rate sensor data
-- Advanced hybrid interpolation of accelerometer and gyroscope data
-- Robust error handling and recovery
+- Support for Madgwick, Kalman, and Extended Kalman filters
+- Feature extraction optimized for fall detection
 '''
 import os
 from typing import List, Dict, Tuple, Union, Optional, Any
@@ -21,7 +21,6 @@ from scipy.io import loadmat
 from numpy.linalg import norm
 from dtaidistance import dtw
 import matplotlib.pyplot as plt
-from scipy.interpolate import CubicSpline, interp1d
 from scipy.signal import find_peaks, savgol_filter, butter, filtfilt
 from scipy.spatial.transform import Rotation
 from sklearn.preprocessing import StandardScaler
@@ -29,16 +28,18 @@ import torch
 import torch.nn.functional as F
 import time
 import logging
-from utils.processor.base import Processor
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import threading
 
-# Import IMU fusion module for thread pool management
+# Import IMU fusion module
 from utils.imu_fusion import (
     process_imu_data, 
     save_aligned_sensor_data,
-    ThreadPoolExecutor as IMUThreadPoolExecutor
+    hybrid_interpolate,
+    extract_features_from_window,
+    cleanup_resources,
+    update_thread_configuration
 )
 
 # Configure logging
@@ -46,13 +47,13 @@ log_dir = "debug_logs"
 os.makedirs(log_dir, exist_ok=True)
 logging.basicConfig(
     filename=os.path.join(log_dir, "loader.log"),
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("loader")
 
-# Also print to console
+# Add console handler
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -229,396 +230,6 @@ def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int,
     return new_sequence
 
 
-def sliding_window(data: np.ndarray, clearing_time_index: int, max_time: int,
-                  sub_window_size: int, stride_size: int) -> np.ndarray:
-    '''
-    Extracts sliding windows from a time series.
-
-    Args:
-        data: Input data array
-        clearing_time_index: Minimum index to start windows from
-        max_time: Maximum time index to consider
-        sub_window_size: Size of each window
-        stride_size: Stride between consecutive windows
-
-    Returns:
-        Array of sliding windows
-    '''
-    logger.debug(f"Creating sliding windows with window_size={sub_window_size}, stride={stride_size}")
-
-    # Validate parameters
-    if clearing_time_index < sub_window_size - 1:
-        logger.error(f"Invalid clearing_time_index: {clearing_time_index} < {sub_window_size - 1}")
-        raise AssertionError("Clearing value needs to be greater or equal to (window size - 1)")
-
-    # Calculate starting index
-    start = clearing_time_index - sub_window_size + 1
-
-    # Adjust max_time if needed to prevent out-of-bounds access
-    if max_time >= data.shape[0] - sub_window_size:
-        max_time = max_time - sub_window_size + 1
-        logger.debug(f"Adjusted max_time to {max_time}")
-
-    # Generate indices for all windows
-    sub_windows = (
-        start +
-        np.expand_dims(np.arange(sub_window_size), 0) +
-        np.expand_dims(np.arange(max_time, step=stride_size), 0).T
-    )
-
-    # Extract windows using the indices
-    result = data[sub_windows]
-    logger.debug(f"Created {result.shape[0]} windows from data with shape {data.shape}")
-
-    return result
-
-
-def hybrid_interpolate(x: np.ndarray, y: np.ndarray, x_new: np.ndarray,
-                      threshold: float = 2.0, window_size: int = 5) -> np.ndarray:
-    """
-    Hybrid interpolation that intelligently switches between cubic spline and linear
-    interpolation based on the rate of change in the data.
-
-    Args:
-        x: Original x coordinates (timestamps)
-        y: Original y coordinates (sensor values)
-        x_new: New x coordinates for interpolation
-        threshold: Rate of change threshold to switch methods (g/s for accelerometer)
-        window_size: Window size for smoothing rate calculation
-
-    Returns:
-        Interpolated y values at x_new points
-    """
-    # Ensure we have enough data points for interpolation
-    if len(x) < 2 or len(y) < 2:
-        logger.warning("Not enough points for interpolation")
-        return np.full_like(x_new, y[0] if len(y) > 0 else 0.0)
-
-    try:
-        # Calculate first differences to estimate rate of change
-        dy = np.diff(y)
-        dx = np.diff(x)
-
-        # Avoid division by zero
-        rates = np.abs(dy / np.maximum(dx, 1e-10))
-
-        # Smooth the rates to avoid switching too frequently
-        if len(rates) >= window_size:
-            rates = savgol_filter(rates, window_size, 2)
-
-        # Create mask for rapid changes
-        rapid_changes = rates > threshold
-
-        # If no rapid changes detected, use cubic spline for everything
-        if not np.any(rapid_changes):
-            logger.debug("Using cubic spline interpolation for entire signal")
-            try:
-                cs = CubicSpline(x, y)
-                return cs(x_new)
-            except Exception as e:
-                logger.warning(f"Cubic spline failed: {e}, falling back to linear")
-                linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-                return linear_interp(x_new)
-
-        # If all changes are rapid, use linear for everything
-        if np.all(rapid_changes):
-            logger.debug("Using linear interpolation for entire signal")
-            linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-            return linear_interp(x_new)
-
-        # Otherwise, we need a hybrid approach
-        logger.debug(f"Using hybrid interpolation: {np.sum(rapid_changes)}/{len(rapid_changes)} points have rapid changes")
-
-        # Create interpolators for both methods
-        linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-        try:
-            spline_interp = CubicSpline(x, y)
-        except Exception as e:
-            logger.warning(f"Cubic spline failed: {e}, using linear for all points")
-            return linear_interp(x_new)
-
-        # Find segments with rapid changes
-        y_interp = np.zeros_like(x_new, dtype=float)
-        segments = []
-
-        # Group consecutive points with rapid changes into segments
-        segment_start = None
-        for i in range(len(rapid_changes)):
-            if rapid_changes[i] and segment_start is None:
-                segment_start = i
-            elif not rapid_changes[i] and segment_start is not None:
-                segments.append((segment_start, i))
-                segment_start = None
-
-        # Add the last segment if it exists
-        if segment_start is not None:
-            segments.append((segment_start, len(rapid_changes)))
-
-        # Create mask for points that need linear interpolation
-        linear_mask = np.zeros_like(x_new, dtype=bool)
-
-        # Mark regions around rapid changes (with buffer)
-        buffer = 0.05  # 50ms buffer
-        for start_idx, end_idx in segments:
-            # Convert indices to timestamps with buffer
-            t_start = max(x[start_idx] - buffer, x[0])
-            t_end = min(x[min(end_idx, len(x)-1)] + buffer, x[-1])
-
-            # Mark points in the region
-            linear_mask |= (x_new >= t_start) & (x_new <= t_end)
-
-        # Apply appropriate interpolation to each region
-        if np.any(linear_mask):
-            y_interp[linear_mask] = linear_interp(x_new[linear_mask])
-
-        if np.any(~linear_mask):
-            y_interp[~linear_mask] = spline_interp(x_new[~linear_mask])
-
-        return y_interp
-
-    except Exception as e:
-        logger.error(f"Hybrid interpolation failed: {e}")
-        # Fallback to simple linear interpolation
-        linear_interp = interp1d(x, y, bounds_error=False, fill_value='extrapolate')
-        return linear_interp(x_new)
-
-
-def align_sensors_with_hybrid_interpolation(acc_data: pd.DataFrame, gyro_data: pd.DataFrame,
-                                          target_freq: int = 30, acc_threshold: float = 3.0,
-                                          gyro_threshold: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Aligns accelerometer and gyroscope data using hybrid interpolation that adapts to signal characteristics.
-
-    Args:
-        acc_data: DataFrame with columns [timestamp, x, y, z]
-        gyro_data: DataFrame with columns [timestamp, x, y, z]
-        target_freq: Target frequency in Hz for the aligned data
-        acc_threshold: Rate of change threshold for accelerometer (g/s)
-        gyro_threshold: Rate of change threshold for gyroscope (rad/s²)
-
-    Returns:
-        Tuple of (aligned_acc, aligned_gyro, aligned_timestamps)
-    """
-    start_time = time.time()
-    logger.info(f"Aligning sensors using hybrid interpolation at {target_freq}Hz")
-
-    try:
-        # Extract timestamps and convert to seconds if they're datetime objects
-        if isinstance(acc_data.iloc[0, 0], (str, pd.Timestamp)):
-            logger.debug("Converting accelerometer timestamps from string to datetime")
-            acc_times = pd.to_datetime(acc_data.iloc[:, 0]).astype(np.int64) / 1e9
-        else:
-            acc_times = acc_data.iloc[:, 0].values
-
-        if isinstance(gyro_data.iloc[0, 0], (str, pd.Timestamp)):
-            logger.debug("Converting gyroscope timestamps from string to datetime")
-            gyro_times = pd.to_datetime(gyro_data.iloc[:, 0]).astype(np.int64) / 1e9
-        else:
-            gyro_times = gyro_data.iloc[:, 0].values
-
-        # Find common time range
-        start_time_point = max(acc_times.min(), gyro_times.min())
-        end_time_point = min(acc_times.max(), gyro_times.max())
-
-        logger.debug(f"Common time range: {start_time_point:.3f}s to {end_time_point:.3f}s")
-
-        # Check if there's a valid overlap
-        if start_time_point >= end_time_point:
-            logger.warning("No temporal overlap between sensors")
-            return np.array([]), np.array([]), np.array([])
-
-        # Create common time grid
-        duration = end_time_point - start_time_point
-        num_samples = int(duration * target_freq)
-
-        if num_samples < 10:  # Minimum viable data
-            logger.warning(f"Overlap too short: {duration:.2f}s")
-            return np.array([]), np.array([]), np.array([])
-
-        common_times = np.linspace(start_time_point, end_time_point, num_samples)
-
-        # Extract sensor data
-        acc_values = acc_data.iloc[:, 1:4].values
-        gyro_values = gyro_data.iloc[:, 1:4].values
-
-        # Initialize arrays for interpolated data
-        aligned_acc = np.zeros((num_samples, 3))
-        aligned_gyro = np.zeros((num_samples, 3))
-
-        # Calculate signal magnitudes for diagnostics
-        acc_mag = np.linalg.norm(acc_values, axis=1)
-        gyro_mag = np.linalg.norm(gyro_values, axis=1)
-
-        logger.debug(f"Acc magnitude range: {acc_mag.min():.2f}-{acc_mag.max():.2f}g")
-        logger.debug(f"Gyro magnitude range: {gyro_mag.min():.2f}-{gyro_mag.max():.2f}rad/s")
-
-        # Process in parallel using thread pool
-        thread_pool = ThreadPoolExecutor(max_workers=6)
-        futures = []
-
-        # Submit interpolation tasks
-        for axis in range(3):
-            # Use different thresholds for accelerometer and gyroscope
-            futures.append(
-                thread_pool.submit(
-                    hybrid_interpolate,
-                    acc_times,
-                    acc_values[:, axis],
-                    common_times,
-                    threshold=acc_threshold
-                )
-            )
-            
-            futures.append(
-                thread_pool.submit(
-                    hybrid_interpolate,
-                    gyro_times,
-                    gyro_values[:, axis],
-                    common_times,
-                    threshold=gyro_threshold
-                )
-            )
-
-        # Collect results
-        for i, future in enumerate(futures):
-            result = future.result()
-            if i < 3:  # First 3 are accelerometer
-                aligned_acc[:, i] = result
-            else:  # Last 3 are gyroscope
-                aligned_gyro[:, i - 3] = result
-
-        # Clean up thread pool
-        thread_pool.shutdown()
-
-        elapsed_time = time.time() - start_time
-        logger.info(f"Hybrid interpolation complete: {num_samples} aligned samples in {elapsed_time:.2f}s")
-
-        return aligned_acc, aligned_gyro, common_times
-
-    except Exception as e:
-        logger.error(f"Sensor alignment failed: {str(e)}")
-        return np.array([]), np.array([]), np.array([])
-
-
-def visualize_alignment(acc_times, acc_values, gyro_times, gyro_values,
-                       common_times, aligned_acc, aligned_gyro):
-    """
-    Creates visualization of sensor alignment before and after interpolation.
-
-    Args:
-        acc_times: Original accelerometer timestamps
-        acc_values: Original accelerometer values
-        gyro_times: Original gyroscope timestamps
-        gyro_values: Original gyroscope values
-        common_times: Common timestamps after alignment
-        aligned_acc: Aligned accelerometer values
-        aligned_gyro: Aligned gyroscope values
-    """
-    try:
-        # Create directory for visualizations
-        viz_dir = os.path.join(log_dir, "alignment_viz")
-        os.makedirs(viz_dir, exist_ok=True)
-
-        # Create filename with timestamp
-        filename = f"alignment_{int(time.time())}.png"
-
-        # Create a new figure to avoid renderer issues
-        plt.close('all')
-        fig, axes = plt.subplots(3, 2, figsize=(15, 10))
-
-        # Plot accelerometer X axis
-        axes[0, 0].plot(acc_times, acc_values[:, 0], 'b.', alpha=0.5, label='Original')
-        axes[0, 0].plot(common_times, aligned_acc[:, 0], 'r-', label='Interpolated')
-        axes[0, 0].set_title('Accelerometer X-axis')
-        axes[0, 0].legend()
-
-        # Plot gyroscope X axis
-        axes[0, 1].plot(gyro_times, gyro_values[:, 0], 'b.', alpha=0.5, label='Original')
-        axes[0, 1].plot(common_times, aligned_gyro[:, 0], 'r-', label='Interpolated')
-        axes[0, 1].set_title('Gyroscope X-axis')
-        axes[0, 1].legend()
-
-        # Plot accelerometer Y axis
-        axes[1, 0].plot(acc_times, acc_values[:, 1], 'b.', alpha=0.5, label='Original')
-        axes[1, 0].plot(common_times, aligned_acc[:, 1], 'r-', label='Interpolated')
-        axes[1, 0].set_title('Accelerometer Y-axis')
-
-        # Plot gyroscope Y axis
-        axes[1, 1].plot(gyro_times, gyro_values[:, 1], 'b.', alpha=0.5, label='Original')
-        axes[1, 1].plot(common_times, aligned_gyro[:, 1], 'r-', label='Interpolated')
-        axes[1, 1].set_title('Gyroscope Y-axis')
-
-        # Plot accelerometer Z axis
-        axes[2, 0].plot(acc_times, acc_values[:, 2], 'b.', alpha=0.5, label='Original')
-        axes[2, 0].plot(common_times, aligned_acc[:, 2], 'r-', label='Interpolated')
-        axes[2, 0].set_title('Accelerometer Z-axis')
-
-        # Plot gyroscope Z axis
-        axes[2, 1].plot(gyro_times, gyro_values[:, 2], 'b.', alpha=0.5, label='Original')
-        axes[2, 1].plot(common_times, aligned_gyro[:, 2], 'r-', label='Interpolated')
-        axes[2, 1].set_title('Gyroscope Z-axis')
-
-        plt.tight_layout()
-        
-        # Ensure the figure is drawn before saving
-        fig.canvas.draw()
-        plt.savefig(os.path.join(viz_dir, filename))
-        plt.close(fig)
-
-        logger.debug(f"Alignment visualization saved to {os.path.join(viz_dir, filename)}")
-    except Exception as e:
-        logger.warning(f"Failed to create alignment visualization: {e}")
-        plt.close('all')  # Clean up any open figures
-
-
-def visualize_skl_acc_alignment(skeleton_mag, acc_mag, skeleton_indices, inertial_indices):
-    """
-    Visualizes alignment between skeleton and accelerometer data.
-
-    Args:
-        skeleton_mag: Magnitude values from skeleton data
-        acc_mag: Magnitude values from accelerometer data
-        skeleton_indices: Indices selected from skeleton data after alignment
-        inertial_indices: Indices selected from accelerometer data after alignment
-    """
-    try:
-        # Create directory for visualizations
-        viz_dir = os.path.join(log_dir, "alignment_viz")
-        os.makedirs(viz_dir, exist_ok=True)
-
-        # Create filename with timestamp
-        filename = f"skl_acc_alignment_{int(time.time())}.png"
-
-        # Clean up previous plots
-        plt.close('all')
-        
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-
-        # Plot magnitude signals before alignment
-        ax1.plot(skeleton_mag, 'b-', label='Skeleton')
-        ax1.plot(acc_mag, 'r-', label='Accelerometer')
-        ax1.set_title('Signals before alignment')
-        ax1.legend()
-
-        # Plot aligned signals
-        ax2.plot(skeleton_mag[list(skeleton_indices)], 'b-', label='Aligned Skeleton')
-        ax2.plot(acc_mag[list(inertial_indices)], 'r-', label='Aligned Accelerometer')
-        ax2.set_title('Signals after alignment')
-        ax2.legend()
-
-        # Draw the figure to avoid empty plot issues
-        fig.canvas.draw()
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(viz_dir, filename))
-        plt.close(fig)
-
-        logger.debug(f"Skeleton-Accelerometer alignment visualization saved to {os.path.join(viz_dir, filename)}")
-    except Exception as e:
-        logger.warning(f"Failed to create skeleton-accelerometer alignment visualization: {e}")
-        plt.close('all')
-
-
 def create_dataframe_with_timestamps(data, start_time=0, sample_rate=None):
     """
     Creates a DataFrame with synthetic timestamps when actual timestamps are not available.
@@ -699,127 +310,98 @@ def filter_repeated_ids(path: List[Tuple[int, int]]) -> Tuple[set, set]:
     return seen_first, seen_second
 
 
-def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+def align_sequence(data: Dict[str, np.ndarray], **kwargs) -> Dict[str, np.ndarray]:
     '''
     Aligns data from multiple sensor modalities using hybrid interpolation and DTW.
 
-    This function first aligns accelerometer and gyroscope data using hybrid interpolation,
-    then aligns skeleton data with the synchronized inertial data using DTW.
-
     Args:
         data: Dictionary containing sensor data for different modalities
+        **kwargs: Additional arguments including filter_type and is_linear_acc
 
     Returns:
         Dictionary with aligned sensor data
     '''
-    logger.info("Aligning skeleton and inertial data")
+    logger.info("Aligning sensor data")
 
     start_time = time.time()
+    filter_type = kwargs.get('filter_type', 'ekf')
+    is_linear_acc = kwargs.get('is_linear_acc', True)  # Default: data is linear acceleration
 
-    # Verify required data exists
-    if 'skeleton' not in data:
-        logger.warning("Missing skeleton data for alignment")
-
-        # If we still have both accelerometer and gyroscope, align them
-        if 'accelerometer' in data and 'gyroscope' in data:
-            try:
-                # Create DataFrames with timestamps
-                acc_df = create_dataframe_with_timestamps(data['accelerometer'])
-                gyro_df = create_dataframe_with_timestamps(data['gyroscope'])
-
-                # Align using hybrid interpolation
-                aligned_acc, aligned_gyro, aligned_times = align_sensors_with_hybrid_interpolation(
-                    acc_df, gyro_df, target_freq=30,
-                    acc_threshold=3.0,  # Adjust based on your data characteristics
-                    gyro_threshold=1.0
-                )
-
-                if len(aligned_acc) > 0:
-                    # Update data with interpolated values
-                    data['accelerometer'] = aligned_acc
-                    data['gyroscope'] = aligned_gyro
-                    data['aligned_timestamps'] = aligned_times
-                    logger.info(f"Inertial sensors aligned with {len(aligned_acc)} samples")
-                else:
-                    logger.warning("Sensor alignment failed - insufficient overlap")
-            except Exception as e:
-                logger.error(f"Sensor alignment error: {str(e)}")
-
-        return data
-
-    # Step 1: Find dynamic modalities (non-skeleton)
-    dynamic_keys = sorted([key for key in data.keys() if key != "skeleton"])
-
-    if not dynamic_keys:
-        logger.warning("No inertial data found for alignment")
-        return data
-
-    # Step 2: Align accelerometer and gyroscope if both exist
-    if len(dynamic_keys) > 1:
-        logger.debug(f"Found multiple inertial modalities: {dynamic_keys}")
-        acc_data = data[dynamic_keys[0]]
-        gyro_data = data[dynamic_keys[1]]
-
+    # If we have both accelerometer and gyroscope, align them
+    if 'accelerometer' in data and 'gyroscope' in data:
         try:
             # Create DataFrames with timestamps
-            acc_df = create_dataframe_with_timestamps(acc_data)
-            gyro_df = create_dataframe_with_timestamps(gyro_data)
+            acc_df = create_dataframe_with_timestamps(data['accelerometer'])
+            gyro_df = create_dataframe_with_timestamps(data['gyroscope'])
 
-            # Align using hybrid interpolation
-            aligned_acc, aligned_gyro, aligned_times = align_sensors_with_hybrid_interpolation(
-                acc_df, gyro_df, target_freq=30
+            # Align using sensor alignment function
+            aligned_acc, aligned_gyro, aligned_times = align_sensor_data(
+                acc_df, gyro_df, target_freq=30.0
             )
 
             if len(aligned_acc) > 0:
                 # Update data with interpolated values
-                data[dynamic_keys[0]] = aligned_acc
-                data[dynamic_keys[1]] = aligned_gyro
+                data['accelerometer'] = aligned_acc
+                data['gyroscope'] = aligned_gyro
                 data['aligned_timestamps'] = aligned_times
-                logger.info(f"Inertial sensors aligned: {len(aligned_acc)} samples")
+                logger.info(f"Aligned inertial sensors: {len(aligned_acc)} samples")
+                
+                # Apply orientation filtering
+                if filter_type:
+                    logger.info(f"Applying {filter_type} filter to aligned data")
+                    fusion_results = process_imu_data(
+                        acc_data=aligned_acc,
+                        gyro_data=aligned_gyro,
+                        timestamps=aligned_times,
+                        filter_type=filter_type,
+                        return_features=True,
+                        is_linear_acc=is_linear_acc
+                    )
+                    
+                    # Add fusion results to data
+                    data.update(fusion_results)
+                    logger.info(f"IMU fusion completed with {filter_type} filter")
             else:
-                logger.warning("Inertial sensor alignment failed - insufficient overlap")
+                logger.warning("Sensor alignment failed - insufficient overlap")
         except Exception as e:
-            logger.error(f"Inertial sensor alignment error: {str(e)}")
+            logger.error(f"Sensor alignment error: {str(e)}")
 
-    # Step 3: Align skeleton with inertial data
-    try:
-        # Get reference skeleton joint data (typically left wrist)
-        joint_id = 9
-        skeleton_joint_data = data['skeleton'][:, (joint_id - 1) * 3 : joint_id * 3]
-        logger.debug(f"Using joint ID {joint_id} (left wrist) with shape {skeleton_joint_data.shape}")
+    # If we also have skeleton data, align it with inertial data using DTW
+    if 'skeleton' in data and 'accelerometer' in data:
+        try:
+            # Get reference skeleton joint data (typically left wrist)
+            joint_id = 9  # Left wrist joint
+            skeleton_joint_data = data['skeleton'][:, (joint_id - 1) * 3 : joint_id * 3]
+            logger.debug(f"Using joint ID {joint_id} (left wrist) with shape {skeleton_joint_data.shape}")
 
-        # Get primary inertial data (usually accelerometer)
-        inertial_data = data[dynamic_keys[0]]
-        logger.debug(f"Using {dynamic_keys[0]} with shape {inertial_data.shape} for skeleton alignment")
+            # Get accelerometer data
+            inertial_data = data['accelerometer']
+            
+            # Calculate Frobenius norm for both data types
+            skeleton_frob_norm = np.linalg.norm(skeleton_joint_data, axis=1)
+            inertial_frob_norm = np.linalg.norm(inertial_data, axis=1)
 
-        # Calculate Frobenius norm for both data types
-        skeleton_frob_norm = np.linalg.norm(skeleton_joint_data, axis=1)
-        inertial_frob_norm = np.linalg.norm(inertial_data, axis=1)
+            # Perform DTW alignment
+            path = dtw.warping_path(skeleton_frob_norm, inertial_frob_norm)
+            logger.debug(f"DTW path found with {len(path)} points")
 
-        # Perform DTW alignment
-        path = dtw.warping_path(skeleton_frob_norm, inertial_frob_norm)
-        logger.debug(f"DTW path found with {len(path)} points")
+            # Filter to unique indices
+            skeleton_idx, inertial_ids = filter_repeated_ids(path)
 
-        # Filter to unique indices
-        skeleton_idx, inertial_ids = filter_repeated_ids(path)
+            # Apply filtering
+            data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
+            for key in ['accelerometer', 'gyroscope', 'quaternion', 'linear_acceleration']:
+                if key in data and data[key] is not None and len(data[key]) > 0:
+                    data[key] = filter_data_by_ids(data[key], list(inertial_ids))
+            
+            if 'aligned_timestamps' in data:
+                data['aligned_timestamps'] = filter_data_by_ids(
+                    data['aligned_timestamps'].reshape(-1, 1), list(inertial_ids)
+                ).flatten()
 
-        # Apply filtering
-        data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
-        for key in dynamic_keys:
-            data[key] = filter_data_by_ids(data[key], list(inertial_ids))
-        
-        if 'aligned_timestamps' in data:
-            data['aligned_timestamps'] = filter_data_by_ids(data['aligned_timestamps'].reshape(-1, 1), list(inertial_ids)).flatten()
-
-        logger.info(f"DTW alignment complete: {len(skeleton_idx)} skeleton frames, {len(inertial_ids)} inertial frames")
-
-        # Visualize alignment if at debug level
-        if logger.level <= logging.DEBUG:
-            visualize_skl_acc_alignment(skeleton_frob_norm, inertial_frob_norm,
-                                      skeleton_idx, inertial_ids)
-
-    except Exception as e:
-        logger.error(f"DTW alignment error: {str(e)}")
+            logger.info(f"DTW alignment complete: {len(skeleton_idx)} skeleton frames, {len(inertial_ids)} inertial frames")
+        except Exception as e:
+            logger.error(f"DTW alignment error: {str(e)}")
 
     elapsed_time = time.time() - start_time
     logger.debug(f"Alignment completed in {elapsed_time:.2f}s")
@@ -827,25 +409,81 @@ def align_sequence(data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     return data
 
 
-def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
-                            peaks: Union[List[int], np.ndarray], label: int,
-                            fuse: bool, filter_type: str = 'madgwick') -> Dict[str, np.ndarray]:
+def sliding_window(data: np.ndarray, is_fall: bool = False, window_size: int = 64, stride: int = 32) -> List[np.ndarray]:
     """
-    Creates windows centered around detected peaks with optional fusion processing.
+    Extract sliding windows from time series data.
+    
+    Args:
+        data: Input data array
+        is_fall: Whether this is fall data (for peak detection)
+        window_size: Size of each window
+        stride: Stride between consecutive windows
+    
+    Returns:
+        List of extracted windows
+    """
+    if len(data) < window_size:
+        logger.warning(f"Data length ({len(data)}) smaller than window size ({window_size})")
+        return []
 
+    windows = []
+    
+    if is_fall:
+        # For fall data, detect peaks in the acceleration magnitude
+        acc_magnitude = np.sqrt(np.sum(data**2, axis=1))
+        mean_mag, std_mag = np.mean(acc_magnitude), np.std(acc_magnitude)
+        
+        # Adaptive threshold based on the data statistics
+        threshold = max(1.4, mean_mag + 1.5 * std_mag)
+        
+        # Find peaks with prominence
+        peaks, _ = find_peaks(acc_magnitude, height=threshold, distance=window_size//4, prominence=0.5)
+        
+        if len(peaks) == 0:
+            # If no peaks found, use the maximum point
+            peaks = [np.argmax(acc_magnitude)]
+        
+        # Create windows centered around each peak
+        for peak in peaks:
+            start = max(0, peak - window_size // 2)
+            end = min(len(data), start + window_size)
+            
+            # Handle edge cases
+            if end - start < window_size:
+                if start == 0:
+                    end = min(len(data), window_size)
+                else:
+                    start = max(0, end - window_size)
+            
+            if end - start == window_size:
+                windows.append(data[start:end])
+    else:
+        # For non-fall data, use regular sliding windows
+        for start in range(0, len(data) - window_size + 1, stride):
+            windows.append(data[start:start + window_size])
+    
+    return windows
+
+
+def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
+                            label: int, fuse: bool, filter_type: str = 'ekf',
+                            is_linear_acc: bool = True) -> Dict[str, np.ndarray]:
+    """
+    Creates windows with optional fusion processing.
+    
     Args:
         data: Dictionary of sensor data arrays
         window_size: Size of each window
-        peaks: List of peak indices to center windows on
         label: Label for this activity
         fuse: Whether to apply sensor fusion
         filter_type: Type of fusion filter to use
-
+        is_linear_acc: Whether accelerometer data is linear acceleration
+        
     Returns:
         Dictionary of windowed data arrays
     """
     start_time = time.time()
-    logger.info(f"Creating selective windows: peaks={len(peaks)}, fusion={fuse}, filter_type={filter_type}")
+    logger.info(f"Creating windows with fusion={fuse}, filter_type={filter_type}")
 
     windowed_data = defaultdict(list)
 
@@ -855,168 +493,143 @@ def selective_sliding_window(data: Dict[str, np.ndarray], window_size: int,
         logger.warning("Fusion requested but gyroscope data not available")
         fuse = False
 
-    # Create local thread pool for windows
-    max_workers = min(8, len(peaks)) if len(peaks) > 0 else 1
-    with ThreadPoolExecutor(max_workers=max_workers) as thread_pool:
-        # Create windows around peaks with parallel processing
-        futures = []
+    # Determine if this is fall data for adaptive windowing
+    is_fall = label == 1
     
-        # Submit window extraction tasks
-        for peak_idx, peak in enumerate(peaks):
-            # Calculate window boundaries
-            start = max(0, peak - window_size // 2)
-            end = min(len(data['accelerometer']), start + window_size)
+    # Create windows for acceleration data
+    acc_windows = sliding_window(
+        data['accelerometer'], 
+        is_fall=is_fall, 
+        window_size=window_size,
+        stride=10 if is_fall else 32
+    )
     
-            # Skip if window is too small
-            if end - start < window_size:
-                logger.debug(f"Skipping window at peak {peak}: too small ({end-start} < {window_size})")
-                continue
+    # Early exit if no windows could be created
+    if not acc_windows:
+        logger.warning("No windows could be created")
+        return windowed_data
     
-            # Submit task
-            futures.append((
-                peak_idx,
-                peak,
-                thread_pool.submit(
-                    _extract_window,
-                    data,
-                    start,
-                    end,
-                    window_size,
-                    fuse,
-                    filter_type
-                )
-            ))
-    
-        # Collect results with progress bar if there are many windows
-        windows_created = 0
-        collection_iterator = tqdm(futures, desc="Processing windows") if len(futures) > 5 else futures
-        
-        for peak_idx, peak, future in collection_iterator:
-            try:
-                window_data = future.result()
-                
-                # Add this window's data to the result dictionary
-                for modality, modality_window in window_data.items():
-                    if modality_window is not None:
-                        windowed_data[modality].append(modality_window)
-                
-                windows_created += 1
-            except Exception as e:
-                logger.error(f"Error processing window at peak {peak}: {str(e)}")
-
-    # Convert lists of arrays to arrays
-    for modality in windowed_data:
-        if modality != 'labels' and len(windowed_data[modality]) > 0:
-            try:
-                windowed_data[modality] = np.array(windowed_data[modality])
-                logger.debug(f"Converted {modality} windows to array with shape {windowed_data[modality].shape}")
-            except Exception as e:
-                logger.error(f"Error converting {modality} windows to array: {str(e)}")
-
-    # Add labels
-    windowed_data['labels'] = np.repeat(label, windows_created)
-
-    elapsed_time = time.time() - start_time
-    logger.info(f"Created {windows_created} windows in {elapsed_time:.2f}s")
-
-    return windowed_data
-
-
-def _extract_window(data, start, end, window_size, fuse, filter_type):
-    """
-    Helper function to extract a window from data.
-    Designed to be run in a separate thread.
-    
-    Args:
-        data: Dictionary of sensor data arrays
-        start: Start index for window
-        end: End index for window
-        window_size: Target window size
-        fuse: Whether to apply fusion
-        filter_type: Type of filter to use
-        
-    Returns:
-        Dictionary of windowed data
-    """
-    window_data = {}
-    
-    # Extract window for each modality
+    # Create windows for all other modalities
     for modality, modality_data in data.items():
         if modality != 'labels' and modality_data is not None and len(modality_data) > 0:
-            try:
-                # Special handling for one-dimensional arrays like aligned_timestamps
-                if modality == 'aligned_timestamps':
-                    # Handle 1D array - no second dimension indexing
-                    if len(modality_data.shape) == 1:
-                        window_data_array = modality_data[start:min(end, len(modality_data))]
-
-                        # Pad if needed
-                        if len(window_data_array) < window_size:
-                            logger.debug(f"Padding {modality} window from {len(window_data_array)} to {window_size}")
-                            padded = np.zeros(window_size, dtype=window_data_array.dtype)
-                            padded[:len(window_data_array)] = window_data_array
-                            window_data_array = padded
-                    else:
-                        # If somehow it's not 1D, fall back to regular handling
-                        window_data_array = modality_data[start:min(end, len(modality_data)), :]
-                        if window_data_array.shape[0] < window_size:
-                            padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                            padded[:window_data_array.shape[0]] = window_data_array
-                            window_data_array = padded
-                else:
-                    # Regular handling for 2D arrays
-                    window_data_array = modality_data[start:min(end, len(modality_data)), :]
-
-                    # Pad if needed
-                    if window_data_array.shape[0] < window_size:
-                        logger.debug(f"Padding {modality} window from {window_data_array.shape[0]} to {window_size}")
-                        padded = np.zeros((window_size, window_data_array.shape[1]), dtype=window_data_array.dtype)
-                        padded[:window_data_array.shape[0]] = window_data_array
-                        window_data_array = padded
-
-                window_data[modality] = window_data_array
-            except Exception as e:
-                logger.error(f"Error extracting {modality} window: {str(e)}")
-                window_data[modality] = None
-
-    # Apply fusion if requested and we have both accelerometer and gyroscope
-    if fuse and 'accelerometer' in window_data and 'gyroscope' in window_data:
-        try:
-            # Extract the window data
-            acc_window = window_data['accelerometer']
-            gyro_window = window_data['gyroscope']
-
-            # Extract timestamps if available
-            timestamps = None
-            if 'aligned_timestamps' in window_data:
-                # Ensure we handle 1D timestamp array correctly
-                if len(window_data['aligned_timestamps'].shape) == 1:
-                    timestamps = window_data['aligned_timestamps']
-                else:
-                    # Handle unexpected 2D timestamps if they occur
-                    timestamps = window_data['aligned_timestamps'][:, 0]
-
-            # Process data using IMU fusion
-            features = process_imu_data(
-                acc_data=acc_window,
-                gyro_data=gyro_window,
-                timestamps=timestamps,
-                filter_type=filter_type,
-                return_features=True
-            )
-
-            # IMPORTANT: Add fusion results to window data
-            # We change the key to 'linear_acceleration' instead of 'accelerometer'
-            window_data['linear_acceleration'] = features['linear_acceleration']
-            window_data['quaternion'] = features['quaternion']
-            if 'fusion_features' in features:
-                window_data['fusion_features'] = features['fusion_features']
+            # Skip 'aligned_timestamps' to be processed separately
+            if modality == 'aligned_timestamps':
+                continue
                 
-            logger.debug(f"Added fusion data to window")
+            # For accelerometer, use windows we already created
+            if modality == 'accelerometer':
+                windowed_data[modality] = np.array(acc_windows)
+                continue
+            
+            # For other modalities, create matching windows
+            try:
+                modality_windows = []
+                
+                # Ensure matching lengths
+                min_len = min(len(modality_data), len(data['accelerometer']))
+                if min_len < window_size:
+                    logger.warning(f"Modality {modality} has insufficient length: {min_len} < {window_size}")
+                    continue
+                
+                # Use same window indices as accelerometer
+                for acc_window in acc_windows:
+                    # Find index in original accelerometer data
+                    matched = False
+                    for i in range(len(data['accelerometer']) - window_size + 1):
+                        if np.array_equal(acc_window, data['accelerometer'][i:i+window_size]):
+                            # Found match - extract window from this modality
+                            if i + window_size <= len(modality_data):
+                                modality_windows.append(modality_data[i:i+window_size])
+                                matched = True
+                            break
+                    
+                    if not matched:
+                        # Fallback for no match: use zero padding
+                        logger.warning(f"No match found for window in {modality}, using zero padding")
+                        modality_windows.append(np.zeros((window_size, modality_data.shape[1]), dtype=modality_data.dtype))
+                
+                # Convert to array and store
+                windowed_data[modality] = np.array(modality_windows)
+                
+            except Exception as e:
+                logger.error(f"Error creating windows for {modality}: {str(e)}")
+    
+    # Handle timestamps if available
+    if 'aligned_timestamps' in data:
+        try:
+            timestamps_windows = []
+            for acc_window in acc_windows:
+                # Find index in original accelerometer data
+                for i in range(len(data['accelerometer']) - window_size + 1):
+                    if np.array_equal(acc_window, data['accelerometer'][i:i+window_size]):
+                        if i + window_size <= len(data['aligned_timestamps']):
+                            timestamps_windows.append(data['aligned_timestamps'][i:i+window_size])
+                        break
+            
+            # Convert to array and store if we have any windows
+            if timestamps_windows:
+                windowed_data['aligned_timestamps'] = np.array(timestamps_windows)
+        except Exception as e:
+            logger.error(f"Error creating windows for timestamps: {str(e)}")
+    
+    # Apply fusion if requested and we have both accelerometer and gyroscope
+    if fuse and 'accelerometer' in windowed_data and 'gyroscope' in windowed_data:
+        try:
+            # Process each window with fusion
+            quaternions = []
+            linear_accelerations = []
+            fusion_features = []
+            
+            # Create ThreadPoolExecutor for parallel processing
+            with ThreadPoolExecutor(max_workers=min(os.cpu_count(), 8)) as executor:
+                # Submit tasks
+                futures = []
+                for i in range(len(windowed_data['accelerometer'])):
+                    acc_window = windowed_data['accelerometer'][i]
+                    gyro_window = windowed_data['gyroscope'][i]
+                    
+                    # Get timestamps if available
+                    timestamps = None
+                    if 'aligned_timestamps' in windowed_data:
+                        timestamps = windowed_data['aligned_timestamps'][i]
+                    
+                    # Submit task to process window
+                    futures.append(executor.submit(
+                        process_imu_data,
+                        acc_data=acc_window,
+                        gyro_data=gyro_window,
+                        timestamps=timestamps,
+                        filter_type=filter_type,
+                        return_features=True,
+                        is_linear_acc=is_linear_acc
+                    ))
+                
+                # Collect results
+                for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing {filter_type} fusion"):
+                    result = future.result()
+                    quaternions.append(result['quaternion'])
+                    linear_accelerations.append(result['linear_acceleration'])
+                    if 'fusion_features' in result:
+                        fusion_features.append(result['fusion_features'])
+            
+            # Add results to windowed data
+            windowed_data['quaternion'] = np.array(quaternions)
+            windowed_data['linear_acceleration'] = np.array(linear_accelerations)
+            if fusion_features:
+                windowed_data['fusion_features'] = np.array(fusion_features)
+            
+            logger.info(f"Applied {filter_type} fusion to {len(quaternions)} windows")
+            
         except Exception as e:
             logger.error(f"Error in fusion processing: {str(e)}")
-    
-    return window_data
+
+    # Add labels
+    windowed_data['labels'] = np.repeat(label, len(acc_windows))
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Created {len(acc_windows)} windows in {elapsed_time:.2f}s")
+
+    return windowed_data
 
 
 class DatasetBuilder:
@@ -1053,7 +666,7 @@ class DatasetBuilder:
 
         # Create directory for aligned data
         self.aligned_data_dir = os.path.join(os.getcwd(), "data/aligned")
-        for dir_name in ["accelerometer", "gyroscope", "skeleton"]:
+        for dir_name in ["accelerometer", "gyroscope", "skeleton", "quaternion"]:
             os.makedirs(os.path.join(self.aligned_data_dir, dir_name), exist_ok=True)
 
         # Log fusion options if present
@@ -1100,9 +713,9 @@ class DatasetBuilder:
 
         return LOADER_MAP[file_type]
 
-    def process(self, data, label, fuse=False, filter_type='madgwick', visualize=False):
+    def process(self, data, label, fuse=False, filter_type='madgwick', visualize=False, is_linear_acc=True):
         '''
-        Processes data using either average pooling or peak-based sliding windows.
+        Processes data using either average pooling or sliding windows.
 
         Args:
             data: Dictionary of sensor data
@@ -1110,11 +723,12 @@ class DatasetBuilder:
             fuse: Whether to apply sensor fusion
             filter_type: Type of filter to use
             visualize: Whether to generate visualizations
+            is_linear_acc: Whether accelerometer data is linear acceleration
 
         Returns:
             Dictionary of processed data
         '''
-        logger.info(f"Processing data for label {label} with mode={self.mode}, fusion={fuse}")
+        logger.info(f"Processing data for label {label} with mode={self.mode}, fusion={fuse}, filter={filter_type}")
 
         if self.mode == 'avg_pool':
             # Use average pooling to create fixed-length data
@@ -1146,7 +760,8 @@ class DatasetBuilder:
                         gyro_data=processed_data['gyroscope'],
                         timestamps=timestamps,
                         filter_type=filter_type,
-                        return_features=True
+                        return_features=True,
+                        is_linear_acc=is_linear_acc
                     )
                     
                     # Add fusion results to processed data
@@ -1157,30 +772,17 @@ class DatasetBuilder:
 
             return processed_data
         else:
-            # Use peak detection for windowing
-            logger.debug("Using peak detection for windowing")
-
-            # Calculate magnitude for peak detection
-            sqrt_sum = np.sqrt(np.sum(data['accelerometer']**2, axis=1))
-
-            # Set peak detection parameters based on label
-            if label == 1:  # Fall
-                logger.debug("Using fall detection peak parameters")
-                peaks, _ = find_peaks(sqrt_sum, height=12, distance=10)
-            else:  # Non-fall
-                logger.debug("Using non-fall peak parameters")
-                peaks, _ = find_peaks(sqrt_sum, height=10, distance=20)
-
-            logger.debug(f"Found {len(peaks)} peaks")
-
-            # Extract windows around peaks with optional fusion
+            # Use sliding window approach
+            logger.debug("Using sliding window approach")
+            
+            # Process the aligned data using selective sliding window
             processed_data = selective_sliding_window(
                 data=data,
                 window_size=self.max_length,
-                peaks=peaks,
                 label=label,
                 fuse=fuse,
-                filter_type=filter_type
+                filter_type=filter_type,
+                is_linear_acc=is_linear_acc
             )
 
             return processed_data
@@ -1211,7 +813,7 @@ class DatasetBuilder:
         '''
         return all(len(v) > 1 for v in d.values())
 
-    def _process_trial(self, trial, label, fuse, filter_type, visualize, save_aligned=False):
+    def _process_trial(self, trial, label, fuse, filter_type, visualize, save_aligned=False, is_linear_acc=True):
         """
         Process a single trial with robust error handling.
 
@@ -1222,6 +824,7 @@ class DatasetBuilder:
             filter_type: Type of filter to use
             visualize: Whether to generate visualizations
             save_aligned: Whether to save aligned data to files
+            is_linear_acc: Whether accelerometer data is linear acceleration
 
         Returns:
             Processed trial data or None if processing failed
@@ -1239,14 +842,18 @@ class DatasetBuilder:
                     logger.error(f"Error loading {modality} from {file_path}: {str(e)}")
                     return None
             
-            # Align skeleton and inertial data
-            trial_data = align_sequence(trial_data)
+            # Align sensor data and apply orientation filter
+            trial_data = align_sequence(
+                trial_data, 
+                filter_type=filter_type, 
+                is_linear_acc=is_linear_acc
+            )
             
             # Save aligned data if requested
             if save_aligned:
                 aligned_acc = trial_data.get('accelerometer')
                 aligned_gyro = trial_data.get('gyroscope')
-                aligned_skl = trial_data.get('skeleton')
+                aligned_quat = trial_data.get('quaternion')
                 aligned_timestamps = trial_data.get('aligned_timestamps')
                 
                 if aligned_acc is not None and aligned_gyro is not None:
@@ -1256,12 +863,19 @@ class DatasetBuilder:
                         trial.sequence_number,
                         aligned_acc,
                         aligned_gyro,
-                        aligned_skl,
+                        aligned_quat,
                         aligned_timestamps if aligned_timestamps is not None else np.arange(len(aligned_acc))
                     )
             
             # Process the aligned data
-            processed_data = self.process(trial_data, label, fuse, filter_type, visualize)
+            processed_data = self.process(
+                trial_data, 
+                label, 
+                fuse, 
+                filter_type, 
+                visualize,
+                is_linear_acc
+            )
             
             return processed_data
         
@@ -1270,16 +884,17 @@ class DatasetBuilder:
             return None
 
     def make_dataset(self, subjects: List[int], fuse: bool, filter_type: str = 'madgwick', 
-                    visualize: bool = False, save_aligned: bool = False):
+                    visualize: bool = False, save_aligned: bool = False, is_linear_acc: bool = True):
         '''
         Creates a dataset from the sensor data files for the specified subjects.
 
         Args:
             subjects: List of subject IDs to include
             fuse: Whether to apply sensor fusion
-            filter_type: Type of fusion filter to use ('madgwick', 'comp', 'kalman', 'ekf', 'ukf')
+            filter_type: Type of fusion filter to use ('madgwick', 'kalman', 'ekf')
             visualize: Whether to generate visualizations
             save_aligned: Whether to save aligned data to files
+            is_linear_acc: Whether accelerometer data is linear acceleration
         '''
         logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
 
@@ -1316,7 +931,8 @@ class DatasetBuilder:
                     fuse, 
                     filter_type, 
                     visualize,
-                    save_aligned
+                    save_aligned,
+                    is_linear_acc
                 )
                 future_to_trial[future] = trial
             
@@ -1397,3 +1013,10 @@ class DatasetBuilder:
         logger.info(f"Normalization complete in {elapsed_time:.2f}s")
 
         return self.data
+
+    def cleanup(self):
+        """
+        Properly clean up resources when done with the dataset builder
+        """
+        # Clean up IMU fusion thread resources
+        cleanup_resources()

@@ -76,7 +76,7 @@ def get_args():
     parser.add_argument('--optimizer', type=str, default='adamw',
                         help='Optimizer to use (adamw, adam, sgd)')
     parser.add_argument('--base-lr', type=float, default=0.0005, metavar='LR',
-                        help='Base learning rate (default: 0.0005)')
+                        help='Base learning rate (default: 0.001)')
     parser.add_argument('--weight-decay', type=float, default=0.001,
                         help='Weight decay factor (default: 0.001)')
     parser.add_argument('--scheduler', type=str, default='plateau',
