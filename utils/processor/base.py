@@ -179,11 +179,11 @@ class Processor(ABC):
                 #phone height = 25, distance = 200
                 
                 data = selective_sliding_window(data, length = self.input_shape[0],
-                                                window_size= self.max_length, stride_size=10, height=1.4, distance=50)
+                                                window_size= self.max_length, stride_size=32, height=1.4, distance=64)
             else: 
                 #phone height = 15, distance = 500
                 data = selective_sliding_window(data, length = self.input_shape[0],
-                                                window_size= self.max_length, stride_size=10, height=1.2, distance=100)
+                                                window_size= self.max_length, stride_size=32, height=1.2, distance=64)
                 # data = sliding_window(data=data, clearing_time_index=self.max_length-1, 
                 #                   max_time=self.input_shape[0],
                 #                    sub_window_size =self.max_length, stride_size=10)

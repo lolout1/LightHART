@@ -296,7 +296,7 @@ class Trainer:
                 'fusion_type': 'concat',
                 'dropout': 0.3,
                 'use_batch_norm': True,
-                'feature_dim': 112
+                'feature_dim': 108
             }
         elif isinstance(arg.model_args, str):
             try:

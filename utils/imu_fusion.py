@@ -81,7 +81,7 @@ def apply_lowpass_filter(data, cutoff=8.0, fs=30.0, order=2):
     filtered_data = np.zeros_like(data)
     for axis in range(data.shape[1]): filtered_data[:, axis] = sosfilt(sos, data[:, axis])
     return filtered_data
-def fixed_size_windows(data, window_size=128, overlap=0.5, min_windows=1, stride=20):
+def fixed_size_windows(data, window_size=128, overlap=0.5, min_windows=1, stride=64):
     if data is None or len(data) < window_size // 2: return []
     if len(data) < window_size:
         padded = np.zeros((window_size, data.shape[1]))
