@@ -564,7 +564,6 @@ class Trainer:
                     shuffle=True,
                     num_workers=self.arg.num_worker,
                     pin_memory=True,
-                    drop_last=self.arg.train_feeder_args.get('drop_last', False),
                     persistent_workers=True if self.arg.num_worker > 0 else False
                 )
                 self.print_log(f"Training data loaded with {len(self.data_loader['train'])} batches")
@@ -582,7 +581,6 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.arg.num_worker,
                     pin_memory=True,
-                    drop_last=self.arg.val_feeder_args.get('drop_last', False)
                 )
                 self.print_log(f"Validation data loaded with {len(self.data_loader['val'])} batches")
             except Exception as e:
@@ -611,7 +609,6 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.arg.num_worker,
                     pin_memory=True,
-                    drop_last=self.arg.test_feeder_args.get('drop_last', False)
                 )
                 self.print_log(f"Test data loaded with {len(self.data_loader['test'])} batches")
             except Exception as e:
@@ -640,7 +637,6 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.arg.num_worker,
                     pin_memory=True,
-                    drop_last=self.arg.test_feeder_args.get('drop_last', False)
                 )
                 self.print_log(f"Test data loaded with {len(self.data_loader['test'])} batches")
                 

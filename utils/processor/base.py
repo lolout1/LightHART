@@ -1,192 +1,324 @@
-from typing import Any, List
+# base.py
+from typing import Any, List, Tuple, Dict, Union, Optional
 from abc import ABC, abstractmethod
+import os, numpy as np, pandas as pd, torch, torch.nn.functional as F
+from scipy.signal import find_peaks, butter, filtfilt, savgol_filter
 from scipy.io import loadmat
-import pandas as pd
-import numpy as np 
-import torch
-import torch.nn.functional as F
-from scipy.signal import find_peaks
+from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation
 
-def csvloader(file_path: str, **kwargs):
-    '''
-    Loads csv data
-    '''
-    file_data = pd.read_csv(file_path, index_col=False, header = 0).dropna().bfill()
-    num_col = file_data.shape[1]
-    num_extra_col = num_col % 3
-    cols_to_select = num_col - num_extra_col
-    activity_data = file_data.iloc[2:, -3:].to_numpy(dtype=np.float32)
-    return activity_data
+FILTER_STATES = {}
+VISUALIZATION_DIR = 'visualization_output'
+os.makedirs(VISUALIZATION_DIR, exist_ok=True)
 
-def matloader(file_path: str, **kwargs):
-    '''
-    Loads MatLab files 
-    '''
-    key = kwargs.get('key',None)
-    assert key in ['d_iner' , 'd_skel'] , f'Unsupported {key} for matlab file'
-    data = loadmat(file_path)[key]
-    return data
+def csvloader(file_path):
+    try:
+        file_data = pd.read_csv(file_path, index_col=False, header=None).dropna().bfill()
+        timestamps = file_data.iloc[2:, 0].to_numpy(dtype=np.float64)
+        values = file_data.iloc[2:, 1:4].to_numpy(dtype=np.float32)
+        return values, timestamps
+    except Exception as e:
+        print(f"Error loading CSV {file_path}: {str(e)}")
+        return np.array([]), np.array([])
 
-LOADER_MAP = {
-    'csv' : csvloader, 
-    'mat' : matloader
-}
+def matloader(file_path, **kwargs):
+    key = kwargs.get('key', None)
+    if key not in ['d_iner', 'd_skel']: 
+        raise ValueError(f"Unsupported {key} for matlab file")
+    return loadmat(file_path)[key], None
 
-def avg_pool(sequence : np.array, window_size : int = 5, stride :int =1, 
-             max_length : int = 512 , shape : int = None) -> np.ndarray:
+LOADER_MAP = {'csv': csvloader, 'mat': matloader}
 
-    '''
-    Executes average pooling to smoothen out the data
+def bandpass_filter(data, lowcut=0.5, highcut=15.0, fs=30.0, order=2):
+    nyq = 0.5 * fs
+    b, a = butter(order, [lowcut/nyq, highcut/nyq], btype='band')
+    filtered = np.zeros_like(data)
+    for i in range(data.shape[1]): 
+        filtered[:, i] = filtfilt(b, a, data[:, i])
+    return filtered
 
-    '''
-    shape = sequence.shape
-    sequence = sequence.reshape(shape[0], -1)
-    sequence = np.expand_dims(sequence, axis = 0).transpose(0,2, 1)
-    sequence = torch.tensor(sequence, dtype=torch.float32)
-    stride =  ((sequence.shape[2]//max_length)+1 if max_length < sequence.shape[2] else 1)
-    sequence = F.avg_pool1d(sequence,kernel_size=window_size, stride=stride)
-    sequence = sequence.squeeze(0).numpy().transpose(1,0)
-    sequence = sequence.reshape(-1, *shape[1:])
-    return sequence
+def add_gravity(linear_acc, q):
+    rot = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+    gravity = rot.apply([0, 0, 9.81], inverse=True)
+    return linear_acc + gravity
 
+def visualize_alignment(acc_orig, gyro_orig, acc_aligned, gyro_aligned, 
+                       acc_timestamps, gyro_timestamps, aligned_timestamps, trial_id):
+    fig, axes = plt.subplots(3, 2, figsize=(15, 10))
+    plt.suptitle(f'Sensor Alignment - Trial {trial_id}')
+    
+    for i, axis_name in enumerate(['X', 'Y', 'Z']):
+        axes[i, 0].plot(acc_timestamps, acc_orig[:, i], 'b.', alpha=0.3, label='Original')
+        axes[i, 0].plot(aligned_timestamps, acc_aligned[:, i], 'r-', label='Aligned')
+        axes[i, 0].set_title(f'Accelerometer {axis_name}-axis')
+        axes[i, 0].set_xlabel('Time (ms)')
+        axes[i, 0].set_ylabel('Acceleration (m/s²)')
+        axes[i, 0].legend()
+        
+        axes[i, 1].plot(gyro_timestamps, gyro_orig[:, i], 'b.', alpha=0.3, label='Original')
+        axes[i, 1].plot(aligned_timestamps, gyro_aligned[:, i], 'r-', label='Aligned')
+        axes[i, 1].set_title(f'Gyroscope {axis_name}-axis')
+        axes[i, 1].set_xlabel('Time (ms)')
+        axes[i, 1].set_ylabel('Angular velocity (rad/s)')
+        axes[i, 1].legend()
+    
+    plt.tight_layout()
+    output_path = os.path.join(VISUALIZATION_DIR, f'alignment_{trial_id}.png')
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    acc_mag_orig = np.sqrt(np.sum(acc_orig**2, axis=1))
+    acc_mag_aligned = np.sqrt(np.sum(acc_aligned**2, axis=1))
+    gyro_mag_orig = np.sqrt(np.sum(gyro_orig**2, axis=1))
+    gyro_mag_aligned = np.sqrt(np.sum(gyro_aligned**2, axis=1))
+    
+    ax1.plot(acc_timestamps, acc_mag_orig, 'b.', alpha=0.3, label='Original')
+    ax1.plot(aligned_timestamps, acc_mag_aligned, 'r-', label='Aligned')
+    ax1.set_title('Acceleration Magnitude')
+    ax1.set_xlabel('Time (ms)')
+    ax1.set_ylabel('Magnitude (m/s²)')
+    ax1.legend()
+    
+    ax2.plot(gyro_timestamps, gyro_mag_orig, 'b.', alpha=0.3, label='Original')
+    ax2.plot(aligned_timestamps, gyro_mag_aligned, 'r-', label='Aligned')
+    ax2.set_title('Angular Velocity Magnitude')
+    ax2.set_xlabel('Time (ms)')
+    ax2.set_ylabel('Magnitude (rad/s)')
+    ax2.legend()
+    
+    plt.tight_layout()
+    output_path = os.path.join(VISUALIZATION_DIR, f'magnitude_{trial_id}.png')
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    
+    print(f"Visualizations saved to {VISUALIZATION_DIR}")
 
-def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, 
-                       input_shape: np.array) -> np.ndarray:
-    '''
-    Pools and pads the sequence to uniform length
-
-    Args:
-        sequence : data 
-        max_sequence_length(int) : the fixed length of data
-        input_shape: shape of the data
-    Return: 
-        new_sequence: data after padding
-    '''
-    shape = list(input_shape)
-    shape[0] = max_sequence_length
-    pooled_sequence = avg_pool(sequence=sequence, max_length = max_sequence_length, shape = input_shape)
-    new_sequence = np.zeros(shape, sequence.dtype)
-    new_sequence[:len(pooled_sequence)] = pooled_sequence
-    return new_sequence
-
-def sliding_window(data : np.ndarray, clearing_time_index : int, max_time : int, 
-                   sub_window_size : int, stride_size : int) -> np.ndarray:
-    '''
-    Sliding Window
-    '''
-    assert clearing_time_index >= sub_window_size - 1 , "Clearing value needs to be greater or equal to (window size - 1)"
-    start = clearing_time_index - sub_window_size + 1 
-
-    if max_time >= data.shape[0]-sub_window_size:
-        max_time = max_time - sub_window_size + 1
-        # 2510 // 100 - 1 25 #25999 1000 24000 = 24900
-
-    sub_windows  = (
-        start + 
-        np.expand_dims(np.arange(sub_window_size), 0) + 
-        np.expand_dims(np.arange(max_time, step = stride_size), 0).T
-    )
-
-    #labels = np.round(np.mean(labels[sub_windows], axis=1))
-    return data[sub_windows]
-
-def selective_sliding_window(data: np.ndarray, length: int , window_size: int , stride_size : int, height : int, distance : int) -> np.array: 
-    sqrt_sum = np.sqrt(np.sum(data**2, axis = 1))
-    peaks , _ = find_peaks(sqrt_sum,height=height, distance=distance )
-    windows = []
-    for peak in peaks:
-        start = max(0, peak - window_size)
-        end = min(len(data), start + window_size)
-        # difference = length - (end-start)
-        # if difference != 0 : 
-        #     if start == 0 : 
-        #         end = end + difference
-        #     elif 
-        if data[start:end].shape[0] < window_size:
-            continue
-        windows.append(data[start:end])
-
-
+def align_sensors(acc_data, gyro_data, acc_timestamps, gyro_timestamps, target_freq=30.0):
+    if len(acc_data) < 3 or len(gyro_data) < 3: 
+        return None, None, None
+    
+    start_time = max(acc_timestamps[0], gyro_timestamps[0])
+    end_time = min(acc_timestamps[-1], gyro_timestamps[-1])
+    
+    if start_time >= end_time: 
+        return None, None, None
+    
+    common_times = np.linspace(start_time, end_time, int((end_time-start_time)*target_freq/1000))
+    
+    if len(common_times) < 10: 
+        return None, None, None
+    
+    aligned_acc = np.zeros((len(common_times), 3))
+    aligned_gyro = np.zeros((len(common_times), 3))
+    
+    for axis in range(3):
+        try:
+            acc_interp = interp1d(acc_timestamps, acc_data[:, axis], bounds_error=False, fill_value="extrapolate")
+            aligned_acc[:, axis] = acc_interp(common_times)
             
-                     
-    #windows = [data[max(0, peak - W): min(len(data), peak + W)] for peak in peaks]
+            gyro_interp = interp1d(gyro_timestamps, gyro_data[:, axis], bounds_error=False, fill_value="extrapolate")
+            aligned_gyro[:, axis] = gyro_interp(common_times)
+        except:
+            if len(acc_data) > 0:
+                acc_idx = np.argmin(np.abs(acc_timestamps[:, np.newaxis] - common_times), axis=0)
+                aligned_acc[:, axis] = acc_data[acc_idx, axis]
+            if len(gyro_data) > 0:
+                gyro_idx = np.argmin(np.abs(gyro_timestamps[:, np.newaxis] - common_times), axis=0)
+                aligned_gyro[:, axis] = gyro_data[gyro_idx, axis]
+    
+    aligned_acc = bandpass_filter(aligned_acc, lowcut=0.1, highcut=15.0, fs=target_freq)
+    aligned_gyro = bandpass_filter(aligned_gyro, lowcut=0.1, highcut=12.0, fs=target_freq)
+    
+    return aligned_acc, aligned_gyro, common_times
+
+def selective_sliding_window(data, is_fall=False, window_size=128, stride=32):
+    if len(data) < window_size // 2: 
+        return []
+    
+    windows = []
+    
+    if is_fall:
+        acc_magnitude = np.sqrt(np.sum(data**2, axis=1))
+        mean_mag, std_mag = np.mean(acc_magnitude), np.std(acc_magnitude)
+        threshold = max(1.4, mean_mag + 1.5 * std_mag)
+        peaks, _ = find_peaks(acc_magnitude, height=threshold, distance=max(window_size//4, 32), prominence=0.5)
+        
+        if len(peaks) == 0: 
+            peaks = [np.argmax(acc_magnitude)]
+        
+        for peak in peaks:
+            start = max(0, peak - window_size // 2)
+            end = min(len(data), start + window_size)
+            
+            if end - start < window_size:
+                if start == 0: 
+                    end = min(len(data), window_size)
+                else: 
+                    start = max(0, end - window_size)
+            
+            if end - start == window_size: 
+                windows.append(data[start:end])
+    else:
+        for start in range(0, len(data) - window_size + 1, stride):
+            windows.append(data[start:start + window_size])
+    
+    if not windows and len(data) >= window_size:
+        acc_magnitude = np.sqrt(np.sum(data**2, axis=1))
+        center = np.argmax(acc_magnitude)
+        start = max(0, min(len(data) - window_size, center - window_size // 2))
+        windows.append(data[start:start + window_size])
+    
     return windows
 
-
-
-
-
 class Processor(ABC):
-    '''
-    Data Processor 
-    '''
-    def __init__(self, file_path:str, mode : str, max_length: str, label: int, **kwargs):
-        assert mode in ['sliding_window', 'avg_pool'], f'Processing mode: {mode} is undefined'
-        self.label  = label 
+    def __init__(self, file_path, mode, max_length, label, **kwargs):
+        if mode not in ['sliding_window', 'avg_pool']: 
+            raise ValueError(f"Processing mode: {mode} is undefined")
+        
+        self.label = label
         self.mode = mode
         self.max_length = max_length
-        self.data = []
         self.file_path = file_path
         self.input_shape = []
         self.kwargs = kwargs
-
-
-    def set_input_shape(self, sequence: np.ndarray) -> List[int]:
-        '''
-        returns the shape of the inputj
-
-        Args: 
-            sequence(np.ndarray) : data sequence
+        self.trial_id = os.path.basename(file_path).split('.')[0] if file_path else None
+        self.target_freq = kwargs.get('target_freq', 30.0)
+        self.filter_type = kwargs.get('filter_type', None)
+        self.visualize = kwargs.get('visualize', False)
         
-        Out: 
-            shape (list) : shape of the sequence
-        '''
-        self.input_shape =  sequence.shape
-
-
-    def _import_loader(self, file_path:str) -> np.array :
-        '''
-        Reads file and loads data from
-         
-        '''
-
+        if self.trial_id and self.filter_type and self.trial_id not in FILTER_STATES:
+            FILTER_STATES[self.trial_id] = {
+                'quaternion': np.array([1.0, 0.0, 0.0, 0.0]),
+                'timestamp': None,
+                'type': self.filter_type
+            }
+    
+    def set_input_shape(self, sequence): 
+        self.input_shape = sequence.shape
+    
+    def _import_loader(self, file_path):
         file_type = file_path.split('.')[-1]
-
-        assert file_type in ['csv', 'mat'], f'Unsupported file type {file_type}'
-
+        if file_type not in ['csv', 'mat']: 
+            raise ValueError(f"Unsupported file type {file_type}")
         return LOADER_MAP[file_type]
     
-    def load_file(self, file_path: str):
-        '''
-        Loads file given file path
-        '''
+    def load_file(self, file_path):
         loader = self._import_loader(file_path)
-        data = loader(file_path, **self.kwargs)
+        data, timestamps = loader(file_path, **self.kwargs)
         self.set_input_shape(data)
-        return data
-
-    def process(self, data):
-        '''
-        function implementation to process data
-        '''
-
+        return data, timestamps
+    
+    def avg_pool(self, sequence, window_size=5, max_length=512):
+        shape = sequence.shape
+        sequence = sequence.reshape(shape[0], -1)
+        sequence = np.expand_dims(sequence, axis=0).transpose(0, 2, 1)
+        sequence = torch.tensor(sequence, dtype=torch.float32)
+        stride = (sequence.shape[2]//max_length)+1 if max_length < sequence.shape[2] else 1
+        pooled = F.avg_pool1d(sequence, kernel_size=window_size, stride=stride)
+        return pooled.squeeze(0).numpy().transpose(1, 0).reshape(-1, *shape[1:])
+    
+    def pad_sequence(self, sequence, max_length):
+        shape = list(self.input_shape)
+        shape[0] = max_length
+        pooled = self.avg_pool(sequence, max_length=max_length)
+        padded = np.zeros(shape, sequence.dtype)
+        actual_length = min(len(pooled), max_length)
+        padded[:actual_length] = pooled[:actual_length]
+        return padded
+    
+    def process(self, data, timestamps=None):
         if self.mode == 'avg_pool':
-            data = pad_sequence_numpy(sequence=data, max_sequence_length=self.max_length,
-                                      input_shape=self.input_shape)
-        
-        else: 
-            if self.label == 1: 
-                #phone height = 25, distance = 200
-                
-                data = selective_sliding_window(data, length = self.input_shape[0],
-                                                window_size= self.max_length, stride_size=10, height=1.4, distance=50)
-            else: 
-                #phone height = 15, distance = 500
-                data = selective_sliding_window(data, length = self.input_shape[0],
-                                                window_size= self.max_length, stride_size=10, height=1.2, distance=100)
-                # data = sliding_window(data=data, clearing_time_index=self.max_length-1, 
-                #                   max_time=self.input_shape[0],
-                #                    sub_window_size =self.max_length, stride_size=10)
-        return data
-
+            return self.pad_sequence(data, self.max_length)
+        else:
+            is_fall = self.label == 1
+            windows = adaptive_sliding_window(
+                data, is_fall=is_fall, 
+                window_size=self.max_length,
+                stride=10 if is_fall else 32
+            )
             
+            if self.trial_id and self.trial_id in FILTER_STATES:
+                quaternion = FILTER_STATES[self.trial_id]['quaternion']
+                processed_windows = []
+                for window in windows:
+                    window_with_gravity = np.array([add_gravity(sample, quaternion) for sample in window])
+                    processed_windows.append(window_with_gravity)
+                return processed_windows
+            
+            return windows
+    
+    def process_file(self):
+        acc_data, acc_timestamps = self.load_file(self.file_path)
+        
+        gyro_file = self.file_path.replace('accelerometer', 'gyroscope')
+        if os.path.exists(gyro_file):
+            gyro_data, gyro_timestamps = self.load_file(gyro_file)
+            
+            orig_acc, orig_gyro = acc_data.copy(), gyro_data.copy()
+            orig_acc_times, orig_gyro_times = acc_timestamps.copy(), gyro_timestamps.copy()
+            
+            aligned_acc, aligned_gyro, aligned_times = align_sensors(
+                acc_data, gyro_data, acc_timestamps, gyro_timestamps, self.target_freq
+            )
+            
+            if self.visualize and aligned_acc is not None:
+                visualize_alignment(
+                    orig_acc, orig_gyro, aligned_acc, aligned_gyro,
+                    orig_acc_times, orig_gyro_times, aligned_times, self.trial_id
+                )
+            
+            if aligned_acc is not None:
+                quaternions = []
+                
+                if self.trial_id in FILTER_STATES:
+                    state = FILTER_STATES[self.trial_id]
+                    quaternion = state['quaternion']
+                    last_time = state['timestamp']
+                    
+                    for i in range(len(aligned_acc)):
+                        acc = aligned_acc[i]
+                        gyro = aligned_gyro[i]
+                        time = aligned_times[i]
+                        
+                        acc_with_g = add_gravity(acc, quaternion)
+                        
+                        dt = 1.0 / self.target_freq
+                        if last_time is not None:
+                            dt = (time - last_time) / 1000.0
+                        
+                        if self.filter_type == 'madgwick':
+                            from utils.imu_fusion import update_madgwick
+                            quaternion = update_madgwick(quaternion, acc_with_g, gyro, dt)
+                        elif self.filter_type == 'kalman':
+                            from utils.imu_fusion import update_kalman
+                            quaternion = update_kalman(quaternion, acc_with_g, gyro, dt)
+                        elif self.filter_type == 'ekf':
+                            from utils.imu_fusion import update_ekf
+                            quaternion = update_ekf(quaternion, acc_with_g, gyro, dt)
+                        
+                        quaternions.append(quaternion.copy())
+                        state['quaternion'] = quaternion
+                        state['timestamp'] = time
+                
+                processed_acc = self.process(aligned_acc, aligned_times)
+                processed_gyro = self.process(aligned_gyro, aligned_times) if aligned_gyro is not None else None
+                
+                return {
+                    'accelerometer': processed_acc,
+                    'gyroscope': processed_gyro,
+                    'quaternion': np.array(quaternions) if quaternions else None,
+                    'timestamps': aligned_times,
+                    'label': self.label,
+                    'trial_id': self.trial_id
+                }
+        
+        processed_acc = self.process(acc_data, acc_timestamps)
+        
+        return {
+            'accelerometer': processed_acc,
+            'timestamps': acc_timestamps,
+            'label': self.label,
+            'trial_id': self.trial_id
+        }

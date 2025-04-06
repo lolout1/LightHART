@@ -51,7 +51,7 @@ for filter_type in madgwick comp kalman ekf ukf; do
     if [[ "${filter_type}" == "ekf" || "${filter_type}" == "ukf" ]]; then
         # Increase model capacity for more complex filters
         sed -i "s/embed_dim:.*$/embed_dim: 64/" ${filter_config}
-        sed -i "s/num_heads:.*$/num_heads: 8/" ${filter_config}
+        sed -i "s/num_heads:.*$/num_heads: 4/" ${filter_config}
         sed -i "s/max_length:.*$/max_length: 128/" ${filter_config}
         sed -i "s/acc_frames:.*$/acc_frames: 128/" ${filter_config}
     fi
