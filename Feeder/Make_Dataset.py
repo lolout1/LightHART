@@ -1,88 +1,68 @@
-import numpy as np
 import os
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 import logging
-from utils.dataset import prepare_smartfallmm, split_by_subjects
+from utils.dataset import split_by_subjects, prepare_smartfallmm
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("feeder")
 
-class UTD_mm:
-    def __init__(self, dataset=None, data_path=None, fold=None, subjects=None, fuse=False, **kwargs):
-        self.data_path = data_path
-        self.fold = fold
-        self.subjects = subjects  # <-- Use the subject list passed from main.py
-        self.fuse = fuse
-        self.fusion_options = kwargs.get('fusion_options', {})
-        if dataset is not None:
-            self.prepared_data = dataset
-        elif data_path and fold and subjects:
-            self.prepared_data = self._load_data()
-        else:
-            self.prepared_data = self._create_empty_dataset()
-        self._truncate_data()
-        if isinstance(self.prepared_data, dict) and 'labels' in self.prepared_data:
-            logger.info(f"Dataset loaded with {len(self.prepared_data['labels'])} samples")
+class FallDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        self.accelerometer = data.get('accelerometer', None)
+        self.gyroscope = data.get('gyroscope', None)
+        self.quaternion = data.get('quaternion', None)
+        self.linear_acceleration = data.get('linear_acceleration', None)
+        self.fusion_features = data.get('fusion_features', None)
+        self.labels = data.get('labels', None)
+        self.subjects = data.get('subjects', None)
+        self.shape = self.accelerometer.shape if self.accelerometer is not None else None
+        logger.info(f"Dataset initialized with {len(self)} samples")
+        
+    def __len__(self):
+        return len(self.labels) if self.labels is not None else 0
+        
+    def __getitem__(self, idx):
+        data_dict = {}
+        if self.accelerometer is not None:
+            data_dict['accelerometer'] = torch.from_numpy(self.accelerometer[idx]).float()
+        if self.gyroscope is not None:
+            data_dict['gyroscope'] = torch.from_numpy(self.gyroscope[idx]).float()
+        if self.quaternion is not None:
+            data_dict['quaternion'] = torch.from_numpy(self.quaternion[idx]).float()
+        if self.linear_acceleration is not None:
+            data_dict['linear_acceleration'] = torch.from_numpy(self.linear_acceleration[idx]).float()
+        if self.fusion_features is not None:
+            data_dict['fusion_features'] = torch.from_numpy(self.fusion_features[idx]).float()
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        subject = torch.tensor(self.subjects[idx], dtype=torch.long) if self.subjects is not None else torch.tensor(0)
+        return data_dict, label, subject
 
-    def _create_empty_dataset(self):
-        return {
-            'accelerometer': np.zeros((0, 64, 3)),
-            'gyroscope': np.zeros((0, 64, 3)),
-            'quaternion': np.zeros((0, 64, 4)),
-            'linear_acceleration': np.zeros((0, 64, 3)),
-            'fusion_features': np.zeros((0, 43)),
-            'labels': np.zeros(0, dtype=np.int64),
-            'subject': np.zeros(0, dtype=np.int32)
-        }
-
-    def _load_data(self):
-        logger.info(f"Loading data for fold {self.fold}, subjects {self.subjects}")
+class Feeder:
+    def __init__(self, args):
+        self.args = args
+        self.subjects = args.subjects
+        self.fuse = args.fusion
+        
+    def load_data(self):
+        logger.info(f"Loading data for fold {self.args.fold}, subjects {self.subjects}")
         try:
-            fusion_options = self.fusion_options  # pass fusion options along
-            class Args:
-                def __init__(self, fusion_options):
-                    self.dataset_args = {
-                        'age_group': ['young'],
-                        'modalities': ['accelerometer', 'gyroscope'],
-                        'sensors': ['watch'],
-                        'mode': 'sliding_window',
-                        'max_length': 64,
-                        'task': 'fd',
-                        'fusion_options': fusion_options
-                    }
-            args_obj = Args(fusion_options)
-            data = split_by_subjects(prepare_smartfallmm(args_obj), self.subjects, self.fuse)
-            if data is None or 'labels' not in data or len(data['labels']) == 0:
-                return self._create_empty_dataset()
-            return data
+            data = split_by_subjects(prepare_smartfallmm(self.args), self.subjects, self.fuse)
+            if 'subjects' not in data or len(data['subjects']) == 0:
+                logger.warning("Subject data not found, creating dummy subject IDs")
+                if 'labels' in data and len(data['labels']) > 0:
+                    data['subjects'] = np.zeros(len(data['labels']), dtype=np.int32)
+            dataset = FallDataset(data)
+            logger.info(f"Dataset loaded with {len(dataset)} samples")
+            return dataset
         except Exception as e:
-            logger.error(f"Error loading data: {e}")
+            logger.error(f"Error loading data: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
-            return self._create_empty_dataset()
-
-    def _truncate_data(self):
-        # Ensure all arrays have the same length
-        if self.prepared_data and 'labels' in self.prepared_data:
-            lengths = []
-            for k, v in self.prepared_data.items():
-                if isinstance(v, np.ndarray) and v.ndim > 0:
-                    lengths.append(v.shape[0])
-            if lengths:
-                min_length = min(lengths)
-                for k, v in self.prepared_data.items():
-                    if isinstance(v, np.ndarray) and v.ndim > 0 and v.shape[0] > min_length:
-                        self.prepared_data[k] = v[:min_length]
-
-    def __getitem__(self, index):
-        if not self.prepared_data or 'labels' not in self.prepared_data or index >= len(self.prepared_data['labels']):
-            raise ValueError(f"Dataset not loaded or index {index} out of range")
-        data = {k: self.prepared_data[k][index] for k in self.prepared_data if k != 'labels'}
-        return data, self.prepared_data['labels'][index]
-
-    def __len__(self):
-        return len(self.prepared_data['labels']) if self.prepared_data and 'labels' in self.prepared_data else 0
-
-class SmartFallMM(UTD_mm):
-    def __init__(self, dataset=None, data_path=None, fold=None, subjects=None, fuse=False, **kwargs):
-        super().__init__(dataset=dataset, data_path=data_path, fold=fold, subjects=subjects, fuse=fuse, **kwargs)
-
+            return FallDataset({
+                'accelerometer': np.array([]),
+                'gyroscope': np.array([]),
+                'labels': np.array([]),
+                'subjects': np.array([])
+            })

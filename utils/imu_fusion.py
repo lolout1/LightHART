@@ -5,11 +5,15 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from scipy.interpolate import interp1d
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, find_peaks
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("imu_fusion")
 thread_pool = ThreadPoolExecutor(max_workers=4)
+
+VISUALIZATION_DIR = 'visualization_output'
+os.makedirs(VISUALIZATION_DIR, exist_ok=True)
 
 def save_aligned_sensor_data(subject_id, action_id, trial_id, acc_data, gyro_data, quaternions=None, timestamps=None, save_dir="data/aligned"):
     try:
@@ -39,7 +43,7 @@ def bandpass_filter(data, lowcut=0.5, highcut=15.0, fs=30.0, order=2):
         filtered[:, i] = filtfilt(b, a, data[:, i])
     return filtered
 
-def align_sensor_data(acc_df, gyro_df, target_freq=30.0):
+def align_sensor_data(acc_df, gyro_df, target_freq=30.0, visualize=False, trial_id=None):
     logger.info(f"Starting sensor alignment with target frequency {target_freq}Hz")
     start_time = time.time()
     try:
@@ -71,6 +75,9 @@ def align_sensor_data(acc_df, gyro_df, target_freq=30.0):
         safe_freq = max(5.0, min(1000.0, target_freq))
         aligned_acc = bandpass_filter(aligned_acc, lowcut=0.1, highcut=min(safe_freq/2.1, 15.0), fs=safe_freq)
         aligned_gyro = bandpass_filter(aligned_gyro, lowcut=0.1, highcut=min(safe_freq/2.1, 12.0), fs=safe_freq)
+        if visualize and trial_id:
+            visualize_alignment(acc_data, gyro_data, aligned_acc, aligned_gyro,
+                              acc_timestamps, gyro_timestamps, common_timestamps, trial_id)
         elapsed = time.time() - start_time
         logger.info(f"Sensor alignment complete: {n_samples} aligned samples in {elapsed:.2f}s")
         return aligned_acc, aligned_gyro, common_timestamps
@@ -78,8 +85,124 @@ def align_sensor_data(acc_df, gyro_df, target_freq=30.0):
         logger.error(f"Error during sensor alignment: {str(e)}")
         return None, None, None
 
+def visualize_alignment(acc_orig, gyro_orig, acc_aligned, gyro_aligned,
+                        acc_timestamps, gyro_timestamps, aligned_timestamps, trial_id):
+    try:
+        fig, axes = plt.subplots(3, 2, figsize=(15, 10))
+        plt.suptitle(f'Sensor Alignment - Trial {trial_id}')
+        for i, axis_name in enumerate(['X', 'Y', 'Z']):
+            axes[i, 0].plot(acc_timestamps, acc_orig[:, i], 'b.', alpha=0.3, label='Original')
+            axes[i, 0].plot(aligned_timestamps, acc_aligned[:, i], 'r-', label='Aligned')
+            axes[i, 0].set_title(f'Accelerometer {axis_name}-axis')
+            axes[i, 0].set_xlabel('Time (s)')
+            axes[i, 0].set_ylabel('Acceleration (m/s²)')
+            axes[i, 0].legend()
+            axes[i, 1].plot(gyro_timestamps, gyro_orig[:, i], 'b.', alpha=0.3, label='Original')
+            axes[i, 1].plot(aligned_timestamps, gyro_aligned[:, i], 'r-', label='Aligned')
+            axes[i, 1].set_title(f'Gyroscope {axis_name}-axis')
+            axes[i, 1].set_xlabel('Time (s)')
+            axes[i, 1].set_ylabel('Angular velocity (rad/s)')
+            axes[i, 1].legend()
+        plt.tight_layout()
+        output_path = os.path.join(VISUALIZATION_DIR, f'alignment_{trial_id}.png')
+        plt.savefig(output_path, dpi=300)
+        plt.close()
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        acc_mag_orig = np.sqrt(np.sum(acc_orig**2, axis=1))
+        acc_mag_aligned = np.sqrt(np.sum(acc_aligned**2, axis=1))
+        gyro_mag_orig = np.sqrt(np.sum(gyro_orig**2, axis=1))
+        gyro_mag_aligned = np.sqrt(np.sum(gyro_aligned**2, axis=1))
+        ax1.plot(acc_timestamps, acc_mag_orig, 'b.', alpha=0.3, label='Original')
+        ax1.plot(aligned_timestamps, acc_mag_aligned, 'r-', label='Aligned')
+        ax1.set_title('Acceleration Magnitude')
+        ax1.set_xlabel('Time (s)')
+        ax1.set_ylabel('Magnitude (m/s²)')
+        ax1.legend()
+        ax2.plot(gyro_timestamps, gyro_mag_orig, 'b.', alpha=0.3, label='Original')
+        ax2.plot(aligned_timestamps, gyro_mag_aligned, 'r-', label='Aligned')
+        ax2.set_title('Angular Velocity Magnitude')
+        ax2.set_xlabel('Time (s)')
+        ax2.set_ylabel('Magnitude (rad/s)')
+        ax2.legend()
+        plt.tight_layout()
+        output_path = os.path.join(VISUALIZATION_DIR, f'magnitude_{trial_id}.png')
+        plt.savefig(output_path, dpi=300)
+        plt.close()
+        logger.info(f"Visualizations saved to {VISUALIZATION_DIR}")
+    except Exception as e:
+        logger.error(f"Error creating visualizations: {str(e)}")
+
+def visualize_filter_comparison(acc_data, gyro_data, filter_results, timestamps=None, trial_id="unknown"):
+    try:
+        if timestamps is None:
+            timestamps = np.arange(len(acc_data)) / 30.0
+        fig, axes = plt.subplots(4, 1, figsize=(15, 12))
+        plt.suptitle(f'Quaternion Comparison - Trial {trial_id}')
+        components = ['w', 'x', 'y', 'z']
+        colors = {'madgwick': 'blue', 'kalman': 'red', 'ekf': 'green'}
+        for i, comp in enumerate(components):
+            for filter_name, results in filter_results.items():
+                quat = results['quaternion']
+                if len(quat) > 0:
+                    axes[i].plot(timestamps[:len(quat)], quat[:, i], 
+                                label=f'{filter_name}', color=colors[filter_name])
+            axes[i].set_title(f'Quaternion {comp} component')
+            axes[i].set_xlabel('Time (s)')
+            axes[i].set_ylabel('Value')
+            axes[i].legend()
+            axes[i].grid(True, alpha=0.3)
+        plt.tight_layout()
+        output_path = os.path.join(VISUALIZATION_DIR, f'quaternion_comparison_{trial_id}.png')
+        plt.savefig(output_path, dpi=300)
+        plt.close()
+        fig, axes = plt.subplots(3, 1, figsize=(15, 10))
+        plt.suptitle(f'Orientation (Euler) Comparison - Trial {trial_id}')
+        angles = ['Roll', 'Pitch', 'Yaw']
+        for filter_name, results in filter_results.items():
+            quat = results['quaternion']
+            if len(quat) > 0:
+                euler_angles = []
+                for q in quat:
+                    r = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                    euler_angles.append(r.as_euler('xyz', degrees=True))
+                euler_angles = np.array(euler_angles)
+                for i in range(3):
+                    axes[i].plot(timestamps[:len(euler_angles)], euler_angles[:, i], 
+                                label=f'{filter_name}', color=colors[filter_name])
+        for i, angle in enumerate(angles):
+            axes[i].set_title(f'{angle} angle')
+            axes[i].set_xlabel('Time (s)')
+            axes[i].set_ylabel('Degrees')
+            axes[i].legend()
+            axes[i].grid(True, alpha=0.3)
+        plt.tight_layout()
+        output_path = os.path.join(VISUALIZATION_DIR, f'euler_comparison_{trial_id}.png')
+        plt.savefig(output_path, dpi=300)
+        plt.close()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        filter_names = list(filter_results.keys())
+        processing_times = [results['processing_time'] for results in filter_results.values()]
+        processing_rates = [results['processing_rate'] for results in filter_results.values()]
+        x = np.arange(len(filter_names))
+        width = 0.35
+        ax.bar(x - width/2, processing_times, width, label='Processing Time (s)')
+        ax.bar(x + width/2, processing_rates, width, label='Processing Rate (samples/s)')
+        ax.set_xticks(x)
+        ax.set_xticklabels(filter_names)
+        ax.legend()
+        ax.set_title('Filter Performance Comparison')
+        ax.set_ylabel('Value')
+        plt.tight_layout()
+        output_path = os.path.join(VISUALIZATION_DIR, f'performance_comparison_{trial_id}.png')
+        plt.savefig(output_path, dpi=300)
+        plt.close()
+        logger.info(f"Filter comparison visualizations saved to {VISUALIZATION_DIR}")
+    except Exception as e:
+        logger.error(f"Error creating filter comparison visualizations: {str(e)}")
+
 def hybrid_interpolate(time1, data1, time2, data2, target_time=None, method='linear'):
-    if target_time is None: target_time = time1
+    if target_time is None: 
+        target_time = time1
     try:
         f1 = interp1d(time1, data1, kind=method, axis=0, bounds_error=False, fill_value="extrapolate")
         interp_data1 = f1(target_time)
@@ -108,8 +231,6 @@ def update_thread_configuration(max_workers=None):
         max_workers = min(os.cpu_count(), 8)
     thread_pool = ThreadPoolExecutor(max_workers=max_workers)
     logger.info(f"Thread pool reconfigured with {max_workers} workers")
-
-# --- IMU Filter Implementations (only madgwick, kalman, and ekf) ---
 
 class MadgwickFilter:
     def __init__(self, beta=0.1, sample_rate=30.0):
@@ -450,4 +571,3 @@ def compare_filters(acc_data, gyro_data, timestamps=None):
             'processing_rate': len(acc_data) / elapsed_time
         }
     return results
-

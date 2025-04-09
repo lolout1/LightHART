@@ -1,265 +1,666 @@
-#!/usr/bin/env python
-"""
-main.py
+import os, torch, numpy as np, argparse, logging, json, time, random
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader, Subset
+from torch import nn, optim
+from sklearn.metrics import confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+from collections import defaultdict
+import importlib
+import sys
+import inspect
 
-Main training script for LightHART fall detection with subject‐based cross‐validation.
-Subject splits:
-  - Full training/test pool: [32,39,30,31,33,34,35,37,43,44,45,36,29]
-  - Fixed validation subjects: [38,46]
-  - Fixed training subjects (always in training): [45,36,29]
-  - The remaining 10 subjects (from the pool) are partitioned into 5 folds (2 per fold) with no overlap.
-  
-For each fold:
-  - Test subjects: one disjoint pair from the available pool.
-  - Training subjects: fixed training subjects plus remaining available subjects (excluding the current test pair).
-  - Validation set: fixed subjects [38,46].
-  
-Assumes that the dataset (via UTD_mm and DatasetBuilder) returns a dictionary that includes a key "subject".
-"""
-
-import argparse
-import os
-import random
-import time
-import logging
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
-
-from Feeder.Make_Dataset import UTD_mm
-from Models.fusion_transformer import FusionTransModel
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="LightHART Fall Detection Training with Subject CV")
-    parser.add_argument("--work-dir", type=str, default="results", help="Directory for saving results")
-    parser.add_argument("--phase", type=str, choices=["train", "test"], default="train", help="Training phase")
-    parser.add_argument("--filters", type=str, default="madgwick,kalman,ekf", help="IMU filter types (comma separated)")
-    parser.add_argument("--use-gpu", type=str2bool, default=True, help="Whether to use GPU")
-    parser.add_argument("--device", type=int, default=0, help="GPU device id")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size for training")
-    parser.add_argument("--test-batch-size", type=int, default=32, help="Batch size for testing")
-    parser.add_argument("--num-worker", type=int, default=8, help="Number of DataLoader workers")
-    parser.add_argument("--fuse", type=str2bool, default=True, help="Flag for sensor fusion usage")
-    parser.add_argument("--model", type=str, default="Models.fusion_transformer.FusionTransModel", help="Model module path")
-    parser.add_argument("--optimizer", type=str, default="AdamW", help="Optimizer type")
-    parser.add_argument("--base-lr", type=float, default=0.0005, help="Base learning rate")
-    parser.add_argument("--weight-decay", type=float, default=0.001, help="Weight decay")
-    parser.add_argument("--loss", type=str, default="bce", help="Loss type")
-    parser.add_argument("--max-epoch", type=int, default=100, help="Maximum training epochs")
-    parser.add_argument("--patience", type=int, default=20, help="Early stopping patience")
-    parser.add_argument("--use_features", type=str2bool, default=True,
-                        help="Use extra fusion features (teacher mode) or not (student/inference mode)")
-    args = parser.parse_args()
-    return args
-
-def set_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-def get_model(args):
-    model_args = {
-        "num_layers": 3,
-        "embed_dim": 32,
-        "acc_coords": 3,
-        "quat_coords": 4,
-        "num_classes": 2,
-        "acc_frames": 64,
-        "mocap_frames": 64,
-        "num_heads": 4,
-        "fusion_type": "concat",
-        "dropout": 0.3,
-        "use_batch_norm": True,
-        "feature_dim": 64,
-        "use_features": args.use_features
-    }
-    model = FusionTransModel(**model_args)
-    return model
-
-def get_optimizer(model, args):
-    if args.optimizer.lower() == "adamw":
-        optimizer = optim.AdamW(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
-    else:
-        optimizer = optim.Adam(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
-    return optimizer
-
-# Simple Dataset wrapper for numpy data
-class NumpyDataset(Dataset):
-    def __init__(self, data_dict):
-        self.data = data_dict
-        self.length = self.data["labels"].shape[0]
-    def __len__(self):
-        return self.length
+class FallDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        self.accelerometer = data.get('accelerometer', None)
+        self.gyroscope = data.get('gyroscope', None)
+        self.quaternion = data.get('quaternion', None)
+        self.linear_acceleration = data.get('linear_acceleration', None)
+        self.fusion_features = data.get('fusion_features', None)
+        self.labels = data.get('labels', None)
+        self.subjects = data.get('subjects', None)
+        if self.labels is not None and (self.subjects is None or len(self.subjects) == 0):
+            self.subjects = np.zeros(len(self.labels), dtype=np.int32)
+            logger.warning(f"Created dummy subject IDs for {len(self.labels)} samples")
+        
+    def __len__(self): 
+        return 0 if self.labels is None else len(self.labels)
+        
     def __getitem__(self, idx):
-        sample = {k: self.data[k][idx] for k in self.data if k != "labels"}
-        label = self.data["labels"][idx]
-        return sample, label
+        data_dict = {}
+        # Map to the expected keys for FusionTransModel
+        if hasattr(self, 'accelerometer') and self.accelerometer is not None:
+            data_dict['accelerometer'] = torch.from_numpy(self.accelerometer[idx]).float()
+            data_dict['acc'] = torch.from_numpy(self.accelerometer[idx]).float()
+            
+        if hasattr(self, 'gyroscope') and self.gyroscope is not None:
+            data_dict['gyroscope'] = torch.from_numpy(self.gyroscope[idx]).float()
+            data_dict['gyro'] = torch.from_numpy(self.gyroscope[idx]).float()
+            
+        if hasattr(self, 'quaternion') and self.quaternion is not None:
+            data_dict['quaternion'] = torch.from_numpy(self.quaternion[idx]).float()
+            data_dict['quat'] = torch.from_numpy(self.quaternion[idx]).float()
+            
+        if hasattr(self, 'linear_acceleration') and self.linear_acceleration is not None:
+            data_dict['linear_acceleration'] = torch.from_numpy(self.linear_acceleration[idx]).float()
+            
+        if hasattr(self, 'fusion_features') and self.fusion_features is not None:
+            data_dict['fusion_features'] = torch.from_numpy(self.fusion_features[idx]).float()
+            data_dict['features'] = torch.from_numpy(self.fusion_features[idx]).float()
+            
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        subject = torch.tensor(self.subjects[idx], dtype=torch.long)
+        return data_dict, label, subject
 
-# Split the normalized data dictionary by subject IDs
-def split_data_by_subjects(data, train_subjects, test_subjects, val_subjects):
-    subject_ids = data["subject"]
-    train_idx = [i for i, s in enumerate(subject_ids) if s in train_subjects]
-    test_idx = [i for i, s in enumerate(subject_ids) if s in test_subjects]
-    val_idx = [i for i, s in enumerate(subject_ids) if s in val_subjects]
-    def subset(data, indices):
-        return {k: data[k][indices] for k in data if isinstance(data[k], np.ndarray)}
-    return subset(data, train_idx), subset(data, test_idx), subset(data, val_idx)
+class DataAdapter(nn.Module):
+    def __init__(self, model):
+        super(DataAdapter, self).__init__()
+        self.model = model
+        self.field_mappings = {
+            'accelerometer': 'acc',
+            'gyroscope': 'gyro',
+            'quaternion': 'quat',
+            'fusion_features': 'features'
+        }
+        
+    def forward(self, x):
+        if isinstance(x, dict):
+            adapted_dict = {}
+            for k, v in x.items():
+                adapted_dict[k] = v
+                if k in self.field_mappings and self.field_mappings[k] not in x:
+                    adapted_dict[self.field_mappings[k]] = v
+            try:
+                return self.model(adapted_dict)
+            except KeyError as e:
+                missing_key = str(e).strip("'")
+                logger.error(f"Model expects field '{missing_key}' which is not available. Available fields: {list(adapted_dict.keys())}")
+                if missing_key == 'acc' and 'accelerometer' in adapted_dict:
+                    adapted_dict['acc'] = adapted_dict['accelerometer']
+                elif missing_key == 'gyro' and 'gyroscope' in adapted_dict:
+                    adapted_dict['gyro'] = adapted_dict['gyroscope']
+                elif missing_key == 'quat' and 'quaternion' in adapted_dict:
+                    adapted_dict['quat'] = adapted_dict['quaternion']
+                elif missing_key == 'features' and 'fusion_features' in adapted_dict:
+                    adapted_dict['features'] = adapted_dict['fusion_features']
+                else:
+                    available = list(adapted_dict.keys())
+                    raise KeyError(f"Model requires field '{missing_key}' which is not available. Available fields: {available}")
+                return self.model(adapted_dict)
+        else:
+            return self.model(x)
 
-def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
+def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
-    running_loss = 0.0
-    for batch_idx, (data, label) in enumerate(dataloader):
-        for key in data:
-            data[key] = torch.tensor(data[key]).float().to(device)
-        label = torch.tensor(label).long().to(device)
+    running_loss, correct, total = 0.0, 0, 0
+    all_preds, all_labels = [], []
+    for data, labels, _ in tqdm(loader, desc="Training"):
+        for k, v in data.items():
+            data[k] = v.to(device)
+        labels = labels.to(device)
         optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, label)
+        outputs = model(data)
+        
+        if isinstance(criterion, nn.BCEWithLogitsLoss):
+            if len(outputs.shape) == 2 and outputs.shape[1] == 2:
+                n_labels = outputs.shape[0]
+                target = torch.zeros(n_labels, 2, device=device)
+                target[torch.arange(n_labels), labels] = 1
+                loss = criterion(outputs, target)
+            elif len(outputs.shape) == 2 and outputs.shape[1] == 1:
+                outputs = outputs.squeeze(1)
+                loss = criterion(outputs, labels.float())
+            else:
+                loss = criterion(outputs, labels.float())
+        else:
+            loss = criterion(outputs, labels)
+            
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
-        if batch_idx % 10 == 0:
-            logger.info(f"Epoch {epoch} Batch {batch_idx} Loss: {loss.item():.4f}")
-    return running_loss / len(dataloader)
+        
+        if len(outputs.shape) == 2 and outputs.shape[1] > 1:
+            _, preds = torch.max(outputs, 1)
+        else:
+            preds = (torch.sigmoid(outputs) > 0.5).int()
+            
+        total += labels.size(0)
+        correct += (preds == labels).sum().item()
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+    return running_loss/len(loader), 100*correct/total, all_preds, all_labels
 
-def validate_epoch(model, dataloader, criterion, device):
+def validate(model, loader, criterion, device):
     model.eval()
-    running_loss = 0.0
-    correct = 0
-    total = 0
+    running_loss, correct, total = 0.0, 0, 0
+    all_preds, all_labels = [], []
     with torch.no_grad():
-        for data, label in dataloader:
-            for key in data:
-                data[key] = torch.tensor(data[key]).float().to(device)
-            label = torch.tensor(label).long().to(device)
-            output = model(data)
-            loss = criterion(output, label)
+        for data, labels, _ in tqdm(loader, desc="Validation"):
+            for k, v in data.items():
+                data[k] = v.to(device)
+            labels = labels.to(device)
+            outputs = model(data)
+            
+            if isinstance(criterion, nn.BCEWithLogitsLoss):
+                if len(outputs.shape) == 2 and outputs.shape[1] == 2:
+                    n_labels = outputs.shape[0]
+                    target = torch.zeros(n_labels, 2, device=device)
+                    target[torch.arange(n_labels), labels] = 1
+                    loss = criterion(outputs, target)
+                elif len(outputs.shape) == 2 and outputs.shape[1] == 1:
+                    outputs = outputs.squeeze(1)
+                    loss = criterion(outputs, labels.float())
+                else:
+                    loss = criterion(outputs, labels.float())
+            else:
+                loss = criterion(outputs, labels)
+                
             running_loss += loss.item()
-            _, predicted = torch.max(output, 1)
-            total += label.size(0)
-            correct += (predicted == label).sum().item()
-    accuracy = 100.0 * correct / total if total > 0 else 0
-    return running_loss / len(dataloader), accuracy
+            
+            if len(outputs.shape) == 2 and outputs.shape[1] > 1:
+                _, preds = torch.max(outputs, 1)
+            else:
+                preds = (torch.sigmoid(outputs) > 0.5).int()
+                
+            total += labels.size(0)
+            correct += (preds == labels).sum().item()
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+    return running_loss/len(loader), 100*correct/total, all_preds, all_labels
+
+def create_subject_folds():
+    # Define constant validation subjects
+    val_subjects = [38, 46]
+    
+    # Define subjects that are always in training (no fall data)
+    always_train_subjects = [45, 36, 29]
+    
+    # Define eligible subjects for test (have fall data)
+    eligible_subjects = [32, 39, 30, 31, 33, 34, 35, 37, 43, 44]
+    
+    # Generate folds with 2 test subjects per fold
+    folds = []
+    for i in range(0, len(eligible_subjects), 2):
+        if i + 1 < len(eligible_subjects):
+            test_subjects = [eligible_subjects[i], eligible_subjects[i+1]]
+            train_subjects = always_train_subjects + [s for s in eligible_subjects if s not in test_subjects]
+            folds.append({
+                'test': test_subjects,
+                'val': val_subjects,
+                'train': train_subjects
+            })
+    
+    return folds
+
+def prepare_datasets(args, fold_idx=0):
+    from utils.dataset import split_by_subjects, prepare_smartfallmm
+    
+    # Get subject split for current fold
+    folds = create_subject_folds()
+    if fold_idx >= len(folds):
+        logger.error(f"Fold index {fold_idx} out of range. Max fold: {len(folds)-1}")
+        return None, None, None
+    
+    current_fold = folds[fold_idx]
+    logger.info(f"Fold {fold_idx+1}: Train subjects={current_fold['train']}, "
+               f"Val subjects={current_fold['val']}, Test subjects={current_fold['test']}")
+    
+    # Set subjects argument to include all subjects for data loading
+    all_subjects = current_fold['train'] + current_fold['val'] + current_fold['test']
+    args.subjects = all_subjects
+    
+    try:
+        # Load all data
+        data = split_by_subjects(prepare_smartfallmm(args), all_subjects, args.fuse)
+        
+        if 'subjects' not in data or len(data.get('subjects', [])) == 0:
+            if 'labels' in data:
+                data['subjects'] = np.zeros(len(data['labels']), dtype=np.int32)
+                logger.warning(f"Created {len(data['labels'])} dummy subject IDs")
+        
+        # Create full dataset
+        full_dataset = FallDataset(data)
+        logger.info(f"Dataset loaded with {len(full_dataset)} samples")
+        
+        # Create indices for train, val, test based on subject IDs
+        train_indices = []
+        val_indices = []
+        test_indices = []
+        
+        for i in range(len(full_dataset)):
+            _, _, subject = full_dataset[i]
+            subject = subject.item()
+            if subject in current_fold['train']:
+                train_indices.append(i)
+            elif subject in current_fold['val']:
+                val_indices.append(i)
+            elif subject in current_fold['test']:
+                test_indices.append(i)
+        
+        # Create subset datasets
+        train_set = Subset(full_dataset, train_indices)
+        val_set = Subset(full_dataset, val_indices)
+        test_set = Subset(full_dataset, test_indices)
+        
+        logger.info(f"Split dataset into {len(train_set)} train, {len(val_set)} validation, "
+                   f"and {len(test_set)} test samples")
+        
+        return train_set, val_set, test_set
+        
+    except Exception as e:
+        logger.error(f"Error loading data: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None, None, None
+
+class LSTMModel(nn.Module):
+    def __init__(self, input_channels=3, hidden_channels=64, num_layers=2, dropout=0.5, num_classes=2, use_fusion=True):
+        super(LSTMModel, self).__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_channels,
+            hidden_size=hidden_channels,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0,
+            bidirectional=True
+        )
+        self.fusion_layer = None
+        if use_fusion:
+            self.fusion_layer = nn.Linear(43, hidden_channels*2)
+        self.fc = nn.Linear(hidden_channels * 2, num_classes)
+        
+    def forward(self, x):
+        if isinstance(x, dict):
+            if 'accelerometer' in x:
+                x_acc = x['accelerometer']
+                lstm_out, _ = self.lstm(x_acc)
+                lstm_out = lstm_out[:, -1, :]
+                
+                if self.fusion_layer is not None and 'fusion_features' in x:
+                    fusion_out = self.fusion_layer(x['fusion_features'])
+                    if lstm_out.size() == fusion_out.size():
+                        lstm_out = lstm_out + fusion_out
+                    else:
+                        logger.warning(f"Shape mismatch: lstm_out {lstm_out.size()}, fusion_out {fusion_out.size()}")
+                
+                return self.fc(lstm_out)
+            else:
+                raise ValueError("Accelerometer data is required")
+        else:
+            lstm_out, _ = self.lstm(x)
+            lstm_out = lstm_out[:, -1, :]
+            return self.fc(lstm_out)
+
+def get_model(args):
+    if args.model.startswith('Models.fusion_transformer.FusionTransModel'):
+        try:
+            sys.path.append(os.getcwd())
+            from Models.fusion_transformer import FusionTransModel
+            
+            sig = inspect.signature(FusionTransModel.__init__)
+            params = {}
+            
+            param_mapping = {
+                'input_channels': ['acc_input_dim', 'acc_coords', 'input_dim'],
+                'hidden_channels': ['hidden_dim', 'embed_dim', 'feature_dim'],
+                'num_layers': ['num_layers'],
+                'dropout': ['dropout'], 
+                'num_classes': ['num_classes'],
+            }
+            
+            for arg_name, model_params in param_mapping.items():
+                arg_value = getattr(args, arg_name)
+                for param in model_params:
+                    if param in sig.parameters:
+                        params[param] = arg_value
+            
+            fixed_params = {
+                'acc_frames': 64,
+                'mocap_frames': 64, 
+                'num_heads': 4,
+                'use_batch_norm': True,
+                'use_features': args.use_features,
+                'fusion_type': 'concat',
+                'quat_coords': 4
+            }
+            
+            for param, value in fixed_params.items():
+                if param in sig.parameters:
+                    params[param] = value
+            
+            model = FusionTransModel(**params)
+            return DataAdapter(model)
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize FusionTransModel: {e}")
+            return LSTMModel(
+                input_channels=args.input_channels,
+                hidden_channels=args.hidden_channels,
+                num_layers=args.num_layers,
+                dropout=args.dropout,
+                num_classes=args.num_classes,
+                use_fusion=args.fuse
+            )
+    else:
+        return LSTMModel(
+            input_channels=args.input_channels,
+            hidden_channels=args.hidden_channels,
+            num_layers=args.num_layers,
+            dropout=args.dropout,
+            num_classes=args.num_classes,
+            use_fusion=args.fuse
+        )
+
+def get_loss(args):
+    if args.loss.lower() == 'bce':
+        return nn.BCEWithLogitsLoss()
+    elif args.loss.lower() == 'ce':
+        return nn.CrossEntropyLoss()
+    else:
+        logger.warning(f"Unknown loss {args.loss}, using CrossEntropyLoss")
+        return nn.CrossEntropyLoss()
+
+def get_optimizer(args, model):
+    if args.optimizer.lower() == 'adam':
+        return optim.Adam(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
+    elif args.optimizer.lower() == 'adamw':
+        return optim.AdamW(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
+    elif args.optimizer.lower() == 'sgd':
+        return optim.SGD(model.parameters(), lr=args.base_lr, momentum=0.9, weight_decay=args.weight_decay)
+    else:
+        logger.warning(f"Unknown optimizer {args.optimizer}, using Adam")
+        return optim.Adam(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
 
 def main():
-    args = parse_args()
-    set_seed(args.seed)
-    device = torch.device(f"cuda:{args.device}") if args.use_gpu and torch.cuda.is_available() else torch.device("cpu")
-    logger.info(f"Using device: {device}")
-
-    # Define subject splits:
-    # Full pool (for training/test): [32,39,30,31,33,34,35,37,43,44,45,36,29]
-    full_pool = [32, 39, 30, 31, 33, 34, 35, 37, 43, 44, 45, 36, 29]
-    # Fixed validation subjects:
-    val_subjects = [38, 46]
-    # Fixed training subjects (always training):
-    fixed_train = [45, 36, 29]
-    # Available for test: the remaining from full_pool (excluding fixed training)
-    available_for_test = sorted([s for s in full_pool if s not in fixed_train])
-    # From available_for_test, choose the ones that can serve as test candidates.
-    # Here we assume available_for_test has 10 subjects.
-    # Create 5 folds (2 subjects per fold) with disjoint pairs:
-    folds = [
-        [available_for_test[0], available_for_test[1]],
-        [available_for_test[2], available_for_test[3]],
-        [available_for_test[4], available_for_test[5]],
-        [available_for_test[6], available_for_test[7]],
-        [available_for_test[8], available_for_test[9]]
-    ]
-    logger.info(f"Test folds: {folds}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--fold', type=int, default=0)
+    parser.add_argument('--subjects', type=str, default='30,31,32,33,34,35,37,39,43,44,45,36,29')
+    parser.add_argument('--fuse', type=lambda x: x.lower() == 'true', default=True)
+    parser.add_argument('--filters', type=str, default='madgwick')
+    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--test-batch-size', type=int, default=64)
+    parser.add_argument('--num-worker', type=int, default=4)
+    parser.add_argument('--max-epoch', type=int, default=50)
+    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--base-lr', type=float, default=0.001)
+    parser.add_argument('--weight-decay', type=float, default=0.0001)
+    parser.add_argument('--input-channels', type=int, default=3)
+    parser.add_argument('--hidden-channels', type=int, default=64)
+    parser.add_argument('--num-layers', type=int, default=2)
+    parser.add_argument('--dropout', type=float, default=0.5)
+    parser.add_argument('--num-classes', type=int, default=2)
+    parser.add_argument('--use-gpu', type=lambda x: x.lower() == 'true', default=True)
+    parser.add_argument('--device', type=str, default='0')
+    parser.add_argument('--work-dir', type=str, default='./work_dir/')
+    parser.add_argument('--save-interval', type=int, default=10)
+    parser.add_argument('--phase', type=str, default='train')
+    parser.add_argument('--model', type=str, default='lstm')
+    parser.add_argument('--optimizer', type=str, default='adam')
+    parser.add_argument('--loss', type=str, default='ce')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--use_features', type=lambda x: x.lower() == 'true', default=False)
+    args = parser.parse_args()
     
-    # Create feeder with all subjects in the full pool.
-    feeder = UTD_mm(data_path="data/smartfallmm", fold=1, subjects=full_pool, fuse=args.fuse,
-                    fusion_options={"enabled": True, "filter_type": args.filters.split(",")[0]})
+    # Set seed for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.use_gpu and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     
-    if len(feeder) == 0:
-        logger.error("No samples loaded. Exiting.")
-        return
-    
-    # feeder.prepared_data is assumed to be a dictionary with a "subject" key.
-    data = feeder.prepared_data
-    if "subject" not in data:
-        logger.error("Subject information not found in dataset. Ensure DatasetBuilder adds 'subject' to each sample.")
-        return
-
-    all_fold_metrics = []
-    # Loop over the folds
-    for fold_idx, test_subjects in enumerate(folds, start=1):
-        # Training subjects: fixed_train + available subjects not in test_subjects
-        train_subjects = fixed_train + [s for s in available_for_test if s not in test_subjects]
-        logger.info(f"Fold {fold_idx} split:")
-        logger.info(f"  Train subjects: {train_subjects}")
-        logger.info(f"  Test subjects: {test_subjects}")
-        logger.info(f"  Val subjects: {val_subjects}")
-        
-        train_data, test_data, val_data = split_data_by_subjects(data, train_subjects, test_subjects, val_subjects)
-        if train_data["labels"].shape[0] == 0 or test_data["labels"].shape[0] == 0 or val_data["labels"].shape[0] == 0:
-            logger.error(f"One of the splits is empty in fold {fold_idx}. Skipping this fold.")
-            continue
-        
-        train_dataset = NumpyDataset(train_data)
-        test_dataset = NumpyDataset(test_data)
-        val_dataset = NumpyDataset(val_data)
-        
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_worker)
-        test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False, num_workers=args.num_worker)
-        val_loader = DataLoader(val_dataset, batch_size=args.test_batch_size, shuffle=False, num_workers=args.num_worker)
-        
-        model = get_model(args).to(device)
-        optimizer = get_optimizer(model, args)
-        criterion = nn.CrossEntropyLoss()
-        
-        best_val_loss = float("inf")
-        epochs_no_improve = 0
-        fold_metrics = {"fold": fold_idx, "train_loss": [], "val_loss": [], "val_acc": []}
-        
-        logger.info(f"Starting training for fold {fold_idx}...")
-        for epoch in range(1, args.max_epoch + 1):
-            train_loss = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
-            val_loss, val_acc = validate_epoch(model, val_loader, criterion, device)
-            fold_metrics["train_loss"].append(train_loss)
-            fold_metrics["val_loss"].append(val_loss)
-            fold_metrics["val_acc"].append(val_acc)
-            logger.info(f"Fold {fold_idx} Epoch {epoch}: Train Loss {train_loss:.4f}  Val Loss {val_loss:.4f}  Val Acc {val_acc:.2f}%")
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                epochs_no_improve = 0
-                torch.save(model.state_dict(), os.path.join(args.work_dir, f"fold_{fold_idx}_best_model.pt"))
-            else:
-                epochs_no_improve += 1
-                if epochs_no_improve >= args.patience:
-                    logger.info(f"Early stopping triggered for fold {fold_idx}.")
-                    break
-        
-        test_loss, test_acc = validate_epoch(model, test_loader, criterion, device)
-        fold_metrics["test_loss"] = test_loss
-        fold_metrics["test_acc"] = test_acc
-        logger.info(f"Fold {fold_idx} completed: Test Loss {test_loss:.4f}  Test Acc {test_acc:.2f}%")
-        all_fold_metrics.append(fold_metrics)
-    
-    if all_fold_metrics:
-        avg_test_acc = np.mean([m["test_acc"] for m in all_fold_metrics])
-        logger.info(f"Cross-validation complete. Average Test Accuracy: {avg_test_acc:.2f}%")
+    # Parse filters
+    if hasattr(args, 'filters') and isinstance(args.filters, str):
+        args.filters = args.filters.split(',')
     else:
-        logger.error("No valid folds completed.")
+        args.filters = ['madgwick']
+    
+    # Configure device (GPU or CPU)
+    if args.use_gpu and torch.cuda.is_available():
+        device = torch.device(f'cuda:{args.device}')
+        logger.info(f"Using GPU: {torch.cuda.get_device_name(device)}")
+    else:
+        device = torch.device('cpu')
+        logger.info("Using CPU")
+    
+    # Setup dataset args
+    args.dataset_args = {
+        'age_group': ['young', 'old'],
+        'modalities': ['accelerometer', 'gyroscope'],
+        'sensors': ['watch'],
+        'mode': 'sliding_window',
+        'max_length': 64,
+        'task': 'fd',
+        'fusion_options': {
+            'enabled': args.fuse,
+            'filter_type': args.filters[0] if args.filters else 'madgwick',
+            'visualize': False,
+            'save_aligned': True,
+        }
+    }
+    
+    # Create working directory for the fold
+    fold_work_dir = os.path.join(args.work_dir, f'fold_{args.fold}')
+    os.makedirs(fold_work_dir, exist_ok=True)
+    with open(os.path.join(fold_work_dir, 'args.json'), 'w') as f:
+        json.dump(vars(args), f, indent=4)
+    
+    # Generate folds information and save it
+    folds = create_subject_folds()
+    with open(os.path.join(args.work_dir, 'folds.json'), 'w') as f:
+        json.dump(folds, f, indent=4)
+    
+    if args.phase.lower() == 'train':
+        # Load datasets with subject-based split
+        train_set, val_set, test_set = prepare_datasets(args, args.fold)
+        
+        if train_set is None or val_set is None or test_set is None:
+            logger.error("Error preparing datasets. Exiting.")
+            return
+            
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, 
+                                num_workers=args.num_worker, pin_memory=True)
+        val_loader = DataLoader(val_set, batch_size=args.test_batch_size, shuffle=False, 
+                              num_workers=args.num_worker, pin_memory=True)
+        test_loader = DataLoader(test_set, batch_size=args.test_batch_size, shuffle=False,
+                               num_workers=args.num_worker, pin_memory=True)
+        
+        # Initialize model, loss, optimizer, and scheduler
+        model = get_model(args).to(device)
+        criterion = get_loss(args)
+        optimizer = get_optimizer(args, model)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 'min', patience=args.patience//2, factor=0.5, verbose=True)
+        
+        best_val_acc, best_epoch, best_test_acc = 0, 0, 0
+        results = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'test_acc': []}
+        early_stop_counter = 0
+        
+        for epoch in range(args.max_epoch):
+            logger.info(f"Epoch {epoch+1}/{args.max_epoch}")
+            start_time = time.time()
+            
+            try:
+                # Training phase
+                train_loss, train_acc, train_preds, train_labels = train_epoch(
+                    model, train_loader, criterion, optimizer, device)
+                
+                # Validation phase
+                val_loss, val_acc, val_preds, val_labels = validate(
+                    model, val_loader, criterion, device)
+                
+                # Test phase during training (for monitoring only)
+                test_loss, test_acc, test_preds, test_labels = validate(
+                    model, test_loader, criterion, device)
+                
+                scheduler.step(val_loss)
+                epoch_time = time.time() - start_time
+                
+                results['train_loss'].append(train_loss)
+                results['train_acc'].append(train_acc)
+                results['val_loss'].append(val_loss)
+                results['val_acc'].append(val_acc)
+                results['test_acc'].append(test_acc)
+                
+                logger.info(f"Epoch {epoch+1}: Train Loss={train_loss:.4f}, Train Acc={train_acc:.2f}%, "
+                          f"Val Loss={val_loss:.4f}, Val Acc={val_acc:.2f}%, "
+                          f"Test Acc={test_acc:.2f}% [Time: {epoch_time:.2f}s]")
+                
+                # Save best model based on validation accuracy
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_test_acc = test_acc
+                    best_epoch = epoch
+                    early_stop_counter = 0
+                    
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'state_dict': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'scheduler': scheduler.state_dict(),
+                        'val_acc': val_acc,
+                        'test_acc': test_acc,
+                    }, os.path.join(fold_work_dir, 'best_model.pth'))
+                    
+                    logger.info(f"Best model saved with validation accuracy: {val_acc:.2f}%, "
+                              f"test accuracy: {test_acc:.2f}%")
+                    
+                    # Save confusion matrices for validation and test sets
+                    plt.figure(figsize=(10, 8))
+                    cm_val = confusion_matrix(val_labels, val_preds)
+                    plt.imshow(cm_val, interpolation='nearest', cmap=plt.cm.Blues)
+                    plt.title('Validation Confusion Matrix')
+                    plt.colorbar()
+                    plt.tight_layout()
+                    plt.ylabel('True label')
+                    plt.xlabel('Predicted label')
+                    plt.savefig(os.path.join(fold_work_dir, 'val_confusion_matrix.png'))
+                    plt.close()
+                    
+                    plt.figure(figsize=(10, 8))
+                    cm_test = confusion_matrix(test_labels, test_preds)
+                    plt.imshow(cm_test, interpolation='nearest', cmap=plt.cm.Blues)
+                    plt.title('Test Confusion Matrix')
+                    plt.colorbar()
+                    plt.tight_layout()
+                    plt.ylabel('True label')
+                    plt.xlabel('Predicted label')
+                    plt.savefig(os.path.join(fold_work_dir, 'test_confusion_matrix.png'))
+                    plt.close()
+                    
+                    # Save classification reports for validation and test sets
+                    val_report = classification_report(val_labels, val_preds, output_dict=True)
+                    with open(os.path.join(fold_work_dir, 'val_classification_report.json'), 'w') as f:
+                        json.dump(val_report, f, indent=4)
+                    
+                    test_report = classification_report(test_labels, test_preds, output_dict=True)
+                    with open(os.path.join(fold_work_dir, 'test_classification_report.json'), 'w') as f:
+                        json.dump(test_report, f, indent=4)
+                else:
+                    early_stop_counter += 1
+                
+                # Save regular checkpoints
+                if (epoch + 1) % args.save_interval == 0:
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'state_dict': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'scheduler': scheduler.state_dict(),
+                        'val_acc': val_acc,
+                        'test_acc': test_acc,
+                    }, os.path.join(fold_work_dir, f'checkpoint_epoch{epoch+1}.pth'))
+                
+                # Early stopping check
+                if early_stop_counter >= args.patience:
+                    logger.info(f"Early stopping triggered (no improvement for {args.patience} epochs)")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"Error during epoch {epoch+1}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                continue
+        
+        # Save training history plots and summary
+        try:
+            plt.figure(figsize=(15, 5))
+            plt.subplot(1, 2, 1)
+            plt.plot(results['train_loss'], label='Train')
+            plt.plot(results['val_loss'], label='Validation')
+            plt.title('Loss')
+            plt.legend()
+
+            plt.subplot(1, 2, 2)
+            plt.plot(results['train_acc'], label='Train')
+            plt.plot(results['val_acc'], label='Validation')
+            plt.plot(results['test_acc'], label='Test')
+            plt.title('Accuracy')
+            plt.legend()
+
+            plt.tight_layout()
+            plt.savefig(os.path.join(args.work_dir, f'training_history_fold{args.fold}.png'))
+            plt.close()
+        except Exception as e:
+            logger.error(f"Error saving training plots: {e}")
+
+        logger.info(f"Training completed. Best validation accuracy: {best_val_acc:.2f}% at epoch {best_epoch+1}")
+    
+    # Test phase: Load best model and evaluate on the test set only
+    elif args.phase.lower() == 'test':
+        logger.info(f"Testing fold {args.fold}")
+        
+        # Load datasets with subject-based split (test set only)
+        _, _, test_set = prepare_datasets(args, args.fold)
+        if test_set is None:
+            logger.error("Error preparing test dataset. Exiting.")
+            return
+            
+        test_loader = DataLoader(test_set, batch_size=args.test_batch_size, shuffle=False,
+                                 num_workers=args.num_worker, pin_memory=True)
+        
+        # Load best model from the fold directory
+        fold_work_dir = os.path.join(args.work_dir, f'fold_{args.fold}')
+        model_path = os.path.join(fold_work_dir, 'best_model.pth')
+        if not os.path.exists(model_path):
+            logger.error(f"Best model not found at {model_path}. Exiting.")
+            return
+        
+        checkpoint = torch.load(model_path, map_location=device)
+        model = get_model(args).to(device)
+        model.load_state_dict(checkpoint['state_dict'])
+        logger.info(f"Loaded best model from {model_path} with validation accuracy {checkpoint.get('val_acc', 'N/A')}% and test accuracy {checkpoint.get('test_acc', 'N/A')}%")
+        
+        # Evaluate the test set
+        test_loss, test_acc, test_preds, test_labels = validate(model, test_loader, get_loss(args), device)
+        logger.info(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.2f}%")
+        
+        # Compute confusion matrix and classification report
+        cm_test = confusion_matrix(test_labels, test_preds)
+        test_report = classification_report(test_labels, test_preds, output_dict=True)
+        
+        try:
+            plt.figure(figsize=(10, 8))
+            plt.imshow(cm_test, interpolation='nearest', cmap=plt.cm.Blues)
+            plt.title('Test Confusion Matrix')
+            plt.colorbar()
+            plt.tight_layout()
+            plt.ylabel('True label')
+            plt.xlabel('Predicted label')
+            plt.savefig(os.path.join(fold_work_dir, 'test_confusion_matrix.png'))
+            plt.close()
+        except Exception as e:
+            logger.error(f"Error saving test confusion matrix: {e}")
+        
+        try:
+            with open(os.path.join(fold_work_dir, 'test_classification_report.json'), 'w') as f:
+                json.dump(test_report, f, indent=4)
+        except Exception as e:
+            logger.error(f"Error saving test classification report: {e}")
+    
+    else:
+        logger.error(f"Unknown phase: {args.phase}")
 
 if __name__ == "__main__":
     main()
