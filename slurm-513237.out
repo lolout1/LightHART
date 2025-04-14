@@ -1,0 +1,156 @@
+# Parameters: 291344
+Model size: 0.28 MB
+Parameters: 
+{'config': './config/smartfallmm/student.yaml', 'dataset': 'utd', 'batch_size': 32, 'test_batch_size': 8, 'val_batch_size': 8, 'num_epoch': 100, 'start_epoch': 0, 'optimizer': 'Adam', 'base_lr': 0.0005, 'weight_decay': 0.0001, 'model': 'Models.transformer.OptimizedFallDetector', 'device': [0], 'model_args': {'mocap_frames': 128, 'acc_frames': 128, 'num_classes': 1, 'num_heads': 4, 'acc_coords': 4, 'num_layer': 2, 'embed_dim': 64, 'dropout': 0.3, 'activation': 'gelu'}, 'weights': None, 'model_saved_name': 'ttfstudent', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'age_group': ['young'], 'modalities': ['accelerometer'], 'sensors': ['watch'], 'mode': 'avg_pool', 'max_length': 128, 'task': 'fd'}, 'subjects': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 32}, 'val_feeder_args': {'batch_size': 32}, 'test_feeder_args': {'batch_size': 32}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'exps/smartfall_fall_wokd/student/watch_not_distilled_cross_together_2025-04-14_03-47-00', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None}
+
+Model Parameters: 291344
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A07T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A12T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A13T04.csv: Number of samples, -193, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A05T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A01T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A04T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A06T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A05T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A10T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A06T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A01T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A11T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A08T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A11T03.csv: Number of samples, -106, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A14T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A09T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A10T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A12T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A05T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A13T03.csv: Number of samples, -193, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A05T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A10T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A10T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A12T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A13T02.csv: Number of samples, -193, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A07T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A01T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A01T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A03T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A14T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A10T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A03T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A07T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A11T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A07T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A02T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A09T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A07T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A11T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A14T01.csv: Number of samples, -107, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A13T01.csv: Number of samples, -193, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A01T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A06T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A14T03.csv: Number of samples, -107, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A12T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A10T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A14T05.csv: Number of samples, -107, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A09T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A02T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A14T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A05T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A01T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A12T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A03T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A12T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A14T04.csv: Number of samples, -107, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A08T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A09T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A09T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A07T06.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A07T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A03T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A02T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A07T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A06T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A01T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A07T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A12T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A06T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A03T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A13T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A08T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A02T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A02T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A01T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A08T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A14T02.csv: Number of samples, -107, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A03T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A02T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A01T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A07T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A04T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A03T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A11T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A03T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A02T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A08T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A08T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A11T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A12T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A13T05.csv: Number of samples, -193, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A11T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A09T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A10T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A05T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A13T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A03T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A09T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A04T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A02T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A06T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A06T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A07T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A10T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A03T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A05T01.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A09T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A09T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A01T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A11T04.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A12T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A08T02.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A05T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A10T02.csv: Number of samples, -8, must be non-negative.
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A04T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A09T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S38A12T05.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A04T03.csv: Expect x to not have duplicates
+Error processing /mmfs1/home/sww35/testWatchAcc/LightHART/data/smartfallmm/young/accelerometer/watch/S46A10T04.csv: Number of samples, -104, must be non-negative.
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 460, in <module>
+    trainer.start()
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 407, in start
+    if not self.load_data():
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 188, in load_data
+    self.norm_val = split_by_subjects(builder, self.val_subject, self.fuse)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/utils/dataset.py", line 135, in split_by_subjects
+    builder.make_dataset(subjects, fuse)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/utils/loader.py", line 82, in make_dataset
+    self.data['accelerometer'] = np.concatenate(acc_data_all, axis=0)
+ValueError: all the input arrays must have same number of dimensions, but the array at index 0 has 3 dimension(s) and the array at index 1 has 1 dimension(s)
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 78, in import_class
+    return getattr(sys.modules[mod_str], class_str)
+AttributeError: module 'Models.transformer' has no attribute 'TransModel'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 289, in <module>
+    trainer = Distiller(arg)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 118, in __init__
+    super().__init__(arg)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 115, in __init__
+    self.model = self.load_model(arg.model, arg.model_args)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 154, in load_model
+    Model = import_class(model)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 80, in import_class
+    raise ImportError('Class %s cannot be found (%s)' % (class_str, traceback.format_exception(*sys.exc_info())))
+ImportError: Class TransModel cannot be found (['Traceback (most recent call last):\n', '  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 78, in import_class\n    return getattr(sys.modules[mod_str], class_str)\n', "AttributeError: module 'Models.transformer' has no attribute 'TransModel'\n"])

@@ -6,7 +6,6 @@ import os
 import time
 import datetime
 import shutil
-import matplotlib as plt
 import argparse
 import yaml
 from copy import deepcopy
@@ -102,7 +101,7 @@ class Trainer():
         self.norm_val = None
         self.norm_test = None
         self.data_loader = dict()
-        self.early_stop = EarlyStopping(patience=15, min_delta=.001)  # Remove 'monitor' parameter
+        self.early_stop = EarlyStopping(patience=15, min_delta=.001, monitor='recall')
         self.inertial_modality = [modality for modality in arg.dataset_args['modalities'] if modality != 'skeleton']
         self.fuse = len(self.inertial_modality) > 1
         

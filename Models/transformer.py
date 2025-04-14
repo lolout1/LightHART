@@ -18,7 +18,7 @@ class TemporalAttention(nn.Module):
         return context
 
 class OptimizedFallDetector(nn.Module):
-    def __init__(self, mocap_frames=128, num_joints=32, acc_frames=128, num_classes=1, num_heads=4, 
+    def __init__(self, mocap_frames=64, num_joints=32, acc_frames=64, num_classes=1, num_heads=4, 
                  acc_coords=4, num_layer=2, embed_dim=64, activation='gelu', dropout=0.3, **kwargs):
         super().__init__()
         
@@ -61,3 +61,6 @@ class OptimizedFallDetector(nn.Module):
         context = self.temporal_attn(features)
         logits = self.classifier(context)
         return logits, features
+
+class TransModel(OptimizedFallDetector):
+    pass
