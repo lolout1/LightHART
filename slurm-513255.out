@@ -1,0 +1,37 @@
+2025-04-14 04:54:18,435 - ERROR - Fatal error: Class OptimizedFallDetector cannot be found (['Traceback (most recent call last):\n', '  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 80, in import_class\n    return getattr(sys.modules[mod_str], class_str)\n', "AttributeError: module 'Models.transformer' has no attribute 'OptimizedFallDetector'\n"])
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 80, in import_class
+    return getattr(sys.modules[mod_str], class_str)
+AttributeError: module 'Models.transformer' has no attribute 'OptimizedFallDetector'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 821, in <module>
+    trainer = Trainer(arg)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 252, in __init__
+    self.model = self.load_model(arg.model, arg.model_args)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 319, in load_model
+    Model = import_class(model)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 82, in import_class
+    raise ImportError('Class %s cannot be found (%s)' % (class_str, traceback.format_exception(*sys.exc_info())))
+ImportError: Class OptimizedFallDetector cannot be found (['Traceback (most recent call last):\n', '  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 80, in import_class\n    return getattr(sys.modules[mod_str], class_str)\n', "AttributeError: module 'Models.transformer' has no attribute 'OptimizedFallDetector'\n"])
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 80, in import_class
+    return getattr(sys.modules[mod_str], class_str)
+AttributeError: module 'Models.transformer' has no attribute 'TransModel'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 289, in <module>
+    trainer = Distiller(arg)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 118, in __init__
+    super().__init__(arg)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 252, in __init__
+    self.model = self.load_model(arg.model, arg.model_args)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 319, in load_model
+    Model = import_class(model)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 82, in import_class
+    raise ImportError('Class %s cannot be found (%s)' % (class_str, traceback.format_exception(*sys.exc_info())))
+ImportError: Class TransModel cannot be found (['Traceback (most recent call last):\n', '  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 80, in import_class\n    return getattr(sys.modules[mod_str], class_str)\n', "AttributeError: module 'Models.transformer' has no attribute 'TransModel'\n"])

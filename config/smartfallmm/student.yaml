@@ -4,7 +4,7 @@ model_args:
   mocap_frames: 128
   acc_frames: 128
   num_classes: 1
-  num_heads: 4
+  num_heads: 2
   acc_coords: 4
   num_layer: 2
   embed_dim: 64
@@ -15,7 +15,7 @@ dataset_args:
   age_group: ['young']
   modalities: ['accelerometer']
   sensors: ['watch']
-  mode: 'avg_pool'
+  mode: 'sliding_window'
   max_length: 128
   task: 'fd'
 
@@ -24,8 +24,7 @@ weight_decay: 0.0001
 batch_size: 32
 num_epoch: 100
 
-subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-
+subjects: [29,30, 31,33,45, 46, 34,37, 39, 38, 43, 35, 36, 44, 34, 32]
 feeder: Feeder.Make_Dataset.UTD_mm
 train_feeder_args:
   batch_size: 32

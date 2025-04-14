@@ -1,0 +1,130 @@
+2025-04-14 04:25:41,083 - INFO - # Parameters: 291344
+2025-04-14 04:25:41,156 - INFO - Model size: 0.28 MB
+2025-04-14 04:25:41,156 - INFO - Parameters: 
+{'config': './config/smartfallmm/student.yaml', 'dataset': 'utd', 'batch_size': 32, 'test_batch_size': 8, 'val_batch_size': 8, 'num_epoch': 100, 'start_epoch': 0, 'optimizer': 'Adam', 'base_lr': 0.001, 'weight_decay': 0.0001, 'model': 'Models.transformer.OptimizedFallDetector', 'device': [0], 'model_args': {'mocap_frames': 128, 'acc_frames': 128, 'num_classes': 1, 'num_heads': 4, 'acc_coords': 4, 'num_layer': 2, 'embed_dim': 64, 'dropout': 0.3, 'activation': 'gelu'}, 'weights': None, 'model_saved_name': 'ttfstudent', 'loss': 'loss.BCE', 'loss_args': '{}', 'dataset_args': {'age_group': ['young'], 'modalities': ['accelerometer'], 'sensors': ['watch'], 'mode': 'sliding_window', 'max_length': 128, 'task': 'fd'}, 'subjects': [29, 30, 31, 33, 45, 46, 34, 37, 39, 38, 43, 35, 36, 44, 34, 32], 'feeder': 'Feeder.Make_Dataset.UTD_mm', 'train_feeder_args': {'batch_size': 32}, 'val_feeder_args': {'batch_size': 32}, 'test_feeder_args': {'batch_size': 32}, 'include_val': True, 'seed': 2, 'log_interval': 10, 'work_dir': 'exps/smartfall_fall_wokd/student/watch_not_distilled_cross_together_2025-04-14_04-25-39', 'print_log': True, 'phase': 'train', 'num_worker': 0, 'result_file': None, 'use_peak_detection': True, 'peak_height': 1.5, 'peak_distance': 50}
+
+2025-04-14 04:25:41,158 - INFO - ===== Starting fold with test subject 32 =====
+2025-04-14 04:25:41,158 - INFO - Train subjects: [45, 36, 29, 39, 30, 31, 33, 34, 35, 37, 43, 44]
+2025-04-14 04:25:41,158 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,162 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,169 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,170 - INFO - Skipping subject 32 due to data loading issues
+2025-04-14 04:25:41,170 - INFO - ===== Starting fold with test subject 39 =====
+2025-04-14 04:25:41,170 - INFO - Train subjects: [45, 36, 29, 32, 30, 31, 33, 34, 35, 37, 43, 44]
+2025-04-14 04:25:41,170 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,173 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,177 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,177 - INFO - Skipping subject 39 due to data loading issues
+2025-04-14 04:25:41,177 - INFO - ===== Starting fold with test subject 30 =====
+2025-04-14 04:25:41,177 - INFO - Train subjects: [45, 36, 29, 32, 39, 31, 33, 34, 35, 37, 43, 44]
+2025-04-14 04:25:41,177 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,181 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,184 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,184 - INFO - Skipping subject 30 due to data loading issues
+2025-04-14 04:25:41,185 - INFO - ===== Starting fold with test subject 31 =====
+2025-04-14 04:25:41,185 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 33, 34, 35, 37, 43, 44]
+2025-04-14 04:25:41,185 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,189 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,193 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,193 - INFO - Skipping subject 31 due to data loading issues
+2025-04-14 04:25:41,193 - INFO - ===== Starting fold with test subject 33 =====
+2025-04-14 04:25:41,193 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 31, 34, 35, 37, 43, 44]
+2025-04-14 04:25:41,193 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,196 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,200 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,200 - INFO - Skipping subject 33 due to data loading issues
+2025-04-14 04:25:41,200 - INFO - ===== Starting fold with test subject 34 =====
+2025-04-14 04:25:41,200 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 31, 33, 35, 37, 43, 44]
+2025-04-14 04:25:41,200 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,204 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,208 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,208 - INFO - Skipping subject 34 due to data loading issues
+2025-04-14 04:25:41,208 - INFO - ===== Starting fold with test subject 35 =====
+2025-04-14 04:25:41,208 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 31, 33, 34, 37, 43, 44]
+2025-04-14 04:25:41,208 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,211 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,215 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,215 - INFO - Skipping subject 35 due to data loading issues
+2025-04-14 04:25:41,215 - INFO - ===== Starting fold with test subject 37 =====
+2025-04-14 04:25:41,215 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 31, 33, 34, 35, 43, 44]
+2025-04-14 04:25:41,215 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,275 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,279 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,279 - INFO - Skipping subject 37 due to data loading issues
+2025-04-14 04:25:41,279 - INFO - ===== Starting fold with test subject 43 =====
+2025-04-14 04:25:41,279 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 31, 33, 34, 35, 37, 44]
+2025-04-14 04:25:41,279 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,283 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,286 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,287 - INFO - Skipping subject 43 due to data loading issues
+2025-04-14 04:25:41,287 - INFO - ===== Starting fold with test subject 44 =====
+2025-04-14 04:25:41,287 - INFO - Train subjects: [45, 36, 29, 32, 39, 30, 31, 33, 34, 35, 37, 43]
+2025-04-14 04:25:41,287 - INFO - Val subjects: [38, 46]
+2025-04-14 04:25:41,290 - INFO - Model Parameters: 291344
+2025-04-14 04:25:41,294 - ERROR - Error loading data: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 234, in load_data
+    self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse,
+TypeError: split_by_subjects() got an unexpected keyword argument 'use_peak_detection'
+2025-04-14 04:25:41,294 - INFO - Skipping subject 44 due to data loading issues
+2025-04-14 04:25:41,371 - ERROR - Error creating overall visualization: could not convert string to float: 'Average'
+2025-04-14 04:25:45,375 - INFO - # Parameters: 75408
+2025-04-14 04:25:45,444 - INFO - Model size: 0.07 MB
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 289, in <module>
+    trainer = Distiller(arg)
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 120, in __init__
+    self.cross_aligner  = self.load_aligner()
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 127, in load_aligner
+    return CrossModalAligner(feature_dim=arg.model_args['embed_dim']).to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+  File "/home/sww35/.local/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1343, in to
+    return self._apply(convert)
+  File "/home/sww35/.local/lib/python3.9/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  File "/home/sww35/.local/lib/python3.9/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  File "/home/sww35/.local/lib/python3.9/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    param_applied = fn(param)
+  File "/home/sww35/.local/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1329, in convert
+    return t.to(
+RuntimeError: CUDA error: invalid device ordinal
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+

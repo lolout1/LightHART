@@ -1,0 +1,11 @@
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 690
+    
+    ^
+SyntaxError: unexpected EOF while parsing
+Traceback (most recent call last):
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/distiller.py", line 26, in <module>
+    from main import Trainer, str2bool, init_seed, import_class
+  File "/mmfs1/home/sww35/testWatchAcc/LightHART/main.py", line 689
+    trainer.start()
+                   ^
+SyntaxError: unexpected EOF while parsing
