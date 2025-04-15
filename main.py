@@ -227,53 +227,97 @@ def prepare_datasets(args, fold_idx=0):
     if fold_idx >= len(folds):
         logger.error(f"Fold index {fold_idx} out of range. Max fold: {len(folds)-1}")
         return None, None, None
+    
+    # Load data first to check available subjects
     current_fold = folds[fold_idx]
     logger.info(f"Fold {fold_idx+1}/{len(folds)}: Train subjects={current_fold['train']}, "
                f"Val subjects={current_fold['val']}, Test subjects={current_fold['test']}")
-    all_subjects = current_fold['train'] + current_fold['val'] + current_fold['test']
-    args.subjects = all_subjects
+    
+    # Use all subjects for initial data loading
+    all_eligible_subjects = sum([fold['train'] + fold['val'] + fold['test'] for fold in folds], [])
+    args.subjects = list(set(all_eligible_subjects))  # Remove duplicates
+    
     try:
         if hasattr(args, 'dataset_args') and 'fusion_options' in args.dataset_args:
             args.dataset_args['fusion_options']['filter_type'] = args.filter_type
             args.dataset_args['fusion_options']['visualize'] = args.visualize
             logger.info(f"Using filter type: {args.filter_type} for data alignment and fusion with visualize={args.visualize}")
+        
         logger.info(f"Loading and preprocessing data with filter: {args.filter_type}")
         start_time = time.time()
         is_raw_acc = True
         if 'fusion_options' in args.dataset_args:
             args.dataset_args['fusion_options']['is_raw_acc'] = is_raw_acc
-        data = split_by_subjects(prepare_smartfallmm(args), all_subjects, args.fuse)
+        
+        data = split_by_subjects(prepare_smartfallmm(args), args.subjects, args.fuse)
         logger.info(f"Data loading completed in {time.time() - start_time:.2f} seconds")
+        
         if 'subjects' not in data or len(data.get('subjects', [])) == 0:
             if 'labels' in data:
                 data['subjects'] = np.zeros(len(data['labels']), dtype=np.int32)
                 logger.warning(f"Created {len(data['labels'])} dummy subject IDs")
+        
+        # Find which subjects actually exist in the data
+        available_subjects = set(np.unique(data['subjects']).astype(int))
+        logger.info(f"Available subjects in dataset: {sorted(available_subjects)}")
+        
+        # Adjust fold assignment based on available subjects
+        adjusted_fold = {
+            'train': [s for s in current_fold['train'] if s in available_subjects],
+            'val': [s for s in current_fold['val'] if s in available_subjects],
+            'test': [s for s in current_fold['test'] if s in available_subjects]
+        }
+        
+        # If test is empty, take one subject from train
+        if not adjusted_fold['test'] and adjusted_fold['train']:
+            # Move one subject from train to test (preferably from eligible_subjects)
+            eligible_test = [s for s in adjusted_fold['train'] 
+                            if s in [32, 39, 30, 31, 33, 34, 35, 37, 43, 44] and s not in [45, 36, 29]]
+            if eligible_test:
+                test_subject = eligible_test[0]
+            else:
+                test_subject = adjusted_fold['train'][0]
+            
+            adjusted_fold['test'] = [test_subject]
+            adjusted_fold['train'].remove(test_subject)
+            logger.info(f"Reassigned subject {test_subject} from train to test set")
+        
+        logger.info(f"Adjusted fold: Train={adjusted_fold['train']}, "
+                   f"Val={adjusted_fold['val']}, Test={adjusted_fold['test']}")
+        
         for key, value in data.items():
             if isinstance(value, np.ndarray):
                 logger.info(f"Loaded modality '{key}' with shape {value.shape}")
+        
         full_dataset = FallDataset(data)
         logger.info(f"Dataset loaded with {len(full_dataset)} samples")
+        
         train_indices, val_indices, test_indices = [], [], []
         for i in range(len(full_dataset)):
             _, _, subject = full_dataset[i]
             subject = subject.item()
-            if subject in current_fold['train']:
+            if subject in adjusted_fold['train']:
                 train_indices.append(i)
-            elif subject in current_fold['val']:
+            elif subject in adjusted_fold['val']:
                 val_indices.append(i)
-            elif subject in current_fold['test']:
+            elif subject in adjusted_fold['test']:
                 test_indices.append(i)
+        
         train_set = Subset(full_dataset, train_indices)
         val_set = Subset(full_dataset, val_indices)
         test_set = Subset(full_dataset, test_indices)
+        
         log_dataset_statistics(train_set, "Training")
         log_dataset_statistics(val_set, "Validation")
         log_dataset_statistics(test_set, "Test")
+        
         logger.info(f"Split dataset into {len(train_set)} train, {len(val_set)} validation, "
                    f"and {len(test_set)} test samples")
+        
         if len(train_set) == 0 or len(val_set) == 0 or len(test_set) == 0:
             logger.warning(f"Skipping fold {fold_idx} due to empty dataset split")
             return None, None, None
+        
         return train_set, val_set, test_set
     except Exception as e:
         logger.error(f"Error loading data: {str(e)}")
