@@ -3,7 +3,8 @@ results_hybrid/
 results_comparison/
 fused/
 debug_logs/
-
+*__pycache__
+__pycache__
 # Ignore all files with the .out extension
 *.out
 *.log
