@@ -21,6 +21,7 @@ class FallDataset(Dataset):
         self.gyroscope = data.get('gyroscope', None)
         self.quaternion = data.get('quaternion', None)
         self.linear_acceleration = data.get('linear_acceleration', None)
+        self.raw_acceleration = data.get('raw_acceleration', None)
         self.fusion_features = data.get('fusion_features', None)
         self.labels = data.get('labels', None)
         self.subjects = data.get('subjects', None)
@@ -46,6 +47,9 @@ class FallDataset(Dataset):
             
         if hasattr(self, 'linear_acceleration') and self.linear_acceleration is not None:
             data_dict['linear_acceleration'] = torch.from_numpy(self.linear_acceleration[idx]).float()
+            
+        if hasattr(self, 'raw_acceleration') and self.raw_acceleration is not None:
+            data_dict['raw_acceleration'] = torch.from_numpy(self.raw_acceleration[idx]).float()
             
         if hasattr(self, 'fusion_features') and self.fusion_features is not None:
             data_dict['fusion_features'] = torch.from_numpy(self.fusion_features[idx]).float()
@@ -154,7 +158,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
     
     if len(loader) == 0:
         logger.warning("Training loader is empty - skipping epoch")
-        return 0.0, [], []
+        return 0.0, [], [], {}
         
     for batch_idx, (data, labels, _) in enumerate(tqdm(loader, desc="Training")):
         for k, v in data.items():
@@ -195,7 +199,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
             logger.info(f"Train Batch {batch_idx}/{len(loader)}: Loss={loss.item():.4f}")
     
     if total == 0:
-        return 0.0, [], []
+        return 0.0, [], [], {}
     
     epoch_loss = running_loss / len(loader)
     metrics = calculate_metrics(all_labels, all_preds)
@@ -209,7 +213,7 @@ def validate(model, loader, criterion, device, prefix="val"):
     
     if len(loader) == 0:
         logger.warning(f"{prefix.capitalize()} loader is empty - skipping evaluation")
-        return 0.0, [], []
+        return 0.0, [], [], {}
         
     with torch.no_grad():
         for data, labels, _ in tqdm(loader, desc=f"{prefix.capitalize()}"):
@@ -245,7 +249,7 @@ def validate(model, loader, criterion, device, prefix="val"):
             all_labels.extend(labels.cpu().numpy())
     
     if total == 0:
-        return 0.0, [], []
+        return 0.0, [], [], {}
     
     epoch_loss = running_loss / len(loader)
     metrics = calculate_metrics(all_labels, all_preds)
@@ -317,6 +321,10 @@ def prepare_datasets(args, fold_idx=0):
         
         logger.info(f"Loading and preprocessing data with filter: {args.filter_type}")
         start_time = time.time()
+        is_raw_acc = True
+        if 'fusion_options' in args.dataset_args:
+            args.dataset_args['fusion_options']['is_raw_acc'] = is_raw_acc
+        
         data = split_by_subjects(prepare_smartfallmm(args), all_subjects, args.fuse)
         logger.info(f"Data loading completed in {time.time() - start_time:.2f} seconds")
         
@@ -393,8 +401,8 @@ def get_model(args):
                         params[param] = arg_value
             
             fixed_params = {
-                'acc_frames': 64,
-                'mocap_frames': 64, 
+                'acc_frames': 128,
+                'mocap_frames': 128, 
                 'num_heads': 4,
                 'use_batch_norm': True,
                 'use_features': args.use_features,
@@ -558,7 +566,7 @@ def get_optimizer(args, model):
 
 def plot_metrics(fold_work_dir, metrics_history, title_prefix=""):
     try:
-        if len(metrics_history.get('train_loss', [])) == 0:
+        if not metrics_history or len(metrics_history.get('train_loss', [])) == 0:
             logger.warning("No training metrics to plot")
             return
         
@@ -568,9 +576,10 @@ def plot_metrics(fold_work_dir, metrics_history, title_prefix=""):
         
         plt.subplot(2, 2, 1)
         plt.plot(epochs, metrics_history['train_loss'], 'b-', label='Training Loss')
-        plt.plot(epochs, metrics_history['val_loss'], 'r-', label='Validation Loss')
-        if 'test_loss' in metrics_history and len(metrics_history['test_loss']) > 0:
-            plt.plot(epochs, metrics_history['test_loss'], 'g-', label='Test Loss')
+        if 'val_loss' in metrics_history and metrics_history.get('val_loss', []) and len(metrics_history['val_loss']) > 0:
+            plt.plot(epochs[:len(metrics_history['val_loss'])], metrics_history['val_loss'], 'r-', label='Validation Loss')
+        if 'test_loss' in metrics_history and len(metrics_history.get('test_loss', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['test_loss'])], metrics_history['test_loss'], 'g-', label='Test Loss')
         plt.title(f'{title_prefix}Loss Curves')
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
@@ -578,10 +587,12 @@ def plot_metrics(fold_work_dir, metrics_history, title_prefix=""):
         plt.grid(True, alpha=0.3)
         
         plt.subplot(2, 2, 2)
-        plt.plot(epochs, metrics_history['train_accuracy'], 'b-', label='Training Accuracy')
-        plt.plot(epochs, metrics_history['val_accuracy'], 'r-', label='Validation Accuracy')
-        if 'test_accuracy' in metrics_history and len(metrics_history['test_accuracy']) > 0:
-            plt.plot(epochs, metrics_history['test_accuracy'], 'g-', label='Test Accuracy')
+        if 'train_accuracy' in metrics_history and len(metrics_history.get('train_accuracy', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['train_accuracy'])], metrics_history['train_accuracy'], 'b-', label='Training Accuracy')
+        if 'val_accuracy' in metrics_history and len(metrics_history.get('val_accuracy', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['val_accuracy'])], metrics_history['val_accuracy'], 'r-', label='Validation Accuracy')
+        if 'test_accuracy' in metrics_history and len(metrics_history.get('test_accuracy', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['test_accuracy'])], metrics_history['test_accuracy'], 'g-', label='Test Accuracy')
         plt.title(f'{title_prefix}Accuracy Curves')
         plt.xlabel('Epochs')
         plt.ylabel('Accuracy (%)')
@@ -589,10 +600,12 @@ def plot_metrics(fold_work_dir, metrics_history, title_prefix=""):
         plt.grid(True, alpha=0.3)
         
         plt.subplot(2, 2, 3)
-        plt.plot(epochs, metrics_history['train_f1'], 'b-', label='Training F1')
-        plt.plot(epochs, metrics_history['val_f1'], 'r-', label='Validation F1')
-        if 'test_f1' in metrics_history and len(metrics_history['test_f1']) > 0:
-            plt.plot(epochs, metrics_history['test_f1'], 'g-', label='Test F1')
+        if 'train_f1' in metrics_history and len(metrics_history.get('train_f1', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['train_f1'])], metrics_history['train_f1'], 'b-', label='Training F1')
+        if 'val_f1' in metrics_history and len(metrics_history.get('val_f1', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['val_f1'])], metrics_history['val_f1'], 'r-', label='Validation F1')
+        if 'test_f1' in metrics_history and len(metrics_history.get('test_f1', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['test_f1'])], metrics_history['test_f1'], 'g-', label='Test F1')
         plt.title(f'{title_prefix}F1 Score Curves')
         plt.xlabel('Epochs')
         plt.ylabel('F1 Score (%)')
@@ -600,12 +613,14 @@ def plot_metrics(fold_work_dir, metrics_history, title_prefix=""):
         plt.grid(True, alpha=0.3)
         
         plt.subplot(2, 2, 4)
-        plt.plot(epochs, metrics_history['val_precision'], 'b-', label='Val Precision')
-        plt.plot(epochs, metrics_history['val_recall'], 'r-', label='Val Recall')
-        if 'test_precision' in metrics_history and len(metrics_history['test_precision']) > 0:
-            plt.plot(epochs, metrics_history['test_precision'], 'g-', label='Test Precision')
-        if 'test_recall' in metrics_history and len(metrics_history['test_recall']) > 0:
-            plt.plot(epochs, metrics_history['test_recall'], 'm-', label='Test Recall')
+        if 'val_precision' in metrics_history and len(metrics_history.get('val_precision', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['val_precision'])], metrics_history['val_precision'], 'b-', label='Val Precision')
+        if 'val_recall' in metrics_history and len(metrics_history.get('val_recall', [])) > 0:
+            plt.plot(epochs[:len(metrics_history['val_recall'])], metrics_history['val_recall'], 'r-', label='Val Recall')
+        if 'test_precision' in metrics_history and metrics_history.get('test_precision', []) and len(metrics_history['test_precision']) > 0:
+            plt.plot(epochs[:len(metrics_history['test_precision'])], metrics_history['test_precision'], 'g-', label='Test Precision')
+        if 'test_recall' in metrics_history and metrics_history.get('test_recall', []) and len(metrics_history['test_recall']) > 0:
+            plt.plot(epochs[:len(metrics_history['test_recall'])], metrics_history['test_recall'], 'm-', label='Test Recall')
         plt.title(f'{title_prefix}Precision/Recall Curves')
         plt.xlabel('Epochs')
         plt.ylabel('Score (%)')
@@ -616,28 +631,29 @@ def plot_metrics(fold_work_dir, metrics_history, title_prefix=""):
         plt.savefig(os.path.join(fold_work_dir, f'{title_prefix.lower().replace(" ", "_")}metrics.png'), dpi=300)
         plt.close()
         
-        plt.figure(figsize=(10, 6))
-        plt.plot(epochs, metrics_history['val_f1'], 'r-', linewidth=2, label='Validation F1')
-        if 'val_f1_class0' in metrics_history:
-            plt.plot(epochs, metrics_history['val_f1_class0'], 'b--', label='Val F1 - Class 0 (No Fall)')
-        if 'val_f1_class1' in metrics_history:
-            plt.plot(epochs, metrics_history['val_f1_class1'], 'g--', label='Val F1 - Class 1 (Fall)')
-        
-        best_epoch = np.argmax(metrics_history['val_f1']) + 1
-        best_f1 = max(metrics_history['val_f1'])
-        
-        plt.axvline(x=best_epoch, color='k', linestyle='--', alpha=0.7)
-        plt.text(best_epoch + 0.5, best_f1 - 5, f'Best F1: {best_f1:.2f}% (Epoch {best_epoch})', 
-                 bbox=dict(facecolor='white', alpha=0.8))
-        
-        plt.title(f'{title_prefix}Validation F1 Score Analysis')
-        plt.xlabel('Epochs')
-        plt.ylabel('F1 Score (%)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(os.path.join(fold_work_dir, f'{title_prefix.lower().replace(" ", "_")}f1_analysis.png'), dpi=300)
-        plt.close()
+        if 'val_f1' in metrics_history and len(metrics_history.get('val_f1', [])) > 0:
+            plt.figure(figsize=(10, 6))
+            plt.plot(epochs, metrics_history['val_f1'], 'r-', linewidth=2, label='Validation F1')
+            if 'val_f1_class0' in metrics_history and len(metrics_history.get('val_f1_class0', [])) > 0:
+                plt.plot(epochs[:len(metrics_history['val_f1_class0'])], metrics_history['val_f1_class0'], 'b--', label='Val F1 - Class 0 (No Fall)')
+            if 'val_f1_class1' in metrics_history and len(metrics_history.get('val_f1_class1', [])) > 0:
+                plt.plot(epochs[:len(metrics_history['val_f1_class1'])], metrics_history['val_f1_class1'], 'g--', label='Val F1 - Class 1 (Fall)')
+            
+            best_epoch = np.argmax(metrics_history['val_f1']) + 1
+            best_f1 = max(metrics_history['val_f1'])
+            
+            plt.axvline(x=best_epoch, color='k', linestyle='--', alpha=0.7)
+            plt.text(best_epoch + 0.5, best_f1 - 5, f'Best F1: {best_f1:.2f}% (Epoch {best_epoch})', 
+                    bbox=dict(facecolor='white', alpha=0.8))
+            
+            plt.title(f'{title_prefix}Validation F1 Score Analysis')
+            plt.xlabel('Epochs')
+            plt.ylabel('F1 Score (%)')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(fold_work_dir, f'{title_prefix.lower().replace(" ", "_")}f1_analysis.png'), dpi=300)
+            plt.close()
         
         logger.info(f"Created metric plots at {fold_work_dir}")
     
@@ -660,7 +676,7 @@ def main():
     parser.add_argument('--base-lr', type=float, default=0.0005)
     parser.add_argument('--weight-decay', type=float, default=0.001)
     parser.add_argument('--input-channels', type=int, default=3)
-    parser.add_argument('--hidden-channels', type=int, default=64)
+    parser.add_argument('--hidden-channels', type=int, default=128)
     parser.add_argument('--num-layers', type=int, default=3)
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--num-classes', type=int, default=2)
@@ -704,18 +720,19 @@ def main():
         'modalities': ['accelerometer', 'gyroscope'],
         'sensors': ['watch'],
         'mode': 'sliding_window',
-        'max_length': 64,
+        'max_length': 128,
         'task': 'fd',
         'fusion_options': {
             'enabled': args.fuse,
             'filter_type': args.filter_type,
             'visualize': False,
             'save_aligned': True,
+            'is_raw_acc': True
         }
     }
     
     os.makedirs(args.work_dir, exist_ok=True)
-    filter_dir = os.path.join(args.work_dir, args.filter_type)
+    filter_dir = args.work_dir
     os.makedirs(filter_dir, exist_ok=True)
     logger.info(f"Working directory: {filter_dir}")
     
@@ -814,7 +831,14 @@ def main():
                     
                     epoch_time = time.time() - epoch_start
                     
-                    for key, value in {**train_metrics, **val_metrics}.items():
+                    for key, value in train_metrics.items():
+                        if key not in metrics_history:
+                            metrics_history[key] = []
+                        metrics_history[key].append(value)
+                    
+                    for key, value in val_metrics.items():
+                        if key not in metrics_history:
+                            metrics_history[key] = []
                         metrics_history[key].append(value)
                     
                     metrics_history['train_loss'].append(train_loss)
@@ -885,7 +909,6 @@ def main():
                     logger.error(traceback.format_exc())
                     continue
             
-            # Training complete - evaluate best model on test set
             logger.info("Training complete - Loading best model for test evaluation")
             best_model_path = os.path.join(fold_work_dir, 'best_model.pth')
             
@@ -934,8 +957,7 @@ def main():
                 'best_val_f1': best_val_f1,
                 'training_time': fold_training_time,
                 **best_val_metrics,
-                **best_test_metrics,
-                'metrics_history': dict(metrics_history)
+                **best_test_metrics
             }
             
             with open(os.path.join(fold_work_dir, 'fold_summary.json'), 'w') as f:
@@ -1073,10 +1095,10 @@ def main():
             'avg_test_recall': float(avg_test_recall),
             'fold_results': {
                 'fold': results['fold'],
-                'val_f1': results['val_f1'] if 'val_f1' in results else [],
-                'val_accuracy': results['val_accuracy'] if 'val_accuracy' in results else [],
-                'val_precision': results['val_precision'] if 'val_precision' in results else [],
-                'val_recall': results['val_recall'] if 'val_recall' in results else [],
+                'val_f1': results.get('val_f1', []),
+                'val_accuracy': results.get('val_accuracy', []),
+                'val_precision': results.get('val_precision', []),
+                'val_recall': results.get('val_recall', []),
                 'test_f1': results['test_f1'],
                 'test_accuracy': results['test_accuracy'],
                 'test_precision': results['test_precision'],
@@ -1118,45 +1140,6 @@ def main():
                 plt.grid(True, alpha=0.3)
                 plt.tight_layout()
                 plt.savefig(os.path.join(filter_dir, f'fold_comparison_{args.filter_type}.png'))
-                plt.close()
-                
-                table_data = []
-                for i, fold in enumerate(results['fold']):
-                    row = [fold]
-                    for metric in metrics_to_plot:
-                        if metric in results and i < len(results[metric]):
-                            row.append(f"{results[metric][i]:.2f}%")
-                        else:
-                            row.append("N/A")
-                    table_data.append(row)
-                
-                table_data.append(["Average"])
-                for metric in metrics_to_plot:
-                    if metric in results and len(results[metric]) > 0:
-                        avg_val = np.mean(results[metric])
-                        table_data[-1].append(f"{avg_val:.2f}%")
-                    else:
-                        table_data[-1].append("N/A")
-                
-                plt.figure(figsize=(15, 8))
-                plt.axis('off')
-                
-                column_labels = ["Fold"] + [metric.replace('_', ' ').title() for metric in metrics_to_plot]
-                
-                table = plt.table(
-                    cellText=table_data,
-                    colLabels=column_labels,
-                    cellLoc='center',
-                    loc='center',
-                    colWidths=[0.1] + [0.9/len(metrics_to_plot)] * len(metrics_to_plot)
-                )
-                table.auto_set_font_size(False)
-                table.set_fontsize(12)
-                table.scale(1.2, 2)
-                
-                plt.title(f"Performance Summary: {args.filter_type} Filter", fontsize=16, pad=20)
-                plt.tight_layout()
-                plt.savefig(os.path.join(filter_dir, f'metrics_table_{args.filter_type}.png'))
                 plt.close()
         except Exception as e:
             logger.error(f"Error creating fold comparison plot: {e}")

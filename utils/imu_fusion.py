@@ -31,21 +31,25 @@ def hybrid_interpolate(time1, data1, time2, data2, target_time=None, method='lin
         f2 = interp1d(time2, data2, kind='linear', axis=0, bounds_error=False, fill_value="extrapolate")
         interp_data2 = f2(target_time)
     return interp_data1, interp_data2
+
 def save_aligned_sensor_data(subject_id, action_id, trial_id, acc_data, gyro_data, quaternions=None, timestamps=None, save_dir="data/aligned"):
     try:
         os.makedirs(f"{save_dir}/accelerometer", exist_ok=True)
         os.makedirs(f"{save_dir}/gyroscope", exist_ok=True)
-        if quaternions is not None: os.makedirs(f"{save_dir}/quaternion", exist_ok=True)
+        if quaternions is not None: 
+            os.makedirs(f"{save_dir}/quaternion", exist_ok=True)
         filename = f"S{subject_id:02d}A{action_id:02d}T{trial_id:02d}"
         np.save(f"{save_dir}/accelerometer/{filename}.npy", acc_data)
         np.save(f"{save_dir}/gyroscope/{filename}.npy", gyro_data)
-        if quaternions is not None: np.save(f"{save_dir}/quaternion/{filename}.npy", quaternions)
+        if quaternions is not None: 
+            np.save(f"{save_dir}/quaternion/{filename}.npy", quaternions)
         if timestamps is not None:
             os.makedirs(f"{save_dir}/timestamps", exist_ok=True)
             np.save(f"{save_dir}/timestamps/{filename}.npy", timestamps)
         logger.info(f"Saved aligned data for {filename}")
     except Exception as e:
         logger.error(f"Error saving aligned data: {e}")
+
 def bandpass_filter(data, lowcut=0.5, highcut=15.0, fs=30.0, order=2):
     nyq = 0.5 * fs
     low = lowcut / nyq
@@ -100,29 +104,29 @@ def align_sensor_data(acc_df, gyro_df, target_freq=30.0, visualize=False, trial_
         logger.error(f"Error during sensor alignment: {str(e)}")
         return None, None, None
 
-def add_gravity(linear_acc, quaternion):
+def extract_gravity(raw_acc, quaternion):
     """
-    Add gravity component back to linear acceleration based on orientation quaternion.
+    Extract gravity component from raw acceleration based on orientation quaternion.
     
     Args:
-        linear_acc: Linear acceleration vector [ax, ay, az] in m/s^2
+        raw_acc: Raw acceleration vector [ax, ay, az] in m/s^2
         quaternion: Orientation quaternion [qw, qx, qy, qz]
         
     Returns:
-        Raw acceleration with gravity component
+        Linear acceleration with gravity component removed
     """
     try:
         # Convert to scipy's rotation quaternion format [qx, qy, qz, qw]
         rot = Rotation.from_quat([quaternion[1], quaternion[2], quaternion[3], quaternion[0]])
         
-        # Compute gravity vector in sensor frame
+        # Compute gravity vector in sensor frame (9.81 m/s^2 in z-direction)
         gravity = rot.apply([0, 0, 9.81], inverse=True)
         
-        # Add gravity to linear acceleration to get raw acceleration
-        return linear_acc + gravity
+        # Remove gravity from raw acceleration to get linear acceleration
+        return raw_acc - gravity
     except Exception as e:
-        logger.error(f"Error adding gravity: {e}")
-        return linear_acc
+        logger.error(f"Error extracting gravity: {e}")
+        return raw_acc
 
 def cleanup_resources():
     global thread_pool
@@ -145,7 +149,7 @@ class MadgwickFilter:
         self.sample_rate = sample_rate
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # [qw, qx, qy, qz]
         
-    def update(self, acc, gyro, dt=None, is_linear_acc=True):
+    def update(self, acc, gyro, dt=None, is_raw_acc=True):
         """
         Update orientation estimate using accelerometer and gyroscope measurements.
         
@@ -153,7 +157,7 @@ class MadgwickFilter:
             acc: Acceleration vector [ax, ay, az] in m/s^2
             gyro: Angular velocity vector [wx, wy, wz] in rad/s
             dt: Time step in seconds
-            is_linear_acc: Whether acceleration is linear (gravity removed)
+            is_raw_acc: Whether acceleration includes gravity component
             
         Returns:
             Updated quaternion [qw, qx, qy, qz]
@@ -163,18 +167,23 @@ class MadgwickFilter:
             
         q = self.quaternion
         
-        # If dealing with linear acceleration, we need to handle it specially
-        if is_linear_acc:
+        # Handle raw acceleration (with gravity)
+        if is_raw_acc:
+            # Use measured acceleration directly
+            acc_with_gravity = acc.copy()
+        else:
+            # For any reason if we have linear acceleration, we need to add gravity back
             # First iteration or significant change in direction - use simple approach
             if np.array_equal(q, [1.0, 0.0, 0.0, 0.0]) or np.linalg.norm(acc) > 12.0:
                 # For initialization, assume gravity is in the -z direction
-                acc_with_gravity = np.array([acc[0], acc[1], acc[2] - 9.81])
+                acc_with_gravity = np.array([acc[0], acc[1], acc[2] + 9.81])
             else:
-                # Use current orientation estimate to add gravity component
-                acc_with_gravity = add_gravity(acc, q)
-        else:
-            # Already raw acceleration with gravity component
-            acc_with_gravity = acc
+                # Convert to scipy's rotation quaternion format
+                rot = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                # Compute gravity vector in sensor frame
+                gravity = rot.apply([0, 0, 9.81], inverse=True)
+                # Add gravity to linear acceleration to get raw acceleration
+                acc_with_gravity = acc + gravity
         
         # Normalize acceleration if magnitude is non-zero
         acc_norm = np.linalg.norm(acc_with_gravity)
@@ -239,7 +248,7 @@ class KalmanFilter:
         self.Q = np.diag([1e-5]*4 + [1e-4]*3)  # Process noise
         self.R = np.eye(3) * 0.1  # Measurement noise
         
-    def update(self, acc, gyro, dt=None, is_linear_acc=True):
+    def update(self, acc, gyro, dt=None, is_raw_acc=True):
         """
         Update orientation estimate using Kalman filter.
         
@@ -247,7 +256,7 @@ class KalmanFilter:
             acc: Acceleration vector [ax, ay, az] in m/s^2
             gyro: Angular velocity vector [wx, wy, wz] in rad/s
             dt: Time step in seconds
-            is_linear_acc: Whether acceleration is linear (gravity removed)
+            is_raw_acc: Whether acceleration includes gravity component
             
         Returns:
             Updated quaternion [qw, qx, qy, qz]
@@ -261,18 +270,20 @@ class KalmanFilter:
         # Normalize quaternion
         q = q / np.linalg.norm(q)
         
-        # Handle linear acceleration
-        if is_linear_acc:
-            # First iteration or high acceleration - use simple approach
+        # Handle raw vs linear acceleration
+        if is_raw_acc:
+            # Use measured acceleration directly (it already includes gravity)
+            acc_with_gravity = acc.copy()
+        else:
+            # Need to add gravity back to linear acceleration
             if np.array_equal(q, [1.0, 0.0, 0.0, 0.0]) or np.linalg.norm(acc) > 12.0:
                 # For initialization, assume gravity is in the -z direction
-                acc_with_gravity = np.array([acc[0], acc[1], acc[2] - 9.81])
+                acc_with_gravity = np.array([acc[0], acc[1], acc[2] + 9.81])
             else:
                 # Use current orientation estimate to add gravity component
-                acc_with_gravity = add_gravity(acc, q)
-        else:
-            # Already raw acceleration with gravity component
-            acc_with_gravity = acc
+                rot = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                gravity = rot.apply([0, 0, 9.81], inverse=True)
+                acc_with_gravity = acc + gravity
         
         # Apply bias correction to gyro
         gyro_corrected = gyro - bias
@@ -295,7 +306,7 @@ class KalmanFilter:
         
         # Update step - only if acceleration magnitude is in reasonable range
         acc_norm = np.linalg.norm(acc_with_gravity)
-        if 0.5 < acc_norm < 1.5 * 9.81:  # Reasonable gravity range
+        if 0.5 * 9.81 < acc_norm < 1.5 * 9.81:  # Reasonable gravity range
             # Compute expected gravity direction from orientation
             R_q = self._quaternion_to_rotation_matrix(x_pred[:4])
             g_pred = R_q @ np.array([0, 0, 1])  # Normalized gravity vector
@@ -390,7 +401,7 @@ class ExtendedKalmanFilter:
         self.acc_history = []  # History of acceleration magnitudes
         self.max_history = 10  # Maximum history length
         
-    def update(self, acc, gyro, dt=None, is_linear_acc=True):
+    def update(self, acc, gyro, dt=None, is_raw_acc=True):
         """
         Update orientation estimate using Extended Kalman filter.
         
@@ -398,7 +409,7 @@ class ExtendedKalmanFilter:
             acc: Acceleration vector [ax, ay, az] in m/s^2
             gyro: Angular velocity vector [wx, wy, wz] in rad/s
             dt: Time step in seconds
-            is_linear_acc: Whether acceleration is linear (gravity removed)
+            is_raw_acc: Whether acceleration includes gravity component
             
         Returns:
             Updated quaternion [qw, qx, qy, qz]
@@ -412,18 +423,20 @@ class ExtendedKalmanFilter:
         # Normalize quaternion
         q = q / np.linalg.norm(q)
         
-        # Handle linear acceleration
-        if is_linear_acc:
-            # First iteration or high acceleration - use simple approach
+        # Handle raw vs linear acceleration
+        if is_raw_acc:
+            # Use measured acceleration directly
+            acc_with_gravity = acc.copy()
+        else:
+            # If we have linear acceleration, add gravity back
             if np.array_equal(q, [1.0, 0.0, 0.0, 0.0]) or np.linalg.norm(acc) > 12.0:
                 # For initialization, assume gravity is in the -z direction
-                acc_with_gravity = np.array([acc[0], acc[1], acc[2] - 9.81])
+                acc_with_gravity = np.array([acc[0], acc[1], acc[2] + 9.81])
             else:
                 # Use current orientation estimate to add gravity component
-                acc_with_gravity = add_gravity(acc, q)
-        else:
-            # Already raw acceleration with gravity component
-            acc_with_gravity = acc
+                rot = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                gravity = rot.apply([0, 0, 9.81], inverse=True)
+                acc_with_gravity = acc + gravity
         
         # Track acceleration magnitude for adaptive filtering
         acc_norm = np.linalg.norm(acc_with_gravity)
@@ -547,22 +560,22 @@ class ExtendedKalmanFilter:
         self.P = np.diag([1e-2]*4 + [1e-4]*3)
         self.acc_history = []
 
-def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='ekf', return_features=False, is_linear_acc=True):
+def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='ekf', return_features=False, is_raw_acc=True):
     """
     Process IMU data with orientation filter to estimate quaternions and linear acceleration.
     
     Args:
-        acc_data: Accelerometer data (N, 3)
+        acc_data: Accelerometer data (N, 3) - contains gravity component
         gyro_data: Gyroscope data (N, 3)
         timestamps: Optional timestamps in milliseconds
         filter_type: Type of orientation filter ('madgwick', 'kalman', or 'ekf')
         return_features: Whether to extract features from the processed data
-        is_linear_acc: Whether input acceleration is linear (gravity removed)
+        is_raw_acc: Whether input acceleration includes gravity component
         
     Returns:
         Dictionary with processed data
     """
-    logger.info(f"Processing IMU data: filter={filter_type}, is_linear_acc={is_linear_acc}")
+    logger.info(f"Processing IMU data: filter={filter_type}, is_raw_acc={is_raw_acc}")
     
     if len(acc_data) == 0 or len(gyro_data) == 0:
         logger.error("Empty input data")
@@ -609,23 +622,24 @@ def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='ekf', re
             dt = (timestamps[i] - timestamps[i-1]) / 1000.0
         
         # Update filter
-        q = orientation_filter.update(acc, gyro, dt, is_linear_acc)
+        q = orientation_filter.update(acc, gyro, dt, is_raw_acc=is_raw_acc)
         quaternions.append(q)
         
-        # Store linear acceleration (original if already linear, or computed)
-        if is_linear_acc:
-            linear_accelerations.append(acc)
-            # Compute raw acceleration by adding gravity
-            raw_acc = add_gravity(acc, q)
-            raw_accelerations.append(raw_acc)
-        else:
-            # Input was raw acceleration, compute linear acceleration
+        # Store linear and raw acceleration
+        if is_raw_acc:
+            # Input is raw acceleration with gravity
             raw_accelerations.append(acc)
-            # Compute linear acceleration by removing gravity
+            # Extract gravity to compute linear acceleration
+            linear_acc = extract_gravity(acc, q)
+            linear_accelerations.append(linear_acc)
+        else:
+            # Input is already linear acceleration (although we don't expect this case now)
+            linear_accelerations.append(acc)
+            # Compute raw acceleration by adding gravity back for completeness
             rot = Rotation.from_quat([q[1], q[2], q[3], q[0]])
             gravity = rot.apply([0, 0, 9.81], inverse=True)
-            linear_acc = acc - gravity
-            linear_accelerations.append(linear_acc)
+            raw_acc = acc + gravity
+            raw_accelerations.append(raw_acc)
     
     # Convert to numpy arrays
     quaternions = np.array(quaternions)
@@ -641,7 +655,6 @@ def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='ekf', re
     
     # Extract features if requested
     if return_features:
-        from utils.imu_fusion import extract_features_from_window
         features = extract_features_from_window({
             'quaternion': quaternions,
             'linear_acceleration': linear_accelerations,
@@ -651,7 +664,7 @@ def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='ekf', re
     
     return results
 
-def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_linear_acc=True, trial_id="unknown"):
+def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_raw_acc=True, trial_id="unknown"):
     """
     Compare different orientation filters on the same data and visualize results.
     
@@ -659,7 +672,7 @@ def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_linear_
         acc_data: Accelerometer data
         gyro_data: Gyroscope data
         timestamps: Optional timestamps
-        is_linear_acc: Whether input acceleration is linear (gravity removed)
+        is_raw_acc: Whether input acceleration includes gravity component
         trial_id: Trial identifier for output files
     
     Returns:
@@ -676,7 +689,7 @@ def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_linear_
             timestamps=timestamps,
             filter_type=filter_type,
             return_features=True,
-            is_linear_acc=is_linear_acc
+            is_raw_acc=is_raw_acc
         )
         elapsed_time = time.time() - start_time
         
@@ -696,7 +709,7 @@ def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_linear_
         
         # Plot quaternions
         fig, axes = plt.subplots(4, 1, figsize=(15, 12))
-        plt.suptitle(f'Quaternion Comparison - Trial {trial_id} (Linear Acc: {is_linear_acc})')
+        plt.suptitle(f'Quaternion Comparison - Trial {trial_id} (Raw Acc: {is_raw_acc})')
         
         components = ['w', 'x', 'y', 'z']
         colors = {'madgwick': 'blue', 'kalman': 'red', 'ekf': 'green'}
@@ -720,7 +733,7 @@ def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_linear_
         
         # Plot Euler angles
         fig, axes = plt.subplots(3, 1, figsize=(15, 10))
-        plt.suptitle(f'Orientation (Euler) Comparison - Trial {trial_id} (Linear Acc: {is_linear_acc})')
+        plt.suptitle(f'Orientation (Euler) Comparison - Trial {trial_id} (Raw Acc: {is_raw_acc})')
         
         angles = ['Roll', 'Pitch', 'Yaw']
         for filter_name, filter_result in results.items():
@@ -895,7 +908,7 @@ def extract_features_from_window(window_data):
         logger.error(f"Feature extraction failed: {str(e)}")
         return np.zeros(43)
 
-def selective_sliding_window(data, window_size, label, fuse=False, filter_type='ekf', is_linear_acc=True):
+def selective_sliding_window(data, window_size, label, fuse=False, filter_type='ekf', is_raw_acc=True):
     """
     Create windows of data for processing.
     
@@ -905,7 +918,7 @@ def selective_sliding_window(data, window_size, label, fuse=False, filter_type='
         label: Activity label
         fuse: Whether to perform sensor fusion
         filter_type: Orientation filter type
-        is_linear_acc: Whether accelerometer data is linear acceleration
+        is_raw_acc: Whether accelerometer data includes gravity
         
     Returns:
         Dictionary with windowed data
@@ -1052,18 +1065,22 @@ def selective_sliding_window(data, window_size, label, fuse=False, filter_type='
                         timestamps=timestamps,
                         filter_type=filter_type,
                         return_features=True,
-                        is_linear_acc=is_linear_acc
+                        is_raw_acc=is_raw_acc
                     ))
                 
                 from tqdm import tqdm
                 for future in tqdm(futures, desc=f"Processing {filter_type} fusion"):
                     result = future.result()
                     quaternions.append(result['quaternion'])
+                    if 'raw_acceleration' in result:
+                        raw_accelerations.append(result['raw_acceleration'])
                     linear_accelerations.append(result['linear_acceleration'])
                     if 'fusion_features' in result:
                         fusion_features.append(result['fusion_features'])
             
             windowed_data['quaternion'] = np.array(quaternions)
+            if raw_accelerations:
+                windowed_data['raw_acceleration'] = np.array(raw_accelerations)
             windowed_data['linear_acceleration'] = np.array(linear_accelerations)
             if fusion_features:
                 windowed_data['fusion_features'] = np.array(fusion_features)

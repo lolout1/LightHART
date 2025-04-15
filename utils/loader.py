@@ -205,7 +205,6 @@ def selective_sliding_window(data, window_size, label, fuse=False, filter_type='
                         timestamps=timestamps,
                         filter_type=filter_type,
                         return_features=True,
-                        is_linear_acc=is_linear_acc
                     ))
                 for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing {filter_type} fusion"):
                     result = future.result()
