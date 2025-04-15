@@ -8,7 +8,7 @@ class FusionTransModel(nn.Module):
     Supports configurable use of extra fusion features for teacher models.
     """
     def __init__(self, num_layers=3, embed_dim=32, acc_coords=3, quat_coords=4,
-                 num_classes=2, acc_frames=64, mocap_frames=64, num_heads=4,
+                 num_classes=2, acc_frames=128, mocap_frames=64, num_heads=2,
                  fusion_type='concat', dropout=0.3, use_batch_norm=True,
                  feature_dim=64, use_features=True):
         super(FusionTransModel, self).__init__()

@@ -79,7 +79,7 @@ def create_dataframe_with_timestamps(data, start_time=0, sample_rate=30):
         df[f'axis_{i}'] = data[:, i]
     return df
 
-def sliding_window(data, is_fall=False, window_size=64, stride=32):
+def sliding_window(data, is_fall=False, window_size=128, stride=32):
     if len(data) < window_size:
         return []
     windows = []
