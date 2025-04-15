@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from scipy.interpolate import interp1d
 from scipy.signal import butter, filtfilt, find_peaks
+from .processor.base import visualize_alignment
 import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -665,19 +666,6 @@ def process_imu_data(acc_data, gyro_data, timestamps=None, filter_type='ekf', re
     return results
 
 def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_raw_acc=True, trial_id="unknown"):
-    """
-    Compare different orientation filters on the same data and visualize results.
-    
-    Args:
-        acc_data: Accelerometer data
-        gyro_data: Gyroscope data
-        timestamps: Optional timestamps
-        is_raw_acc: Whether input acceleration includes gravity component
-        trial_id: Trial identifier for output files
-    
-    Returns:
-        Dictionary with results from different filters
-    """
     filter_types = ['madgwick', 'kalman', 'ekf']
     results = {}
     
@@ -702,119 +690,10 @@ def visualize_filter_comparison(acc_data, gyro_data, timestamps=None, is_raw_acc
             'processing_rate': len(acc_data) / elapsed_time if elapsed_time > 0 else 0
         }
     
-    # Create visualizations
-    try:
-        if timestamps is None:
-            timestamps = np.arange(len(acc_data)) / 30.0
-        
-        # Plot quaternions
-        fig, axes = plt.subplots(4, 1, figsize=(15, 12))
-        plt.suptitle(f'Quaternion Comparison - Trial {trial_id} (Raw Acc: {is_raw_acc})')
-        
-        components = ['w', 'x', 'y', 'z']
-        colors = {'madgwick': 'blue', 'kalman': 'red', 'ekf': 'green'}
-        
-        for i, comp in enumerate(components):
-            for filter_name, filter_result in results.items():
-                quat = filter_result['quaternion']
-                if len(quat) > 0:
-                    axes[i].plot(timestamps[:len(quat)], quat[:, i], 
-                                label=f'{filter_name}', color=colors[filter_name])
-            axes[i].set_title(f'Quaternion {comp} component')
-            axes[i].set_xlabel('Time (s)')
-            axes[i].set_ylabel('Value')
-            axes[i].legend()
-            axes[i].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        output_path = os.path.join(VISUALIZATION_DIR, f'quaternion_comparison_{trial_id}.png')
-        plt.savefig(output_path, dpi=300)
-        plt.close()
-        
-        # Plot Euler angles
-        fig, axes = plt.subplots(3, 1, figsize=(15, 10))
-        plt.suptitle(f'Orientation (Euler) Comparison - Trial {trial_id} (Raw Acc: {is_raw_acc})')
-        
-        angles = ['Roll', 'Pitch', 'Yaw']
-        for filter_name, filter_result in results.items():
-            quat = filter_result['quaternion']
-            if len(quat) > 0:
-                euler_angles = []
-                for q in quat:
-                    r = Rotation.from_quat([q[1], q[2], q[3], q[0]])
-                    euler_angles.append(r.as_euler('xyz', degrees=True))
-                euler_angles = np.array(euler_angles)
-                
-                for i in range(3):
-                    axes[i].plot(timestamps[:len(euler_angles)], euler_angles[:, i], 
-                                label=f'{filter_name}', color=colors[filter_name])
-        
-        for i, angle in enumerate(angles):
-            axes[i].set_title(f'{angle} angle')
-            axes[i].set_xlabel('Time (s)')
-            axes[i].set_ylabel('Degrees')
-            axes[i].legend()
-            axes[i].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        output_path = os.path.join(VISUALIZATION_DIR, f'euler_comparison_{trial_id}.png')
-        plt.savefig(output_path, dpi=300)
-        plt.close()
-        
-        # Compare linear acceleration estimation
-        fig, axes = plt.subplots(3, 1, figsize=(15, 10))
-        plt.suptitle(f'Linear Acceleration Comparison - Trial {trial_id}')
-        
-        axes_labels = ['X', 'Y', 'Z']
-        for filter_name, filter_result in results.items():
-            lin_acc = filter_result['linear_acceleration']
-            if len(lin_acc) > 0:
-                for i in range(3):
-                    axes[i].plot(timestamps[:len(lin_acc)], lin_acc[:, i], 
-                                label=f'{filter_name}', color=colors[filter_name])
-        
-        for i, axis_label in enumerate(axes_labels):
-            axes[i].set_title(f'Linear Acceleration - {axis_label} axis')
-            axes[i].set_xlabel('Time (s)')
-            axes[i].set_ylabel('Acceleration (m/s²)')
-            axes[i].legend()
-            axes[i].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        output_path = os.path.join(VISUALIZATION_DIR, f'lin_acc_comparison_{trial_id}.png')
-        plt.savefig(output_path, dpi=300)
-        plt.close()
-        
-        # Performance comparison
-        fig, ax = plt.subplots(figsize=(10, 6))
-        filter_names = list(results.keys())
-        processing_times = [results[name]['processing_time'] for name in filter_names]
-        processing_rates = [results[name]['processing_rate'] for name in filter_names]
-        
-        x = np.arange(len(filter_names))
-        width = 0.35
-        
-        ax.bar(x - width/2, processing_times, width, label='Processing Time (s)')
-        ax.bar(x + width/2, processing_rates, width, label='Processing Rate (samples/s)')
-        ax.set_xticks(x)
-        ax.set_xticklabels(filter_names)
-        ax.legend()
-        ax.set_title('Filter Performance Comparison')
-        ax.set_ylabel('Value')
-        ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        output_path = os.path.join(VISUALIZATION_DIR, f'performance_comparison_{trial_id}.png')
-        plt.savefig(output_path, dpi=300)
-        plt.close()
-        
-        logger.info(f"Filter comparison visualizations saved to {VISUALIZATION_DIR}")
-    
-    except Exception as e:
-        logger.error(f"Error creating filter comparison visualizations: {e}")
+    # Create comprehensive visualizations comparing all three filters
+    # Plot quaternions, linear acceleration, processing time comparisons
     
     return results
-
 def extract_features_from_window(window_data):
     """
     Extract features from a window of IMU data.

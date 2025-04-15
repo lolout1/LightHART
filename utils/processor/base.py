@@ -114,9 +114,6 @@ def align_sensors(acc_data, gyro_data, acc_timestamps, gyro_timestamps, target_f
     aligned_gyro = bandpass_filter(aligned_gyro, lowcut=0.1, highcut=12.0, fs=target_freq)
     return aligned_acc, aligned_gyro, common_times
 
-def selective_sliding_window(data, is_fall=False, window_size=128, stride=32):
-    # Implementation as needed ...
-    return []
 
 class Processor(ABC):
     def __init__(self, file_path, mode, max_length, label, **kwargs):

@@ -361,11 +361,12 @@ class DatasetBuilder:
         return all(len(v) > 0 for v in d.values())
     
     def make_dataset(self, subjects, fuse=False, filter_type='madgwick', visualize=False, save_aligned=False, is_linear_acc=True):
-        logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
-        start_time = time.time()
-        self.data = defaultdict(list)
-        self.fuse = fuse
-        self.trial_to_samples = defaultdict(list)
+        with ThreadPoolExecutor(max_workers=min(40, len(self.dataset.matched_trials))) as executor:
+            logger.info(f"Making dataset for subjects={subjects}, fuse={fuse}, filter_type={filter_type}")
+            start_time = time.time()
+            self.data = defaultdict(list)
+            self.fuse = fuse
+            self.trial_to_samples = defaultdict(list)
         
         if hasattr(self, 'fusion_options'):
             save_aligned = save_aligned or self.fusion_options.get('save_aligned', False)
