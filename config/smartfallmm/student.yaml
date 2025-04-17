@@ -12,7 +12,7 @@ subjects: [32,39,30,31,33,34,35,37,43,44,45,36,29]
 model_args:
   num_layers : 2
   norm_first : True
-  embed_dim: 32
+  embed_dim: 48
   activation: relu 
   acc_coords : 3
   #acc_embed: 256
@@ -20,21 +20,21 @@ model_args:
   num_classes: 1
   acc_frames : 128
   mocap_frames : 128
-  num_heads: 4
+  num_heads: 2
 
 dataset_args: 
  mode: 'sliding_window'
  max_length: 128
  #change task to 'har' for Human activity recognition
  task : 'fd'
- modalities: ['skeleton', 'accelerometer']
+ modalities: ['accelerometer']
  age_group: ['young']
  # change the sensor to phone , meta_wrist , meta_hip for experiments
  sensors: ['watch']
 
-batch_size: 64
-test_batch_size: 64
-val_batch_size : 64
+batch_size: 16
+test_batch_size: 16
+val_batch_size : 16
 num_epoch: 80
 
 #dataloader

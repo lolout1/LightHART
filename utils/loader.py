@@ -1,475 +1,296 @@
-'''
-Dataset Builder
-'''
 import os
-from typing import List, Dict, Tuple
-from collections import defaultdict, Counter
+import logging
 import numpy as np
 import pandas as pd
-from scipy.io import loadmat
-from scipy.spatial.distance import euclidean
-from fastdtw import fastdtw
-from numpy.linalg import norm
-from dtaidistance import dtw
-import matplotlib.pyplot as plt
-from imblearn.over_sampling import RandomOverSampler, SMOTE
-from imblearn.combine import SMOTETomek
-from imblearn.under_sampling import RandomUnderSampler 
-from ahrs.filters import Madgwick
-from scipy.spatial.transform import Rotation
-from scipy.signal import butter, filtfilt
-from scipy.signal import find_peaks
+from typing import List, Dict
+from collections import defaultdict
 from sklearn.preprocessing import StandardScaler
-import torch
-import torch.nn.functional as F
-from utils.processor.base import Processor
+from scipy.signal import butter, filtfilt
 
+logger = logging.getLogger("loader")
 
+class ModalityFile:
+    def __init__(self, subject_id, action_id, sequence_number, file_path):
+        self.subject_id = subject_id
+        self.action_id = action_id
+        self.sequence_number = sequence_number
+        self.file_path = file_path
 
-def csvloader(file_path: str, **kwargs):
-    '''
-    Loads csv data
-    '''
-    file_data = pd.read_csv(file_path, index_col=False, header = 0).dropna().bfill()
-    # num_col = file_data.shape[1]
-    # num_extra_col = num_col % 
-    # cols_to_select = num_col - num_extra_col
-    if 'skeleton' in file_path: 
-        cols = 96
-    else: 
-        cols  = 3
-    activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
-    return activity_data
-
-def matloader(file_path: str, **kwargs):
-    '''
-    Loads MatLab files 
-    '''
-    key = kwargs.get('key',None)
-    assert key in ['d_iner' , 'd_skel'] , f'Unsupported {key} for matlab file'
-    data = loadmat(file_path)[key]
-    return data
-
-LOADER_MAP = {
-    'csv' : csvloader, 
-    'mat' : matloader
-}
-
-def avg_pool(sequence : np.array, window_size : int = 5, stride :int =1, 
-             max_length : int = 512 , shape : int = None) -> np.ndarray:
-
-    '''
-    Executes average pooling to smoothen out the data
-
-    '''
-    shape = sequence.shape
-    sequence = sequence.reshape(shape[0], -1)
-    sequence = np.expand_dims(sequence, axis = 0).transpose(0,2, 1)
-    sequence = torch.tensor(sequence, dtype=torch.float32)
-    stride =  ((sequence.shape[2]//max_length)+1 if max_length < sequence.shape[2] else 1)
-    sequence = F.avg_pool1d(sequence,kernel_size=window_size, stride=stride)
-    sequence = sequence.squeeze(0).numpy().transpose(1,0)
-    sequence = sequence.reshape(-1, *shape[1:])
-    return sequence
-
-
-def pad_sequence_numpy(sequence: np.ndarray, max_sequence_length: int, 
-                       input_shape: np.array) -> np.ndarray:
-    '''
-    Pools and pads the sequence to uniform length
-
-    Args:
-        sequence : data 
-        max_sequence_length(int) : the fixed length of data
-        input_shape: shape of the data
-    Return: 
-        new_sequence: data after padding
-    '''
-    shape = list(input_shape)
-    shape[0] = max_sequence_length
-    pooled_sequence = avg_pool(sequence=sequence, max_length = max_sequence_length, shape = input_shape)
-    new_sequence = np.zeros(shape, sequence.dtype)
-    new_sequence[:len(pooled_sequence)] = pooled_sequence
-    return new_sequence
-
-def sliding_window(data : np.ndarray, clearing_time_index : int, max_time : int, 
-                   sub_window_size : int, stride_size : int ,label : int) -> np.ndarray:
-    '''
-    Sliding Window
-    '''
-    assert clearing_time_index >= sub_window_size - 1 , "Clearing value needs to be greater or equal to (window size - 1)"
-    start = clearing_time_index - sub_window_size + 1 
-
-    if max_time >= data['skeleton'].shape[0]-sub_window_size:
-        max_time = max_time - sub_window_size + 1
-        # 2510 // 100 - 1 25 #25999 1000 24000 = 24900
-
-    sub_windows  = (
-        start + 
-        np.expand_dims(np.arange(sub_window_size), 0) + 
-        np.expand_dims(np.arange(max_time, step = stride_size), 0).T
-    )
-    for key in data.keys():
-        data[key] = data[key][sub_windows]
-    data['labels'] =  np.repeat(label, len(data['skeleton']))
-    return data
-
-def quaternion_to_euler(q):
-    rot = Rotation.from_quat(q)
-    return rot.as_euler('xyz', degrees=True)
-
-def fuse_inertial_data(data, window_size): 
-    q = np.array([1, 0, 0, 0], dtype=np.float64)
-    quaterions  = []
-    length = len(data['accelerometer'])
-    madgwick = Madgwick()
-    for i in range(length): 
-        transformed_windows = []
-        for j in range(window_size): 
-            gyro_data = data['gyroscope'][i][j,:]
-            acc_data = data['accelerometer'][i][j,:]
-            q  = madgwick.updateIMU(q, acc=acc_data, gyr=gyro_data)
-            euler_angels = quaternion_to_euler(q)
-            transformed_windows.append(euler_angels)
-        quaterions.append(np.array(transformed_windows))
-    data['fused'] = quaterions
-    return data 
-
+class MatchedTrial:
+    def __init__(self, subject_id, action_id, sequence_number):
+        self.subject_id = subject_id
+        self.action_id = action_id
+        self.sequence_number = sequence_number
+        self.files = {}
     
+    def add_file(self, modality_name, file_path):
+        self.files[modality_name] = file_path
 
-def selective_sliding_window(data: np.ndarray, window_size: int , peaks : list, label : int, fuse : bool) -> np.array: 
+class SmartFallMM:
+    def __init__(self, root_dir="data/smartfallmm"):
+        self.root_dir = root_dir
+        self.age_groups = {"old": {}, "young": {}}
+        self.matched_trials = []
+        self.selected_sensors = {}
 
-    windowed_data = defaultdict(np.ndarray)
-    for modality, modality_data in data.items():
-        windows = []
-        for peak in peaks:
-            start = max(0, peak - window_size)
-            end = min(len(modality_data), start + window_size)
-            # difference = length - (end-start)
-            # if difference != 0 : 
-            #     if start == 0 : 
-            #         end = end + difference
-            #     elif 
-            if modality_data[start:end, :].shape[0] < window_size:
-                continue
-            windows.append(modality_data[start:end, :])
-        windowed_data[modality] = windows
-    if fuse and set(("accelerometer" , "gyroscope")).issubset(windowed_data): 
-        windowed_data  = fuse_inertial_data(windowed_data, window_size)
-    windowed_data['labels'] = np.repeat(label, len(windows))
-    return windowed_data
+    def add_modality(self, age_group, modality_name):
+        if age_group not in self.age_groups:
+            raise ValueError(f"Invalid age group: {age_group}. Expected 'old' or 'young'.")
+        if modality_name not in self.age_groups[age_group]:
+            self.age_groups[age_group][modality_name] = []
 
+    def select_sensor(self, modality_name, sensor_name=None):
+        self.selected_sensors[modality_name] = sensor_name
 
-def filter_data_by_ids(data : np.ndarray, ids : List[int]):
-    '''
-    Index the different modalities with only selected ids
+    def load_files(self):
+        for age_group, modalities in self.age_groups.items():
+            for modality_name in modalities:
+                if modality_name in self.selected_sensors:
+                    sensor_name = self.selected_sensors[modality_name]
+                    modality_dir = os.path.join(self.root_dir, age_group, modality_name, sensor_name)
+                    if not os.path.exists(modality_dir):
+                        logger.warning(f"Directory does not exist: {modality_dir}")
+                        continue
+                    logger.info(f"Loading files from {modality_dir}")
+                    file_counter = 0
+                    for root, _, files in os.walk(modality_dir):
+                        for file in files:
+                            try:
+                                if file.endswith('.csv'):
+                                    subject_id = int(file[1:3])
+                                    action_id = int(file[4:6])
+                                    sequence_number = int(file[7:9])
+                                    file_path = os.path.join(root, file)
+                                    if os.path.getsize(file_path) > 0:
+                                        trial = ModalityFile(subject_id, action_id, sequence_number, file_path)
+                                        self.age_groups[age_group][modality_name].append(trial)
+                                        file_counter += 1
+                            except (ValueError, IndexError):
+                                pass
+                    logger.info(f"Loaded {file_counter} files from {modality_dir}")
 
-    Arguements: 
-        data : data dictionary with skeleton and inertial data
-        skeleton_ids: skeleton data selected ids
-        inertial_ids: inertial data selected ids
-    Return : 
-        changed data with selected ids
-    '''
-    return data[ids, :]
+    def match_trials(self):
+        trial_dict = {}
+        for age_group, modalities in self.age_groups.items():
+            for modality_name, files in modalities.items():
+                if modality_name == 'accelerometer':
+                    for file in files:
+                        key = (file.subject_id, file.action_id, file.sequence_number)
+                        if key not in trial_dict:
+                            trial_dict[key] = {}
+                        trial_dict[key][modality_name] = file.file_path
+        for key, files_dict in trial_dict.items():
+            subject_id, action_id, sequence_number = key
+            if 'accelerometer' in files_dict:
+                matched_trial = MatchedTrial(subject_id, action_id, sequence_number)
+                matched_trial.add_file('accelerometer', files_dict['accelerometer'])
+                self.matched_trials.append(matched_trial)
+        logger.info(f"Created {len(self.matched_trials)} matched trials")
 
+    def run_pipeline(self, age_group, modalities, sensors):
+        logger.info(f"Running pipeline with age_groups={age_group}, modalities={modalities}, sensors={sensors}")
+        filtered_modalities = ['accelerometer']
+        for age in age_group:
+            for modality in filtered_modalities:
+                self.add_modality(age, modality)
+                for sensor in sensors:
+                    if sensor == 'watch':
+                        self.select_sensor(modality, sensor)
+        self.load_files()
+        self.match_trials()
+        logger.info(f"Pipeline complete. Found {len(self.matched_trials)} matched trials")
 
+def safe_butterworth_filter(data, cutoff=7.5, fs=25, order=4):
+    if len(data) <= 15:  # Check if data is too short for filtering
+        return data
+    try:
+        nyquist = 0.5 * fs
+        normal_cutoff = cutoff / nyquist
+        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        return filtfilt(b, a, data, axis=0)
+    except Exception as e:
+        logger.warning(f"Butterworth filter failed: {e}. Returning unfiltered data.")
+        return data
 
-
-def filter_repeated_ids(path : List[Tuple[int, int]]) -> Tuple[set, set]:
-    '''
-    Filtering indices those match with mutliple other indices
-    Arguements: 
-        path : Tuple of indices defining the DTW path
-    
-    Return : 
-        set of tuples containing the unique indices
-
-    '''
-    seen_first = set()
-    seen_second = set()
-
-    for (first , second) in path : 
-
-        if first not in seen_first and second not in  seen_second: 
-            seen_first.add(first)
-            seen_second.add(second)
-    
-    return seen_first, seen_second
-
-def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]: 
-    '''
-    Matching the skeleton and phone data using dynamic time warping 
-    Args: 
-        dataset: Dictionary containing skeleton and accelerometer data
-
-    '''
-    joint_id = 9
-    #skeleton_before_dtw =  data['skeleton'][idx][:, (joint_id -1) * 3 : joint_id * 3 ]
-    #seperating left wrist joint data
-    dynamic_keys = sorted([key for key in data.keys() if key != "skeleton"])
-    
-    skeleton_joint_data = data['skeleton'][:, (joint_id -1) * 3 : joint_id * 3 ]
-    inertial_data = data[dynamic_keys[0]]
-    if len(dynamic_keys) > 1: 
-        gyroscope_data = data[dynamic_keys[1]]
-        min_len = min(inertial_data.shape[0], gyroscope_data.shape[0])
-        inertial_data = inertial_data[:min_len, :]
-        data[dynamic_keys[1]] = gyroscope_data[:min_len, :]
-
-   # calcuating frobenis norm of skeleton and intertial data 
-    skeleton_frob_norm = norm(skeleton_joint_data, axis = 1)
-    interial_frob_norm = norm(inertial_data, axis = 1)
-    
-    # calculating dtw of the two sequence
-    # path =  dtw.warping_path(
-    #     skeleton_frob_norm.flatten(), 
-    #     interial_frob_norm.flatten()
-    # )
-
-    distance, path  = fastdtw(interial_frob_norm[:, np.newaxis], skeleton_frob_norm[:, np.newaxis],dist = euclidean)
-
-
-    interial_ids ,skeleton_idx ,= filter_repeated_ids(path)
-    data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
-    for key in dynamic_keys: 
-        data[key]= filter_data_by_ids(data[key],list(interial_ids))
-    #skeleton_after_dtw = data['skeleton'][idx][:, (joint_id -1) * 3 : joint_id * 3 ]
-    #plt.plot( np.arange(skeleton_before_dtw.shape[0]),skeleton_before_dtw[..., 0], '--r',
-             #np.arange(skeleton_after_dtw.shape[0]), skeleton_after_dtw[..., 0], '--g')
-    
-    # plt.savefig(f'exps/comparision/comparision_before_after_dtw_{idx}.jpg')
-    # plt.close()
-    return data
-
-
-def butterworth_filter(data, cutoff, fs, order=4, filter_type='low'):
-    '''Function to fitter noise '''
-    nyquist = 0.5 * fs  # Nyquist frequency
-    normal_cutoff = cutoff / nyquist  # Normalized cutoff frequency
-    b, a = butter(order, normal_cutoff, btype=filter_type, analog=False)
-    return filtfilt(b, a, data, axis=0) 
-
-class DatasetBuilder:
-    '''
-    Builds a numpy file for the data and labels and 
-
-    Args: 
-        Dataset: a dataset class containing all matched files
-    '''
-    def __init__(self , dataset: object, mode: str, max_length: int, task = 'fd', **kwargs) -> None:
-        assert mode in ['avg_pool' , 'sliding_window'], f'Unsupported processing method {mode}'
-        self.dataset = dataset
-        self.data = defaultdict(list)
-        #self.processed_data : Dict[str, List[np.array]] = {'labels':[]}
-        self.kwargs = kwargs
+class SmartFallMMBuilder:
+    def __init__(self, root="data/smartfallmm", age_group=None, modalities=None, sensors=None, mode="sliding_window", max_length=128, task="fd"):
+        self.root = root
+        self.age_group = age_group or ["young", "old"]
+        self.modalities = modalities or ["accelerometer"]
+        self.sensors = sensors or ["watch"]
         self.mode = mode
         self.max_length = max_length
         self.task = task
-        self.fuse = None
-        self.diff = []
-    def load_file(self, file_path):
-        '''
-        
-        '''
-        loader = self._import_loader(file_path)
-        data = loader(file_path, **self.kwargs)
-        #self.set_input_shape(data)
-        return data
+        self.dataset = None
+        self.data_builder = None
     
-
-    def _import_loader(self, file_path:str) -> np.array :
-        '''
-        Reads file and loads data from
-         
-        '''
-
-        file_type = file_path.split('.')[-1]
-
-        assert file_type in ['csv', 'mat'], f'Unsupported file type {file_type}'
-
-        return LOADER_MAP[file_type]
+    def run_pipeline(self):
+        self.dataset = SmartFallMM(self.root)
+        self.dataset.run_pipeline(self.age_group, self.modalities, self.sensors)
+        self.data_builder = DatasetBuilder(self.dataset, self.mode, self.max_length, self.task)
     
-    def process(self, data, label):
-        '''
-        function implementation to process data
-        '''
-
-        if self.mode == 'avg_pool':
-            data = pad_sequence_numpy(sequence=data, max_sequence_length=self.max_length,
-                                      input_shape=data.shape)
-        
-        else: 
-            # sqrt_sum = np.sqrt(np.sum(data['accelerometer']**2, axis = 1))
-            # if label == 1: 
-            #     #phone height = 25, distance = 200
-            #     #meta height = 1 distaince = 10 
-            #     peaks , _ = find_peaks(sqrt_sum, height=15, distance=10)
-                
-            # else: 
-            #     #phone height = 15, distance = 500
-            #     peaks , _ = find_peaks(sqrt_sum, height=15, distance=15)
-
-            # data = selective_sliding_window(data, window_size= self.max_length,peaks = peaks, label = label, fuse = self.fuse)
-            data = sliding_window(data, self.max_length-1, data['skeleton'].shape[0], self.max_length, 10, label)
-        return data
-
-    def _add_trial_data(self, trial_data):
-
-        for modality, modality_data in trial_data.items():
-            self.data[modality].append(modality_data)
+    def make_subject_folds(self):
+        val_subjects = [38, 46]
+        always_train_subjects = [45, 36, 29]
+        eligible_subjects = [32, 39, 30, 31, 33, 34, 35, 37, 43, 44]
+        folds = []
+        for test_subject in eligible_subjects:
+            test_subjects = [test_subject]
+            train_subjects = always_train_subjects + [s for s in eligible_subjects if s != test_subject]
+            folds.append({"train": train_subjects, "val": val_subjects, "test": test_subjects})
+        return folds
     
-    def _len_check(self, d):
-        return all(len(v) > 1 for v in d.values())
+    def build_dataset(self, subjects, fuse=False):
+        if not self.data_builder:
+            raise ValueError("Pipeline not initialized. Call run_pipeline() first.")
+        self.data_builder.make_dataset(subjects, fuse)
+        return self.data_builder.normalization()
 
-    def get_size_diff(self, trial_data):
-        return trial_data['accelerometer'].shape[0]  - trial_data['skeleton'].shape[0]
-
-    def store_trial_diff(self, difference):
-        self.diff.append(difference)
-    
-    def viz_trial_diff(self):
-        value_range = range(min(self.diff) , max(self.diff)+2)
-        # plt.hist(self.diff, bins = value_range, edgecolor = 'black', alpha = 0.7)
-        # plt.xlabel("Differences")
-        # plt.ylabel("Frequency")
-        print(len(self.diff))
-        counter = Counter(self.diff)
-
-        #   Extract values for plotting
-
-
-        plt.hist(self.diff, bins=range(min(self.diff), max(self.diff) + 2, 200), edgecolor='black', alpha=0.7)
-
-        # Labels and title
-        plt.xlabel("Value")
-        plt.ylabel("Frequency")
-        plt.title("Distribution of Numbers")
-        plt.savefig("Distribution.png")
-
-    def select_subwindow_pandas(self, unimodal_data):
-        n = len(unimodal_data)
-        magnitude = np.linalg.norm(unimodal_data, axis = 1)
-        df = pd.DataFrame({"values":magnitude})
-        #250
-        df["variance"] = df["values"].rolling(window=125).var()
-
-        # Get index of highest variance
-        max_idx = df["variance"].idxmax()
-
-        # Get segment
-        final_start = max(0, max_idx-100)
-        final_end = min(n, max_idx + 100)
-        return unimodal_data[final_start:final_end, :]
-        #high_var_segment = df["values"].iloc[max_idx : max_idx + 200].values
-
-    def make_dataset(self, subjects : List[int], fuse : bool): 
-        '''
-        Reads all the files and makes a numpy  array with all data
-        '''
+class DatasetBuilder:
+    def __init__(self, dataset, mode, max_length, task="fd"):
+        self.dataset = dataset
+        self.mode = mode
+        self.max_length = max_length
+        self.task = task
         self.data = defaultdict(list)
-        self.fuse = fuse
-        self.processed_data : Dict[str, List[np.array]] = {'labels':[]}
-        count = 0 
+    
+    def load_file(self, file_path):
+        try:
+            df = pd.read_csv(file_path, header=None)
+            if df.empty:
+                return np.array([])
+            
+            # Find first row with numeric data
+            start_row = 0
+            for i in range(min(10, len(df))):
+                try:
+                    df.iloc[i, 1:4].astype(float)
+                    start_row = i
+                    break
+                except (ValueError, TypeError):
+                    continue
+            
+            # Extract data
+            try:
+                acc_data = df.iloc[start_row:, 1:4].astype(float).values
+                if len(acc_data) < 4:  # Too short to be useful
+                    return np.array([])
+                
+                # Calculate SMV (Signal Magnitude Vector)
+                smv = np.sqrt(np.sum(acc_data**2, axis=1, keepdims=True))
+                return np.hstack((acc_data, smv))
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {e}")
+                return np.array([])
+        except Exception as e:
+            logger.error(f"Error loading file {file_path}: {e}")
+            return np.array([])
+    
+    def process_windows(self, data, window_size=128, stride=10, is_fall=False):
+        if len(data) < window_size:
+            return []
+        
+        windows = []
+        if is_fall:
+            # Find peak for falls
+            acc_mag = np.sqrt(np.sum(data[:, :3]**2, axis=1))
+            threshold = np.mean(acc_mag) + 1.5 * np.std(acc_mag)
+            
+            # Find peaks above threshold
+            peaks = []
+            for i in range(window_size//2, len(acc_mag) - window_size//2):
+                if acc_mag[i] > threshold and acc_mag[i] == np.max(acc_mag[max(0, i-10):min(len(acc_mag), i+10)]):
+                    peaks.append(i)
+            
+            # If no peaks found, use middle of sequence
+            if not peaks:
+                peaks = [len(data)//2]
+            
+            # Create windows centered on peaks
+            for peak in peaks:
+                start = max(0, peak - window_size//2)
+                end = min(len(data), start + window_size)
+                
+                # Adjust if window is incomplete
+                if end - start < window_size:
+                    if start == 0:
+                        end = min(len(data), window_size)
+                    else:
+                        start = max(0, end - window_size)
+                
+                if end - start == window_size:
+                    windows.append(data[start:end])
+        else:
+            # Regular sliding window for non-falls
+            for start in range(0, len(data) - window_size + 1, stride):
+                windows.append(data[start:start + window_size])
+        
+        return np.array(windows) if windows else np.array([])
+    
+    def process_trial(self, trial, label):
+        if 'accelerometer' not in trial.files:
+            return None
+        
+        # Load and filter data
+        acc_data = self.load_file(trial.files['accelerometer'])
+        if len(acc_data) == 0 or acc_data.shape[1] != 4:
+            return None
+        
+        # Apply filter for noise reduction
+        if len(acc_data) > 15:  # Only filter if enough data points
+            acc_data = safe_butterworth_filter(acc_data)
+        
+        # Create sliding windows
+        windows = self.process_windows(acc_data, self.max_length, 10, label == 1)
+        
+        if len(windows) == 0:
+            return None
+        
+        return {
+            'accelerometer': windows,
+            'labels': np.repeat(label, len(windows)),
+            'subjects': np.repeat(trial.subject_id, len(windows))
+        }
+    
+    def make_dataset(self, subjects, fuse=False):
+        self.data = defaultdict(list)
+        
         for trial in self.dataset.matched_trials:
-            if trial.subject_id in subjects:       
-                if self.task == 'fd': 
+            if trial.subject_id in subjects:
+                if self.task == 'fd':
                     label = int(trial.action_id > 9)
                 elif self.task == 'age':
                     label = int(trial.subject_id < 29 or trial.subject_id > 46)
                 else:
                     label = trial.action_id - 1
-                #self.data['labels'] = self.data.get('labels',[])
-                trial_data = defaultdict(np.ndarray)
                 
-                for modality, file_path in trial.files.items():
-                    #here we need the processor class 
-                    keys = self.kwargs.get('keys', None)
-                    key = None
-                    if keys:
-                        key = keys[modality.lower()]
-                    #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
-                    try: 
-                        executed  = True
-                        #unimodal_data = butterworth_filter(processor.process(), cutoff=1.0, fs=20)
-                        #unimodal_data = processor.load_file()
-                        unimodal_data = self.load_file(file_path)
-                        #print(f"Modality : { modality} , shape : {unimodal_data.shape}")
-                        trial_data[modality] = unimodal_data
-                        if modality == 'accelerometer':
-                            unimodal_data = butterworth_filter(unimodal_data, cutoff=7.5, fs=25)
-                        if modality == 'accelerometer' and unimodal_data.shape[0] > 300:
-                            trial_data[modality] = self.select_subwindow_pandas(unimodal_data)
-                            
-                        # if modality == 'skeleton':
-                        #     print(unimodal_data.shape)
-
-                    except Exception as e :
-                        executed = False
-                        print(e)
-                # trial_difference = self.get_size_diff(trial_data)
-                # self.store_trial_diff(trial_difference)
+                trial_data = self.process_trial(trial, label)
                 
-                if executed : 
-                    trial_data = align_sequence(trial_data)
-                        # os.remove(file_path)
-                    trial_data = self.process(trial_data, label)
-                    #print(trial_data['skeleton'][0].shape)
-                    if self._len_check(trial_data):
-                        self._add_trial_data(trial_data)
-                # for modality, file_path in trial_data.files.items():
-                #     window_stack = self.process(trial_data[modality])
-                #     if len(window_stack) != 0 : 
-                #         trial_data[modality] = window_stack
-                #trial_data['labels'].append(np.repeat(label,len(window_stack)))
-                
-                # for modality, file_path in trial.files.items():
-                #     processor = Processor(file_path, self.mode, self.max_length, label,  key = key)
-                #     processor.set_input_shape(self.data[modality][count-1])
-                #     window_stack = processor.process(self.data[modality][count-1])
-                #     if len(window_stack) != 0 :
-                #         self.processed_data[modality] = self.processed_data.get(modality, [])
-                #         self.processed_data[modality].append(window_stack)
-                # #if processor.input_shape[0] >= self.max_length:
-                #         self.processed_data['labels'].append(np.repeat(label,len(window_stack)))
-
-                    #print(self.data['skeleton'][1].shape)
-                #print(count)
-                #count +=1
-        #self.viz_trial_diff()
+                if trial_data is not None:
+                    for key, value in trial_data.items():
+                        self.data[key].append(value)
+        
+        # Concatenate all processed data
         for key in self.data:
-            #print(key)
-            #print(len(self.processed_data[key]))
-            self.data[key] = np.concatenate(self.data[key], axis=0)
-        # if len(self.data['skeleton']) > 0: 
-        #     self.random_resampling()
-
-    
-    def random_resampling(self):
-        ros = RandomUnderSampler(sampling_strategy='auto', random_state=42)
-        num_samples, seq_len, acc_channels = self.data['accelerometer'].shape
-        _, _ , skl_channels = self.data['skeleton'].shape
-        acc_flatten = self.data['accelerometer'].reshape(num_samples, -1)
-        skl_flatten = self.data['skeleton'].reshape(num_samples, -1)
-
-        labels = self.data['labels']
-        resampled_acc, resampled_labels = ros.fit_resample(acc_flatten,labels)
-        resampled_skl, _ = ros.fit_resample(skl_flatten, labels)
-        self.data['accelerometer'] = resampled_acc.reshape(-1, seq_len , acc_channels)
-        self.data['skeleton'] = resampled_skl.reshape(-1, seq_len, skl_channels)
-        self.data['labels'] = resampled_labels
-
-
-    
-    def normalization(self) -> np.ndarray:
-        '''
-        Function to normalize  the data
-        '''
-
-        for key ,value  in self.data.items():        
-            if key != 'labels':
-                num_samples, length = value.shape[:2]
-                norm_data = StandardScaler().fit_transform(value.reshape(num_samples*length, -1))
-                self.data[key] = norm_data.reshape(num_samples, length, -1)
+            if self.data[key]:
+                try:
+                    self.data[key] = np.concatenate(self.data[key], axis=0)
+                except:
+                    self.data[key] = np.array([])
+            else:
+                self.data[key] = np.array([])
+        
         return self.data
     
+    def normalization(self):
+        for key, value in self.data.items():
+            if key not in ['labels', 'subjects'] and len(value) > 0:
+                try:
+                    num_samples, seq_length, num_features = value.shape
+                    flat_data = value.reshape(num_samples * seq_length, num_features)
+                    norm_data = StandardScaler().fit_transform(flat_data)
+                    self.data[key] = norm_data.reshape(num_samples, seq_length, num_features)
+                except Exception as e:
+                    logger.error(f"Error normalizing {key}: {e}")
+        
+        return self.data

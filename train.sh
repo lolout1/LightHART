@@ -1,45 +1,56 @@
 #!/bin/bash
-teacher_weights="spTransformer"
-student_dir="exps/smartfall_fall_wokd/student/watch_not_distilled_cross_together"
-work_dir="exps/smartfall_fall_kd/student/student_with_cross_attention_distilled_together"
-student_weights="ttfstudent"
-teacher_dir="$HOME/LightHART/exps/smartfall_fall_wokd/teacher/skeleton_with_experimental"
-result_file="result.txt"
-# weights="berkley_best.pt"
-# work_dir="exps/bmhad_woKD/late_fusion_epoch150_alldrop0.4"
+set -e
 
-# #Utd student without KD
-#python3 main.py --config ./config/utd/student.yaml --model-saved-name $student_weights --work-dir $student_dir --device 7 --base-lr 2.5e-3 --include-val True
-#python3 main.py --config ./config/utd/student.yaml --work-dir $work_dir  --weights "$work_dir/$student_weights" --device 7 --base-lr 2.5e-3 --phase 'test'
+# Environment setup
+export PYTHONUNBUFFERED=1
+export CUDA_VISIBLE_DEVICES=0
 
+# Create timestamped working directory
+RUN_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+WORK_DIR="results_${RUN_TIMESTAMP}"
+LOG_DIR="${WORK_DIR}/logs"
+mkdir -p $WORK_DIR $LOG_DIR
 
-#Utd teacher 
-#python3 main.py --config ./config/utd/teacher.yaml --work-dir $work_dir --model-saved-name $teacher_weights  --device 7  --base-lr 2.5e-3 --phase 'train' --result-file $work_dir/$result_file  --include-val True
-#python3 main.py --config ./config/utd/teacher.yaml --work-dir $work_dir  --weights "$work_dir/$teacher_weights" --device 7 --base-lr 2.5e-3 --phase 'test'
+# Set up logging
+exec > >(tee -a "${LOG_DIR}/training_run.log") 2>&1
 
-#berkley_student
-#python3 main.py --config ./config/berkley/student.yaml --work-dir "$student_dir"  --model-saved-name "$student_weights" --device 7 --base-lr 2.5e-3 --include-val True
-#python3 main.py --config ./config/berkley/student.yaml --work-dir "$student_dir"  --weights "$student_dir/$student_weights" --device 7 --base-lr 2.5e-3 --phase 'test'
+echo "================================================================"
+echo "SmartFallMM Edge Model Training - Run $RUN_TIMESTAMP"
+echo "================================================================"
 
-#utd student
-#python3 main.py --config ./config/czu/student.yaml --work-dir $work_dir --model-saved-name $weights  --weights $work_dir/$weights --device 3 --base-lr 2.5e-3 --include-val True
+# Define subject groups for cross-validation
+VAL_SUBJECTS="38,46"
+TRAIN_CORE_SUBJECTS="45,36,29"
+TEST_SUBJECTS="32,39,30,31,33,34,35,37,43,44"
+ALL_SUBJECTS="${TEST_SUBJECTS},${TRAIN_CORE_SUBJECTS},${VAL_SUBJECTS}"
 
+# Create directory structure
+mkdir -p Models utils Feeder
+touch Models/__init__.py utils/__init__.py Feeder/__init__.py
 
-#czu 
-#python3 main.py --config ./config/czu/student.yaml --work-dir $work_dir --model-saved-name $weights  --weights $work_dir/$weights --device 3 --base-lr 2.5e-3 --include-val True
-#python3 distiller.py --config ./config/czu/distill.yaml --work-dir $work_dir --model-saved-name $weights  --weights $work_dir/$weights --device 3 --base-lr 2.5e-3 --include-val True
+# Start training
+echo "Starting model training..."
 
-#smartfallmm
-#skelton_only experiment 
-#python3 main.py --config ./config/smartfallmm/teacher.yaml --work-dir $work_dir --model-saved-name $teacher_weights  --device 1  --base-lr 2.5e-3 --phase 'train' --result-file $work_dir/$result_file  --include-val True
+python main.py \
+    --work-dir $WORK_DIR \
+    --use-gpu True \
+    --device 0 \
+    --seed 42 \
+    --batch-size 16 \
+    --test-batch-size 16 \
+    --num-worker 8 \
+    --embed-dim 32 \
+    --num-heads 2 \
+    --num-layer 2 \
+    --base-lr 0.0001 \
+    --weight-decay 0.001 \
+    --grad-clip 1.0 \
+    --max-epoch 100 \
+    --patience 20 \
+    --subjects $ALL_SUBJECTS \
+    --fold -1
 
-#multimodal experiment
-#python3 main.py --config ./config/smartfallmm/teacher.yaml --work-dir $teacher_dir --model-saved-name $teacher_weights  --device 2 --base-lr 1e-3 --include-val True
-
-#accelerometer only experiment
-python main.py --config ./config/smartfallmm/student.yaml --work-dir $student_dir --model-saved-name $student_weights --device 2  --include-val True
-#python main.py --config ./config/smartfallmm/teacher.yaml --work-dir $teacher_dir --model-saved-name $teacher_weights --device 1 --base-lr 1e-3 --include-val True
-
-
-#distillation 
-python3 distiller.py --config ./config/smartfallmm/distill.yaml --work-dir $work_dir  --teacher-weight "$teacher_dir/$teacher_weights" --model-saved-name "$student_weights" --device 2 --include-val True
+echo "================================================================"
+echo "Training complete."
+echo "Models and checkpoints saved to: $WORK_DIR"
+echo "================================================================"
