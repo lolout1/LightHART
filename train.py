@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from utils.data_loader import create_subject_folds, prepare_datasets, create_data_loaders
-    from Models.fall_detection import FallDetectionTransformer as FallDetectionModel
+    from fallmodel import FallDetectionTransformer as FallDetectionModel
 except ImportError:
     logger.error("Could not import required modules. Make sure you're running from the project root.")
     sys.exit(1)

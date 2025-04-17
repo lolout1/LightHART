@@ -1,4 +1,3 @@
-# utils/smart_fall_mm.py
 import os
 import logging
 import numpy as np
@@ -101,17 +100,11 @@ class SmartFallMM:
         self.match_trials()
         logger.info(f"Pipeline complete. Found {len(self.matched_trials)} matched trials")
 
-def safe_butterworth_filter(data, cutoff=7.5, fs=25, order=4):
-    if len(data) <= 15:  # Check if data is too short for filtering
-        return data
-    try:
-        nyquist = 0.5 * fs
-        normal_cutoff = cutoff / nyquist
-        b, a = butter(order, normal_cutoff, btype='low', analog=False)
-        return filtfilt(b, a, data, axis=0)
-    except Exception as e:
-        logger.warning(f"Butterworth filter failed: {e}. Returning unfiltered data.")
-        return data
+def butterworth_filter(data, cutoff=7.5, fs=25, order=4):
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    return filtfilt(b, a, data, axis=0)
 
 class SmartFallMMBuilder:
     def __init__(self, root="data/smartfallmm", age_group=None, modalities=None, sensors=None, mode="sliding_window", max_length=128, task="fd"):
@@ -161,7 +154,6 @@ class DatasetBuilder:
             if df.empty:
                 return np.array([])
             
-            # Find first row with numeric data
             start_row = 0
             for i in range(min(10, len(df))):
                 try:
@@ -171,13 +163,11 @@ class DatasetBuilder:
                 except (ValueError, TypeError):
                     continue
             
-            # Extract data
             try:
                 acc_data = df.iloc[start_row:, 1:4].astype(float).values
-                if len(acc_data) < 4:  # Too short to be useful
+                if len(acc_data) < self.max_length:
                     return np.array([])
                 
-                # Calculate SMV (Signal Magnitude Vector)
                 smv = np.sqrt(np.sum(acc_data**2, axis=1, keepdims=True))
                 return np.hstack((acc_data, smv))
             except Exception as e:
@@ -193,36 +183,26 @@ class DatasetBuilder:
         
         windows = []
         if is_fall:
-            # Find peak for falls
             acc_mag = np.sqrt(np.sum(data[:, :3]**2, axis=1))
             threshold = np.mean(acc_mag) + 1.5 * np.std(acc_mag)
             
-            # Find peaks above threshold
             peaks = []
             for i in range(window_size//2, len(acc_mag) - window_size//2):
                 if acc_mag[i] > threshold and acc_mag[i] == np.max(acc_mag[max(0, i-10):min(len(acc_mag), i+10)]):
                     peaks.append(i)
             
-            # If no peaks found, use middle of sequence
             if not peaks:
                 peaks = [len(data)//2]
             
-            # Create windows centered on peaks
             for peak in peaks:
                 start = max(0, peak - window_size//2)
-                end = min(len(data), start + window_size)
+                end = start + window_size
                 
-                # Adjust if window is incomplete
-                if end - start < window_size:
-                    if start == 0:
-                        end = min(len(data), window_size)
-                    else:
-                        start = max(0, end - window_size)
+                if end > len(data):
+                    continue
                 
-                if end - start == window_size:
-                    windows.append(data[start:end])
+                windows.append(data[start:end])
         else:
-            # Regular sliding window for non-falls
             for start in range(0, len(data) - window_size + 1, stride):
                 windows.append(data[start:start + window_size])
         
@@ -232,16 +212,16 @@ class DatasetBuilder:
         if 'accelerometer' not in trial.files:
             return None
         
-        # Load and filter data
         acc_data = self.load_file(trial.files['accelerometer'])
         if len(acc_data) == 0 or acc_data.shape[1] != 4:
             return None
         
-        # Apply filter for noise reduction
-        if len(acc_data) > 15:  # Only filter if enough data points
-            acc_data = safe_butterworth_filter(acc_data)
+        try:
+            acc_data = butterworth_filter(acc_data)
+        except Exception as e:
+            logger.warning(f"Filtering failed: {e}")
+            return None
         
-        # Create sliding windows
         windows = self.process_windows(acc_data, self.max_length, 10, label == 1)
         
         if len(windows) == 0:
@@ -271,7 +251,6 @@ class DatasetBuilder:
                     for key, value in trial_data.items():
                         self.data[key].append(value)
         
-        # Concatenate all processed data
         for key in self.data:
             if self.data[key]:
                 try:
@@ -289,7 +268,8 @@ class DatasetBuilder:
                 try:
                     num_samples, seq_length, num_features = value.shape
                     flat_data = value.reshape(num_samples * seq_length, num_features)
-                    norm_data = StandardScaler().fit_transform(flat_data)
+                    scaler = StandardScaler()
+                    norm_data = scaler.fit_transform(flat_data)
                     self.data[key] = norm_data.reshape(num_samples, seq_length, num_features)
                 except Exception as e:
                     logger.error(f"Error normalizing {key}: {e}")
