@@ -1,6 +1,8 @@
 # LightHART: Lightweight Human Activity Recognition Transformer
 Implementation of "Lightweight Human Activity Recognition Transformer" accepted in ICPR 2024.
 
+## Tensorflow version of this repository ( for compatible model ops ) 
+[Link to LightHART - Tensorflow ](https://github.com/lolout1/LightHART-tf).
 ## Getting started 
 - Create an pip environment and use the requirements.txt to install all the neccasary files.
 
