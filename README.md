@@ -1,8 +1,21 @@
 # LightHART: Lightweight Human Activity Recognition Transformer
 Implementation of "Lightweight Human Activity Recognition Transformer" accepted in ICPR 2024.
 
-## Tensorflow version of this repository ( for compatible model ops ) 
-[Link to LightHART - Tensorflow ](https://github.com/lolout1/LightHART-tf).
+## Newer or alternate versions of LightHART and relatedd works 
+
+- **FusionTransformer (Abheek Pradhan's current work is located here ( Fall 2025 )**  
+  *Current repository focusing on multimodal fusion:*  
+  https://github.com/lolout1/FusionTransformer
+  
+- **LightHART (TensorFlow version - supporting compatible ops for conversion to ONNX or TensorflowLite ):**  
+  https://github.com/lolout1/LightHART-tf
+
+- **FeatureKD (Tousiful Haque)**  
+  *Previously, LightHART was a fork of Tousiful’s repository (formerly also named LightHART before the rename):*  
+  https://github.com/tousifulhaque/FeatureKD
+
+
+
 ## Getting started 
 - Create an pip environment and use the requirements.txt to install all the neccasary files.
 
