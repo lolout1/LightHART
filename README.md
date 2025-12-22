@@ -1,7 +1,7 @@
 # LightHART: Lightweight Human Activity Recognition Transformer
 Implementation of "Lightweight Human Activity Recognition Transformer" accepted in ICPR 2024.
 
-## Newer or alternate versions of LightHART and relatedd works 
+## Newer or alternate versions of LightHART and related works 
 
 - **FusionTransformer (Abheek Pradhan's current work is located here ( Fall 2025 )**  
   *Current repository focusing on multimodal fusion:*  
